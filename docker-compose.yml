@@ -1,0 +1,15 @@
+# Local development database only. The app itself is not containerized here
+# — run it with `npm run dev` against this Postgres instance.
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: dispatchsim
+      POSTGRES_USER: postgres
+      # No password is hardcoded here — it is read from the POSTGRES_PASSWORD
+      # environment variable in your shell/.env, never committed to this file.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports: ["5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+volumes:
+  pgdata:

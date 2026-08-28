@@ -1,0 +1,51 @@
+// Express application setup: middleware stack and route mounting only.
+// Actual listening happens in server.js so this file can be imported by
+// tests without opening a network port.
+
+import express from 'express'
+import cors from 'cors'
+import config from './config.js'
+import authRoutes from './modules/auth/auth.routes.js'
+import adminRoutes from './modules/admin/admin.routes.js'
+import loadsRoutes from './modules/loads/loads.routes.js'
+import driversRoutes from './modules/drivers/drivers.routes.js'
+import statsRoutes from './modules/stats/stats.routes.js'
+import fleetRoutes from './modules/fleet/fleet.routes.js'
+import financeRoutes from './modules/finance/finance.routes.js'
+import { notFound } from './middleware/notFound.js'
+import { errorHandler } from './middleware/errorHandler.js'
+
+const app = express()
+
+// Trust the first hop proxy (e.g. a load balancer/reverse proxy in front of
+// the app). Needed for req.ip / X-Forwarded-For to be read correctly, which
+// express-rate-limit relies on to key limits per real client IP.
+app.set('trust proxy', 1)
+
+// `credentials` is intentionally omitted: the API is authenticated with a
+// Bearer token in the Authorization header, not cookies, so there is no
+// need to allow credentialed cross-origin requests.
+app.use(cors({ origin: config.corsOrigin }))
+
+app.use(express.json({ limit: '100kb' }))
+
+// Unauthenticated, unrated liveness check for load balancers/uptime checks.
+app.get('/health', (req, res) => {
+  res.status(200).json({ ok: true })
+})
+
+app.use('/auth', authRoutes)
+app.use('/admin', adminRoutes)
+app.use('/loads', loadsRoutes)
+app.use('/drivers', driversRoutes)
+app.use('/stats', statsRoutes)
+app.use('/fleet', fleetRoutes)
+app.use('/finance', financeRoutes)
+
+// Must stay last, in this order: notFound only catches requests that fell
+// through every real route above, and errorHandler must be the very last
+// middleware so it can catch errors from notFound too.
+app.use(notFound)
+app.use(errorHandler)
+
+export default app
