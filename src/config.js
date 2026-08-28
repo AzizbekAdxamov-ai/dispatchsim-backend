@@ -18,10 +18,16 @@ if (!jwtSecret || jwtSecret.length < 32) {
   errors.push('JWT_SECRET is missing or too short (must be at least 32 characters)')
 }
 
+// PORT is only read by server.js, which runs when the app is hosted as a
+// long-lived process (local dev, Render, Railway). On a serverless host the
+// platform never sets PORT and never calls app.listen() -- api/index.js
+// exports the app instead. Requiring PORT there would abort the process at
+// import time on every single invocation, so a missing PORT falls back to
+// the default. An explicitly WRONG value is still an error worth reporting.
 const rawPort = process.env.PORT
-const port = Number(rawPort)
-if (!rawPort || !Number.isInteger(port) || port <= 0) {
-  errors.push('PORT is missing or not a valid positive integer')
+const port = rawPort ? Number(rawPort) : 4000
+if (rawPort && (!Number.isInteger(port) || port <= 0)) {
+  errors.push(`PORT is not a valid positive integer (got: ${rawPort})`)
 }
 
 // DEFAULT_ROLE is optional and, unlike the values above, is not required to
