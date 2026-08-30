@@ -43,7 +43,7 @@ const EQUIPMENT_RATE_MULTIPLIER = {
 const SHORT_HAUL_MAX_MI = 250
 const SHORT_HAUL_MULTIPLIER = 1.25
 
-function rateBandFor(equipmentType, distanceMi) {
+export function rateBandFor(equipmentType, distanceMi) {
   const equipmentMultiplier = EQUIPMENT_RATE_MULTIPLIER[equipmentType] ?? 1
   const haulMultiplier = distanceMi < SHORT_HAUL_MAX_MI ? SHORT_HAUL_MULTIPLIER : 1
   const [min, max] = BASE_RATE_BAND

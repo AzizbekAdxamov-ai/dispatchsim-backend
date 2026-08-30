@@ -1,0 +1,1 @@
+{"token":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIwNzE4ZGY3Mi00ZTIyLTRiMWItOTc3Yy0wZTY2NGJhZGRlNTIiLCJpYXQiOjE3ODgwNjY3MDksImV4cCI6MTc4ODE1MzEwOX0.5DaY2T9-ZLPsLvqPdoY8qMKpsZZxbjwWZ6dtgIN-mJY","user":{"id":"0718df72-4e22-4b1b-977c-0e664badde52","name":"Disp1","email":"disp1@test.com","company":"Acme","roles":["dispatcher"],"activeRole":"dispatcher","isAdmin":true}}

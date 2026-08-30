@@ -25,6 +25,7 @@ import {
 } from './seed/validate.js'
 import { buildSeed } from './seed/build.js'
 import { renderSeedFile } from './seed/render.js'
+import { POSTING_CONFIG } from './seed/postings.js'
 import { EQUIPMENT_KEYS } from '../src/constants/equipment.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -220,10 +221,10 @@ async function writeReport(data) {
   console.error(`wrote ${path.relative(process.cwd(), REPORT_PATH)}`)
 }
 
-async function finish({ seed, driverItems, truckItems, loadItems, maintenanceItems, summary }) {
+async function finish({ seed, driverItems, truckItems, loadItems, maintenanceItems, postingItems, summary }) {
   let built
   try {
-    built = buildSeed({ driverItems, truckItems, loadItems, maintenanceItems, seed })
+    built = buildSeed({ driverItems, truckItems, loadItems, maintenanceItems, postingItems: postingItems || [], seed })
   } catch (err) {
     await writeReport({ summary, buildError: err.message })
     console.error(`build stage failed: ${err.message}`)
@@ -247,7 +248,8 @@ async function finish({ seed, driverItems, truckItems, loadItems, maintenanceIte
   console.log(`wrote ${path.relative(process.cwd(), SEED_SQL_PATH)}`)
   console.log(
     `totals: ${built.counts.drivers} drivers, ${built.counts.trucks} trucks, ${built.counts.loads} loads, ` +
-      `${built.counts.maintenanceRecords} maintenance records, ${built.counts.truckDailyMetrics} daily-metric rows`
+      `${built.counts.maintenanceRecords} maintenance records, ${built.counts.truckDailyMetrics} daily-metric rows, ` +
+      `${built.counts.postings} postings`
   )
 }
 
@@ -300,6 +302,23 @@ const FIXTURE_MAINTENANCE = [
   { service: 'Coolant flush', notes: 'Scheduled fluid replacement' },
 ]
 
+// Dry-run fixture for postings — same shape as AI-generated LoadItem.
+// Has at least one of each equipment type so round-robin covers all tiers.
+const FIXTURE_POSTINGS = [
+  { originCity: 'Dallas', originState: 'TX', destinationCity: 'Houston', destinationState: 'TX', broker: 'TQL', commodity: 'Packaged retail goods', equipmentType: 'dry-van', weightLbs: 24000, ratePerMile: 2.8 },
+  { originCity: 'Chicago', originState: 'IL', destinationCity: 'Kansas City', destinationState: 'MO', broker: 'Landstar', commodity: 'Auto parts', equipmentType: 'dry-van', weightLbs: 31000, ratePerMile: 1.8 },
+  { originCity: 'Los Angeles', originState: 'CA', destinationCity: 'Phoenix', destinationState: 'AZ', broker: 'C.H. Robinson', commodity: 'Electronics', equipmentType: 'reefer', weightLbs: 18500, ratePerMile: 2.3 },
+  { originCity: 'Atlanta', originState: 'GA', destinationCity: 'Charlotte', destinationState: 'NC', broker: 'Echo Global', commodity: 'Frozen poultry', equipmentType: 'reefer', weightLbs: 26000, ratePerMile: 3.2 },
+  { originCity: 'Denver', originState: 'CO', destinationCity: 'Salt Lake City', destinationState: 'UT', broker: 'RXO', commodity: 'Structural steel beams', equipmentType: 'flatbed', weightLbs: 34000, ratePerMile: 2.4 },
+  { originCity: 'Seattle', originState: 'WA', destinationCity: 'Spokane', destinationState: 'WA', broker: 'Werner', commodity: 'Bottled beverages', equipmentType: 'dry-van', weightLbs: 21000, ratePerMile: 2.0 },
+  { originCity: 'Newark', originState: 'NJ', destinationCity: 'Boston', destinationState: 'MA', broker: 'Schneider', commodity: 'Paper goods', equipmentType: 'step-deck', weightLbs: 19500, ratePerMile: 2.35 },
+  { originCity: 'Memphis', originState: 'TN', destinationCity: 'Nashville', destinationState: 'TN', broker: 'J.B. Hunt', commodity: 'Fresh produce', equipmentType: 'tanker', weightLbs: 22500, ratePerMile: 2.5 },
+  { originCity: 'Houston', originState: 'TX', destinationCity: 'San Antonio', destinationState: 'TX', broker: 'XPO Logistics', commodity: 'Industrial pipe fittings', equipmentType: 'flatbed', weightLbs: 29000, ratePerMile: 1.5 },
+  { originCity: 'Portland', originState: 'OR', destinationCity: 'Boise', destinationState: 'ID', broker: 'Coyote Logistics', commodity: 'Lumber', equipmentType: 'power-only', weightLbs: 33500, ratePerMile: 2.45 },
+  { originCity: 'Detroit', originState: 'MI', destinationCity: 'Columbus', destinationState: 'OH', broker: 'TQL', commodity: 'Automotive stampings', equipmentType: 'dry-van', weightLbs: 27500, ratePerMile: 1.9 },
+  { originCity: 'Orlando', originState: 'FL', destinationCity: 'Jacksonville', destinationState: 'FL', broker: 'Landstar', commodity: 'Chemical drums', equipmentType: 'tanker', weightLbs: 24500, ratePerMile: 2.7 },
+]
+
 async function runDryRun({ seed }) {
   console.log('dry run: using a built-in fixture instead of any AI request')
 
@@ -307,23 +326,26 @@ async function runDryRun({ seed }) {
   const driverResults = FIXTURE_DRIVERS.map((raw) => validateDriverItem(DriverItem.parse(raw)))
   const truckResults = FIXTURE_TRUCKS.map((raw) => validateTruckItem(TruckItem.parse(raw)))
   const maintenanceResults = FIXTURE_MAINTENANCE.map((raw) => validateMaintenanceItem(MaintenanceItem.parse(raw)))
+  const postingResults = FIXTURE_POSTINGS.map((raw) => validateLoadItem(LoadItem.parse(raw)))
 
   const loadItems = loadResults.filter((r) => r.ok).map((r) => r.item)
   const driverItems = driverResults.filter((r) => r.ok).map((r) => r.item)
   const truckItems = truckResults.filter((r) => r.ok).map((r) => r.item)
   const maintenanceItems = maintenanceResults.filter((r) => r.ok).map((r) => r.item)
+  const postingItems = postingResults.filter((r) => r.ok).map((r) => r.item)
 
   const summary = {
     drivers: { requested: FIXTURE_DRIVERS.length, accepted: driverItems.length },
     trucks: { requested: FIXTURE_TRUCKS.length, accepted: truckItems.length },
     loads: { requested: FIXTURE_LOADS.length, accepted: loadItems.length },
     maintenance: { requested: FIXTURE_MAINTENANCE.length, accepted: maintenanceItems.length },
+    postings: { requested: FIXTURE_POSTINGS.length, accepted: postingItems.length },
   }
   for (const [label, s] of Object.entries(summary)) {
     console.log(`-> ${s.requested} ${label} requested, ${s.accepted} accepted, ${s.requested - s.accepted} dropped`)
   }
 
-  await finish({ seed, driverItems, truckItems, loadItems, maintenanceItems, summary })
+  await finish({ seed, driverItems, truckItems, loadItems, maintenanceItems, postingItems, summary })
 }
 
 // ---------------------------------------------------------------------
@@ -363,11 +385,29 @@ async function runGeneration({ config, seed }) {
     buildSystem: maintenanceSystemPrompt, buildUser: (want) => maintenanceUserPrompt(want),
   })
 
+  // Postings reuse the LoadItem shape and prompts — same city/broker/
+  // equipment constraints, just routed through buildPostingRows instead
+  // of buildLoadRow. Own seenPairs/seenBrokers to avoid overlap with
+  // the committed-loads pool.
+  const postingSeenPairs = new Set()
+  const postingSeenBrokers = new Set()
+  const postings = await generateCategory({
+    label: 'postings', config, target: POSTING_CONFIG.poolTarget, batchSize: 25,
+    schema: LoadItem, validator: validateLoadItem,
+    buildSystem: loadSystemPrompt,
+    buildUser: (want) => loadUserPrompt(want, postingSeenPairs, postingSeenBrokers),
+    onAccepted: (item) => {
+      postingSeenPairs.add(`${item.originCity}, ${item.originState} -> ${item.destinationCity}, ${item.destinationState}`)
+      postingSeenBrokers.add(item.broker)
+    },
+  })
+
   const summary = {
     drivers: { requested: drivers.requested, accepted: drivers.accepted.length },
     trucks: { requested: trucks.requested, accepted: trucks.accepted.length },
     loads: { requested: loads.requested, accepted: loads.accepted.length },
     maintenance: { requested: maintenance.requested, accepted: maintenance.accepted.length },
+    postings: { requested: postings.requested, accepted: postings.accepted.length },
   }
 
   await finish({
@@ -376,6 +416,7 @@ async function runGeneration({ config, seed }) {
     truckItems: trucks.accepted,
     loadItems: loads.accepted,
     maintenanceItems: maintenance.accepted,
+    postingItems: postings.accepted,
     summary,
   })
 }

@@ -5,29 +5,29 @@
 -- tables listed in the TRUNCATE below.
 BEGIN;
 
-TRUNCATE TABLE truck_daily_metrics, maintenance_records, loads, trucks, drivers CASCADE;
+TRUNCATE TABLE truck_daily_metrics, maintenance_records, load_postings, loads, trucks, drivers CASCADE;
 
-INSERT INTO drivers (id, name, email, phone, cdl_class, cdl_number, license_expires_on, home_base_city, home_base_state, current_location, duty_status, hos_remaining_min, hours_today_min, hours_week_min, total_miles, safety_rating, broker_rating_x10, pay_model, pay_percent_bp, pay_per_mile_cents) VALUES
-  (E'd1', E'Marcus Webb', E'marcus.webb@example.com', E'214-555-0142', E'A', E'CDL56828471', E'2028-05-31', E'Dallas', E'TX', E'Dallas, TX area', E'driving', 553, 79, 4183, 317658, 79, 42, E'permile', NULL, 82),
-  (E'd2', E'Elena Petrova', E'elena.petrova@example.com', E'404-555-0198', E'A', E'CDL39066201', E'2030-06-20', E'Atlanta', E'GA', E'Atlanta, GA area', E'driving', 498, 195, 1996, 467295, 82, 41, E'permile', NULL, 73),
-  (E'd3', E'Devon Carter', E'devon.carter@example.com', E'312-555-0167', E'A', E'CDL36633656', E'2027-03-02', E'Chicago', E'IL', E'Chicago, IL area', E'driving', 120, 460, 1632, 268188, 95, 32, E'permile', NULL, 82),
-  (E'd4', E'Raj Malhotra', E'raj.malhotra@example.com', E'602-555-0123', E'A', E'CDL97547177', E'2027-06-03', E'Phoenix', E'AZ', E'Phoenix, AZ area', E'driving', 167, 468, 3079, 354240, 79, 34, E'percent', 2378, NULL),
-  (E'd5', E'James Kim', E'james.kim@example.com', E'206-555-0184', E'A', E'CDL66601305', E'2029-12-27', E'Seattle', E'WA', E'Seattle, WA area', E'on-duty', 593, 215, 3373, 217461, 68, 45, E'percent', 1984, NULL),
-  (E'd6', E'Carlos Jimenez', E'carlos.jimenez@example.com', E'512-555-0111', E'A', E'CDL67173743', E'2027-07-01', E'San Antonio', E'TX', E'San Antonio, TX yard', E'off', NULL, 600, 1352, 62787, 91, 44, E'permile', NULL, 65),
-  (E'd7', E'Priya Nair', E'priya.nair@example.com', E'773-555-0122', E'A', E'CDL36234290', E'2030-06-13', E'Chicago', E'IL', E'Chicago, IL area', E'resting', 262, 19, 942, 118655, 73, 41, E'permile', NULL, 68),
-  (E'd8', E'Wesley Combs', E'wesley.combs@example.com', E'470-555-0133', E'A', E'CDL36325333', E'2030-02-08', E'Atlanta', E'GA', E'Atlanta, GA area', E'resting', 321, 276, 2969, 197112, 84, 42, E'percent', 2270, NULL),
-  (E'd9', E'Hannah Brooks', E'hannah.brooks@example.com', E'303-555-0144', E'B', E'CDL59172586', E'2029-04-11', E'Denver', E'CO', E'Denver, CO yard', E'off', NULL, 155, 1471, 146028, 73, 44, E'percent', 2249, NULL),
-  (E'd10', E'Tyrell Banks', E'tyrell.banks@example.com', E'901-555-0155', E'A', E'CDL38280199', E'2028-03-19', E'Memphis', E'TN', E'Memphis, TN area', E'resting', 248, 28, 2438, 381784, 98, 47, E'percent', 2474, NULL),
-  (E'd11', E'Grace Lindqvist', E'grace.lindqvist@example.com', E'206-555-0166', E'A', E'CDL49542609', E'2027-05-12', E'Seattle', E'WA', E'Seattle, WA area', E'resting', 581, 347, 3585, 336997, 94, 34, E'permile', NULL, 63),
-  (E'd12', E'Omar Haddad', E'omar.haddad@example.com', E'713-555-0177', E'A', E'CDL45067925', E'2029-07-20', E'Houston', E'TX', E'Houston, TX yard', E'off', NULL, 650, 2397, 65701, 70, 33, E'permile', NULL, 79),
-  (E'd13', E'Renee Castillo', E'renee.castillo@example.com', E'973-555-0188', E'B', E'CDL55588834', E'2029-11-22', E'Newark', E'NJ', E'Newark, NJ yard', E'off', NULL, 502, 4169, 449423, 87, 37, E'permile', NULL, 70);
+INSERT INTO drivers (id, name, email, phone, cdl_class, cdl_number, license_expires_on, home_base_city, home_base_state, current_location, duty_status, hos_remaining_min, hours_today_min, hours_week_min, total_miles, safety_rating, broker_rating_x10, pay_model, pay_percent_bp, pay_per_mile_cents, current_city, current_state, current_lat, current_lon) VALUES
+  (E'd1', E'Marcus Webb', E'marcus.webb@example.com', E'214-555-0142', E'A', E'CDL56828471', E'2028-05-31', E'Dallas', E'TX', E'Dallas, TX area', E'driving', 553, 79, 4183, 317658, 79, 42, E'permile', NULL, 82, E'Dallas', E'TX', 32.7767, -96.797),
+  (E'd2', E'Elena Petrova', E'elena.petrova@example.com', E'404-555-0198', E'A', E'CDL39066201', E'2030-06-20', E'Atlanta', E'GA', E'Atlanta, GA area', E'driving', 498, 195, 1996, 467295, 82, 41, E'permile', NULL, 73, E'Atlanta', E'GA', 33.749, -84.388),
+  (E'd3', E'Devon Carter', E'devon.carter@example.com', E'312-555-0167', E'A', E'CDL36633656', E'2027-03-02', E'Chicago', E'IL', E'Chicago, IL area', E'driving', 120, 460, 1632, 268188, 95, 32, E'permile', NULL, 82, E'Chicago', E'IL', 41.8781, -87.6298),
+  (E'd4', E'Raj Malhotra', E'raj.malhotra@example.com', E'602-555-0123', E'A', E'CDL97547177', E'2027-06-03', E'Phoenix', E'AZ', E'Phoenix, AZ area', E'driving', 167, 468, 3079, 354240, 79, 34, E'percent', 2378, NULL, E'Phoenix', E'AZ', 33.4484, -112.074),
+  (E'd5', E'James Kim', E'james.kim@example.com', E'206-555-0184', E'A', E'CDL66601305', E'2029-12-27', E'Seattle', E'WA', E'Seattle, WA area', E'on-duty', 593, 215, 3373, 217461, 68, 45, E'percent', 1984, NULL, E'Seattle', E'WA', 47.6062, -122.3321),
+  (E'd6', E'Carlos Jimenez', E'carlos.jimenez@example.com', E'512-555-0111', E'A', E'CDL67173743', E'2027-07-01', E'San Antonio', E'TX', E'San Antonio, TX yard', E'off', NULL, 600, 1352, 62787, 91, 44, E'permile', NULL, 65, E'San Antonio', E'TX', 29.4241, -98.4936),
+  (E'd7', E'Priya Nair', E'priya.nair@example.com', E'773-555-0122', E'A', E'CDL36234290', E'2030-06-13', E'Chicago', E'IL', E'Chicago, IL area', E'resting', 262, 19, 942, 118655, 73, 41, E'permile', NULL, 68, E'Chicago', E'IL', 41.8781, -87.6298),
+  (E'd8', E'Wesley Combs', E'wesley.combs@example.com', E'470-555-0133', E'A', E'CDL36325333', E'2030-02-08', E'Atlanta', E'GA', E'Atlanta, GA area', E'resting', 321, 276, 2969, 197112, 84, 42, E'percent', 2270, NULL, E'Atlanta', E'GA', 33.749, -84.388),
+  (E'd9', E'Hannah Brooks', E'hannah.brooks@example.com', E'303-555-0144', E'B', E'CDL59172586', E'2029-04-11', E'Denver', E'CO', E'Denver, CO yard', E'off', NULL, 155, 1471, 146028, 73, 44, E'percent', 2249, NULL, E'Denver', E'CO', 39.7392, -104.9903),
+  (E'd10', E'Tyrell Banks', E'tyrell.banks@example.com', E'901-555-0155', E'A', E'CDL38280199', E'2028-03-19', E'Memphis', E'TN', E'Memphis, TN area', E'resting', 248, 28, 2438, 381784, 98, 47, E'percent', 2474, NULL, E'Memphis', E'TN', 35.1495, -90.049),
+  (E'd11', E'Grace Lindqvist', E'grace.lindqvist@example.com', E'206-555-0166', E'A', E'CDL49542609', E'2027-05-12', E'Seattle', E'WA', E'Seattle, WA area', E'resting', 581, 347, 3585, 336997, 94, 34, E'permile', NULL, 63, E'Seattle', E'WA', 47.6062, -122.3321),
+  (E'd12', E'Omar Haddad', E'omar.haddad@example.com', E'713-555-0177', E'A', E'CDL45067925', E'2029-07-20', E'Houston', E'TX', E'Houston, TX yard', E'off', NULL, 650, 2397, 65701, 70, 33, E'permile', NULL, 79, E'Houston', E'TX', 29.7604, -95.3698),
+  (E'd13', E'Renee Castillo', E'renee.castillo@example.com', E'973-555-0188', E'B', E'CDL55588834', E'2029-11-22', E'Newark', E'NJ', E'Newark, NJ yard', E'off', NULL, 502, 4169, 449423, 87, 37, E'permile', NULL, 70, E'Newark', E'NJ', 40.7357, -74.1724);
 
-INSERT INTO trucks (id, make, model, year, odometer_mi, status, driver_id, current_location, fuel_pct, fuel_gallons, fuel_capacity_gal, last_fueled_at, last_fueled_location, tire_front_pct, tire_rear_pct) VALUES
-  (E'PL-8524-RE', E'Freightliner', E'Cascadia', 2022, 312837, E'active', E'd1', E'Kansas City, MO', 38, 87, 229, E'2026-08-22T07:18:38.780Z', E'Tulsa, OK', 90, 79),
-  (E'HF-5007-RP', E'Peterbilt', E'579', 2021, 387241, E'active', E'd2', E'Houston, TX', 55, 83, 150, E'2026-08-20T04:42:49.293Z', E'El Paso, TX', 37, 20),
-  (E'EU-5303-AE', E'Kenworth', E'T680', 2023, 298935, E'active', E'd3', E'San Antonio, TX', 56, 155, 277, E'2026-08-20T11:27:09.107Z', E'Atlanta, GA', 19, 62),
-  (E'PG-6456-FH', E'Volvo Trucks', E'VNL', 2020, 196208, E'active', E'd4', E'Minneapolis, MN', 88, 230, 261, E'2026-08-23T11:05:48.779Z', E'Columbus, OH', 21, 71),
-  (E'RS-9278-CY', E'International', E'LT', 2024, 29822, E'active', E'd5', E'Nashville, TN', 96, 206, 215, E'2026-08-27T03:19:22.724Z', E'Oakland, CA', 56, 67);
+INSERT INTO trucks (id, make, model, year, odometer_mi, status, driver_id, current_location, fuel_pct, fuel_gallons, fuel_capacity_gal, last_fueled_at, last_fueled_location, tire_front_pct, tire_rear_pct, trailer_type) VALUES
+  (E'PL-8524-RE', E'Freightliner', E'Cascadia', 2022, 312837, E'active', E'd1', E'Kansas City, MO', 38, 87, 229, E'2026-08-22T07:18:38.780Z', E'Tulsa, OK', 90, 79, E'dry-van'),
+  (E'HF-5007-RP', E'Peterbilt', E'579', 2021, 387241, E'active', E'd2', E'Houston, TX', 55, 83, 150, E'2026-08-20T04:42:49.293Z', E'El Paso, TX', 37, 20, E'reefer'),
+  (E'EU-5303-AE', E'Kenworth', E'T680', 2023, 298935, E'active', E'd3', E'San Antonio, TX', 56, 155, 277, E'2026-08-20T11:27:09.107Z', E'Atlanta, GA', 19, 62, E'flatbed'),
+  (E'PG-6456-FH', E'Volvo Trucks', E'VNL', 2020, 196208, E'active', E'd4', E'Minneapolis, MN', 88, 230, 261, E'2026-08-23T11:05:48.779Z', E'Columbus, OH', 21, 71, E'tanker'),
+  (E'RS-9278-CY', E'International', E'LT', 2024, 29822, E'active', E'd5', E'Nashville, TN', 96, 206, 215, E'2026-08-27T03:19:22.724Z', E'Oakland, CA', 56, 67, E'dry-van');
 
 INSERT INTO loads (id, origin_city, origin_state, destination_city, destination_state, broker, commodity, rate_usd, distance_mi, weight_lbs, equipment_type, equipment_length_ft, status, driver_id, truck_id, booked_at, pickup_at, delivery_at, dispatched_at, eta_at, delivered_at, payment_terms, invoice_paid_at, accessorials) VALUES
   (E'4468', E'Seattle', E'WA', E'Portland', E'OR', E'Coyote Logistics', E'Construction equipment', 378, 172, 14600, E'step-deck', 45, E'done', E'd5', E'RS-9278-CY', E'2026-06-25T23:57:04.289Z', E'2026-06-27T15:36:54.090Z', E'2026-06-28T03:32:49.524Z', E'2026-06-27T08:45:52.906Z', NULL, E'2026-06-28T07:00:54.033Z', E'net30', NULL, E'[]'::jsonb),
@@ -362,5 +362,19 @@ INSERT INTO truck_daily_metrics (truck_id, day, distance_mi, fuel_gallons, idle_
   (E'RS-9278-CY', E'2026-08-26', 368, 74, 23, 73),
   (E'RS-9278-CY', E'2026-08-27', 267, 38, 40, 53),
   (E'RS-9278-CY', E'2026-08-28', 287, 48, 66, 29);
+
+INSERT INTO load_postings (origin_lat, origin_lon, destination_lat, destination_lon, origin_city, origin_state, destination_city, destination_state, broker, commodity, rate_usd, distance_mi, weight_lbs, equipment_type, equipment_length_ft, posted_at, expires_at, pickup_at, delivery_at, status) VALUES
+  (32.7767, -96.797, 29.7604, -95.3698, E'Dallas', E'TX', E'Houston', E'TX', E'TQL', E'Packaged retail goods', 742, 265, 24000, E'dry-van', 48, now() + interval '-132 minutes', now() + interval '979 minutes', now() + interval '1614 minutes', now() + interval '2540 minutes', E'open'),
+  (41.8781, -87.6298, 39.0997, -94.5786, E'Chicago', E'IL', E'Kansas City', E'MO', E'Landstar', E'Auto parts', 877, 487, 31000, E'dry-van', 53, now() + interval '-712 minutes', now() + interval '394 minutes', now() + interval '1695 minutes', now() + interval '2980 minutes', E'open'),
+  (33.749, -84.388, 35.2271, -80.8431, E'Atlanta', E'GA', E'Charlotte', E'NC', E'Echo Global', E'Frozen poultry', 854, 267, 26000, E'reefer', 53, now() + interval '-456 minutes', now() + interval '1190 minutes', now() + interval '3790 minutes', now() + interval '4208 minutes', E'open'),
+  (34.0522, -118.2437, 33.4484, -112.074, E'Los Angeles', E'CA', E'Phoenix', E'AZ', E'C.H. Robinson', E'Electronics', 968, 421, 18500, E'reefer', 53, now() + interval '-440 minutes', now() + interval '1772 minutes', now() + interval '4616 minutes', now() + interval '5865 minutes', E'open'),
+  (39.7392, -104.9903, 40.7608, -111.891, E'Denver', E'CO', E'Salt Lake City', E'UT', E'RXO', E'Structural steel beams', 1049, 437, 34000, E'flatbed', 45, now() + interval '2272 minutes', now() + interval '5107 minutes', now() + interval '6122 minutes', now() + interval '6910 minutes', E'open'),
+  (40.7357, -74.1724, 42.3601, -71.0589, E'Newark', E'NJ', E'Boston', E'MA', E'Schneider', E'Paper goods', 545, 232, 19500, E'step-deck', 48, now() + interval '825 minutes', now() + interval '3663 minutes', now() + interval '5068 minutes', now() + interval '5522 minutes', E'open'),
+  (47.6062, -122.3321, 47.6588, -117.426, E'Seattle', E'WA', E'Spokane', E'WA', E'Werner', E'Bottled beverages', 540, 270, 21000, E'dry-van', 48, now() + interval '4526 minutes', now() + interval '5685 minutes', now() + interval '8105 minutes', now() + interval '8933 minutes', E'open'),
+  (35.1495, -90.049, 36.1627, -86.7816, E'Memphis', E'TN', E'Nashville', E'TN', E'J.B. Hunt', E'Fresh produce', 653, 232, 22500, E'tanker', 42, now() + interval '8305 minutes', now() + interval '10923 minutes', now() + interval '12338 minutes', now() + interval '13086 minutes', E'open'),
+  (45.5152, -122.6784, 43.615, -116.2023, E'Portland', E'OR', E'Boise', E'ID', E'Coyote Logistics', E'Lumber', 997, 407, 33500, E'power-only', 53, now() + interval '1572 minutes', now() + interval '2630 minutes', now() + interval '3976 minutes', now() + interval '4582 minutes', E'open'),
+  (29.7604, -95.3698, 29.4241, -98.4936, E'Houston', E'TX', E'San Antonio', E'TX', E'XPO Logistics', E'Industrial pipe fittings', 577, 223, 29000, E'flatbed', 45, now() + interval '5656 minutes', now() + interval '6424 minutes', now() + interval '8410 minutes', now() + interval '8978 minutes', E'open'),
+  (42.3314, -83.0458, 39.9612, -82.9988, E'Detroit', E'MI', E'Columbus', E'OH', E'TQL', E'Automotive stampings', 434, 193, 27500, E'dry-van', 48, now() + interval '9378 minutes', now() + interval '10393 minutes', now() + interval '11119 minutes', now() + interval '11526 minutes', E'open'),
+  (28.5383, -81.3792, 30.3322, -81.6557, E'Orlando', E'FL', E'Jacksonville', E'FL', E'Landstar', E'Chemical drums', 416, 148, 24500, E'tanker', 45, now() + interval '7802 minutes', now() + interval '8584 minutes', now() + interval '10470 minutes', now() + interval '11358 minutes', E'open');
 
 COMMIT;

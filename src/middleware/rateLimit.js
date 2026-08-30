@@ -26,3 +26,13 @@ export const registerLimiter = rateLimit({
   legacyHeaders: false,
   handler: (req, res, next) => next(new AppError('RATE_LIMITED')),
 })
+
+// Posting booking: 20/minute per IP. Prevents rapid-fire booking attempts
+// that could DOS the atomic UPDATE + load-creation pipeline.
+export const bookLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 20,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  handler: (req, res, next) => next(new AppError('RATE_LIMITED')),
+})

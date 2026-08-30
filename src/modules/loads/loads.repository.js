@@ -211,3 +211,42 @@ export async function getOnTimeTrend(days = 7) {
   )
   return result.rows
 }
+
+// Creates a new load row inside an existing transaction. The `client` must
+// be a pg PoolClient obtained from pool.connect() with an active BEGIN.
+// Pattern copied from invites.repository.js's redeem(client, code).
+// The loadBoard module calls this — loads.repository.js remains the ONLY
+// file that INSERTs INTO loads.
+export async function createLoad(client, {
+  id, originCity, originState, destinationCity, destinationState,
+  broker, commodity, rateUsd, distanceMi, weightLbs,
+  equipmentType, equipmentLengthFt, driverId, truckId,
+  pickupAt, deliveryAt, bookedAt,
+}) {
+  const result = await client.query(
+    `INSERT INTO loads (
+       id, origin_city, origin_state, destination_city, destination_state,
+       broker, commodity, rate_usd, distance_mi, weight_lbs,
+       equipment_type, equipment_length_ft,
+       status, driver_id, truck_id,
+       booked_at, pickup_at, delivery_at,
+       payment_terms, accessorials
+     ) VALUES (
+       $1, $2, $3, $4, $5,
+       $6, $7, $8, $9, $10,
+       $11, $12,
+       $13, $14, $15,
+       $16, $17, $18,
+       'net30', '[]'::jsonb
+     )
+     RETURNING id`,
+    [
+      id, originCity, originState, destinationCity, destinationState,
+      broker, commodity, rateUsd, distanceMi, weightLbs,
+      equipmentType, equipmentLengthFt,
+      driverId ? 'ontime' : 'neutral', driverId, truckId,
+      bookedAt, pickupAt, deliveryAt,
+    ],
+  )
+  return result.rows[0]
+}

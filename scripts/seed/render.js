@@ -29,6 +29,7 @@ export function sqlLiteral(value) {
     return String(value)
   }
   if (typeof value === 'boolean') return value ? 'TRUE' : 'FALSE'
+  if (typeof value === 'object' && value.__raw) return value.value
   if (Array.isArray(value) || (typeof value === 'object' && value.__jsonb)) {
     const payload = value.__jsonb ? value.value : value
     return `${sqlString(JSON.stringify(payload))}::jsonb`
@@ -41,6 +42,12 @@ export function sqlLiteral(value) {
 // literal instead of a plain string.
 export function jsonb(value) {
   return { __jsonb: true, value }
+}
+
+// Wraps a raw SQL fragment so sqlLiteral() renders it verbatim — used for
+// now()-relative timestamps that must survive the deterministic seed pipeline.
+export function raw(sql) {
+  return { __raw: true, value: sql }
 }
 
 // Renders one or more `INSERT INTO table (cols) VALUES (...), (...);`
@@ -71,7 +78,7 @@ export function renderSeedFile(inserts) {
 -- tables listed in the TRUNCATE below.
 BEGIN;
 
-TRUNCATE TABLE truck_daily_metrics, maintenance_records, loads, trucks, drivers CASCADE;
+TRUNCATE TABLE truck_daily_metrics, maintenance_records, load_postings, loads, trucks, drivers CASCADE;
 `
   const body = inserts.filter(Boolean).join('\n\n')
   const footer = '\nCOMMIT;\n'

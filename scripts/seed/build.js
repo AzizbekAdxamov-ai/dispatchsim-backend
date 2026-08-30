@@ -9,6 +9,7 @@ import { CITIES, findCity, roadMiles } from './cities.js'
 import { SERVICES } from './services.js'
 import { ANCHOR_LOADS, ANCHOR_DRIVERS } from './anchors.js'
 import { renderInsert, jsonb } from './render.js'
+import { buildPostingRows } from './postings.js'
 
 // Fixed point in time every generated timestamp is computed relative to.
 // Never Date.now() -- a run's output must not depend on when it happened
@@ -82,8 +83,15 @@ function toDateOnly(date) {
   return date.toISOString().slice(0, 10)
 }
 
+function randomCity(rng) {
+  return pick(rng, CITIES)
+}
+
+// Convenience wrapper — returns "City, ST" string. Preserved so
+// buildTruckRow can use it at the exact same rng-draw position as the
+// original code (after odometer_mi, before tire_front_pct).
 function randomCityLabel(rng) {
-  const c = pick(rng, CITIES)
+  const c = randomCity(rng)
   return `${c.city}, ${c.state}`
 }
 
@@ -138,7 +146,7 @@ function uniqueEmail(email, used) {
 
 // equipment_length_ft must be one of (28,42,45,48,53) per loads_equip_length.
 // Each equipment type gets a plausible subset of that closed set.
-const EQUIP_LENGTHS = {
+export const EQUIP_LENGTHS = {
   'dry-van': [48, 53],
   reefer: [48, 53],
   flatbed: [45, 48, 53],
@@ -179,7 +187,7 @@ const SERVICE_BY_NAME = new Map(SERVICES.map((s) => [s.name, s]))
 // 42mph average plus a 12h rest period per estimated driving day (max
 // hours) -- a one-day 400mi run and a three-day 1400mi run both get a
 // realistic window instead of one flat multiplier.
-function transitBand(distanceMi) {
+export function transitBand(distanceMi) {
   const days = Math.max(1, Math.ceil(distanceMi / 500))
   return { minH: distanceMi / 58 + 2, maxH: distanceMi / 42 + 12 * days }
 }
@@ -300,6 +308,9 @@ function buildDriverRow({ rng, id, item, hasCurrentTruck, dutyOverride, usedEmai
     dutyStatus === 'off'
       ? `${item.homeBaseCity}, ${item.homeBaseState} yard`
       : `${item.homeBaseCity}, ${item.homeBaseState} area`
+  // Derive structured location from home base — zero rng calls consumed,
+  // so the rng stream stays identical to the pre-2a baseline.
+  const homeCity = findCity(item.homeBaseCity, item.homeBaseState)
 
   return {
     id,
@@ -322,16 +333,26 @@ function buildDriverRow({ rng, id, item, hasCurrentTruck, dutyOverride, usedEmai
     pay_model: payModel,
     pay_percent_bp: payPercentBp,
     pay_per_mile_cents: payPerMileCents,
+    current_city: item.homeBaseCity,
+    current_state: item.homeBaseState,
+    current_lat: homeCity ? homeCity.lat : null,
+    current_lon: homeCity ? homeCity.lon : null,
   }
 }
 
-function buildTruckRow({ rng, id, item, status, driverId }) {
+// 4 of 6 equipment types deliberately covered; step-deck and power-only
+// are left uncovered so the "no matching equipment" warning fires for real.
+const COVERED_TYPES = ['dry-van', 'reefer', 'flatbed', 'tanker']
+
+function buildTruckRow({ rng, id, item, index, status, driverId }) {
   const fuelCapacityGal = randInt(rng, 150, 300)
   const fuelPct = status === 'maintenance' ? randInt(rng, 5, 40) : randInt(rng, 15, 100)
   const fuelGallons = Math.round(fuelCapacityGal * (fuelPct / 100))
   const hasFuelLog = status !== 'maintenance' || rng() < 0.5
   const lastFueledAt = hasFuelLog ? addHours(REFERENCE_NOW, -randFloat(rng, 2, 240)) : null
   const lastFueledLocation = hasFuelLog ? randomCityLabel(rng) : null
+  // trailer_type from truck index — no rng consumed, flow is untouched
+  const trailerType = COVERED_TYPES[index % COVERED_TYPES.length]
 
   return {
     id,
@@ -349,6 +370,7 @@ function buildTruckRow({ rng, id, item, status, driverId }) {
     last_fueled_location: lastFueledLocation,
     tire_front_pct: randInt(rng, 15, 100),
     tire_rear_pct: randInt(rng, 15, 100),
+    trailer_type: trailerType,
   }
 }
 
@@ -469,18 +491,18 @@ function enrichAnchorLoad(anchor) {
 // Column layouts (INSERT column order -- must match the row builders'
 // output keys, not the migration's declaration order).
 // ---------------------------------------------------------------------
-
 const DRIVER_COLUMNS = [
   'id', 'name', 'email', 'phone', 'cdl_class', 'cdl_number', 'license_expires_on',
-  'home_base_city', 'home_base_state', 'current_location', 'duty_status',
-  'hos_remaining_min', 'hours_today_min', 'hours_week_min', 'total_miles',
+  'home_base_city', 'home_base_state', 'current_location', 'duty_status', 'hos_remaining_min', 'hours_today_min', 'hours_week_min', 'total_miles',
   'safety_rating', 'broker_rating_x10', 'pay_model', 'pay_percent_bp', 'pay_per_mile_cents',
+  'current_city', 'current_state', 'current_lat', 'current_lon',
 ]
 
 const TRUCK_COLUMNS = [
   'id', 'make', 'model', 'year', 'odometer_mi', 'status', 'driver_id',
   'current_location', 'fuel_pct', 'fuel_gallons', 'fuel_capacity_gal',
   'last_fueled_at', 'last_fueled_location', 'tire_front_pct', 'tire_rear_pct',
+  'trailer_type',
 ]
 
 const LOAD_COLUMNS = [
@@ -499,6 +521,14 @@ const MAINTENANCE_COLUMNS = ['truck_id', 'service', 'status', 'due_date', 'due_m
 
 const METRICS_COLUMNS = ['truck_id', 'day', 'distance_mi', 'fuel_gallons', 'idle_minutes', 'fuel_pct_end']
 
+const POSTING_COLUMNS = [
+  'origin_lat', 'origin_lon', 'destination_lat', 'destination_lon',
+  'origin_city', 'origin_state', 'destination_city', 'destination_state',
+  'broker', 'commodity', 'rate_usd', 'distance_mi', 'weight_lbs',
+  'equipment_type', 'equipment_length_ft',
+  'posted_at', 'expires_at', 'pickup_at', 'delivery_at', 'status',
+]
+
 function toRows(objs, columns) {
   return objs.map((o) => columns.map((c) => (c in o ? o[c] : null)))
 }
@@ -509,7 +539,7 @@ function toRows(objs, columns) {
 // seed is worse than no seed, per the project's own rule.
 // ---------------------------------------------------------------------
 
-function assertIntegrity({ drivers, trucks, loads, maintenanceRecords }) {
+function assertIntegrity({ drivers, trucks, loads, maintenanceRecords, postings }) {
   const driverIds = new Set(drivers.map((d) => d.id))
   const truckIds = new Set(trucks.map((t) => t.id))
   if (driverIds.size !== drivers.length) throw new Error('duplicate driver id detected')
@@ -561,6 +591,24 @@ function assertIntegrity({ drivers, trucks, loads, maintenanceRecords }) {
   for (const m of maintenanceRecords) {
     if (!truckIds.has(m.truck_id)) throw new Error(`maintenance record references unknown truck ${m.truck_id}`)
   }
+
+  // ---- Posting integrity ----
+  if (postings && postings.length > 0) {
+    const postingTiers = new Set()
+    for (const p of postings) {
+      if (p.rate_usd < p.distance_mi || p.rate_usd > p.distance_mi * 5) {
+        throw new Error(`posting rate ${p.rate_usd} outside rpm band for distance ${p.distance_mi}`)
+      }
+      if (p.tier) postingTiers.add(p.tier)
+    }
+    // When enough postings exist, all tiers should be represented
+    if (postings.length >= 60) {
+      const expected = new Set(['strong', 'marginal', 'trap-deadhead', 'trap-hos', 'trap-equipment', 'filler'])
+      for (const t of expected) {
+        if (!postingTiers.has(t)) throw new Error(`tier '${t}' not represented in ${postings.length} postings`)
+      }
+    }
+  }
 }
 
 // ---------------------------------------------------------------------
@@ -570,7 +618,7 @@ function assertIntegrity({ drivers, trucks, loads, maintenanceRecords }) {
 // `driverItems`/`truckItems`/`loadItems`/`maintenanceItems` are arrays of
 // already-validated items (the `.item` from validate*Item's { ok: true,
 // item } result) -- build.js never re-validates, only assembles.
-export function buildSeed({ driverItems, truckItems, loadItems, maintenanceItems, seed }) {
+export function buildSeed({ driverItems, truckItems, loadItems, maintenanceItems, postingItems, seed }) {
   const rng = mulberry32(seed)
 
   const anchorDriverIds = ANCHOR_DRIVERS.map((d) => d.id)
@@ -596,7 +644,7 @@ export function buildSeed({ driverItems, truckItems, loadItems, maintenanceItems
 
   anchorDriverIds.forEach((driverId, i) => {
     const plate = makePlate(rng, usedPlates)
-    trucks.push(buildTruckRow({ rng, id: plate, item: anchorTruckItems[i], status: 'active', driverId }))
+    trucks.push(buildTruckRow({ rng, id: plate, item: anchorTruckItems[i], index: i, status: 'active', driverId }))
     driverCurrentTruck.set(driverId, plate)
   })
 
@@ -605,6 +653,7 @@ export function buildSeed({ driverItems, truckItems, loadItems, maintenanceItems
   // trucks_idle_no_driver).
   const shuffledAiDrivers = shuffled(rng, aiDriverIds)
   let freeDriverCursor = 0
+  let poolIndex = ANCHOR_DRIVERS.length
   for (const item of poolTruckItems) {
     const plate = makePlate(rng, usedPlates)
     const roll = rng()
@@ -620,7 +669,8 @@ export function buildSeed({ driverItems, truckItems, loadItems, maintenanceItems
       busyDriverIds.add(driverId)
       driverCurrentTruck.set(driverId, plate)
     }
-    trucks.push(buildTruckRow({ rng, id: plate, item, status, driverId }))
+    trucks.push(buildTruckRow({ rng, id: plate, item, index: poolIndex, status, driverId }))
+    poolIndex += 1
   }
   const truckIds = new Set(trucks.map((t) => t.id))
 
@@ -738,7 +788,15 @@ export function buildSeed({ driverItems, truckItems, loadItems, maintenanceItems
 
   const truckDailyMetrics = buildDailyMetrics(rng, trucks.map((t) => t.id))
 
-  assertIntegrity({ drivers, trucks, loads, maintenanceRecords })
+  // ---- Postings: built LAST so rng draws for drivers/trucks/loads/metrics
+  // are unaffected — the determinism invariant.
+  const postingRows = postingItems.length > 0
+    ? buildPostingRows({ rng, postingItems, drivers, trucks, fleetEquipment: trucks })
+    : []
+  // Tag tier onto rows for assertIntegrity (not stored in DB)
+  const postingsWithTier = postingItems.length > 0 ? postingRows : []
+
+  assertIntegrity({ drivers, trucks, loads, maintenanceRecords, postings: postingsWithTier })
 
   const inserts = [
     renderInsert('drivers', DRIVER_COLUMNS, toRows(drivers, DRIVER_COLUMNS)),
@@ -746,6 +804,7 @@ export function buildSeed({ driverItems, truckItems, loadItems, maintenanceItems
     renderInsert('loads', LOAD_COLUMNS, toRows(loads, LOAD_COLUMNS)),
     renderInsert('maintenance_records', MAINTENANCE_COLUMNS, toRows(maintenanceRecords, MAINTENANCE_COLUMNS)),
     renderInsert('truck_daily_metrics', METRICS_COLUMNS, toRows(truckDailyMetrics, METRICS_COLUMNS)),
+    renderInsert('load_postings', POSTING_COLUMNS, toRows(postingRows, POSTING_COLUMNS)),
   ]
 
   return {
@@ -756,6 +815,7 @@ export function buildSeed({ driverItems, truckItems, loadItems, maintenanceItems
       loads: loads.length,
       maintenanceRecords: maintenanceRecords.length,
       truckDailyMetrics: truckDailyMetrics.length,
+      postings: postingRows.length,
     },
   }
 }

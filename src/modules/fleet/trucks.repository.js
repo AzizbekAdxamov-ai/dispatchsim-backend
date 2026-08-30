@@ -13,6 +13,7 @@ const TRUCK_COLUMNS = `
   t.fuel_capacity_gal AS "fuelCapacityGal",
   t.last_fueled_at AS "lastFueledAt", t.last_fueled_location AS "lastFueledLocation",
   t.tire_front_pct AS "tireFrontPct", t.tire_rear_pct AS "tireRearPct",
+  t.trailer_type AS "trailerType",
   t.created_at AS "createdAt", t.updated_at AS "updatedAt"
 `
 

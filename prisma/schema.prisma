@@ -50,20 +50,180 @@ model user_roles {
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
 /// This model has constraints using non-default deferring rules and requires additional setup for migrations. Visit https://pris.ly/d/constraint-deferring for more info.
 model users {
-  id                                          String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  email                                       String         @unique
+  id                                          String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email                                       String          @unique
   password_hash                               String
   name                                        String
-  company                                     String         @default("")
+  company                                     String          @default("")
   active_role                                 String?
-  created_at                                  DateTime       @default(now()) @db.Timestamptz(6)
-  updated_at                                  DateTime       @default(now()) @db.Timestamptz(6)
-  is_admin                                    Boolean        @default(false)
+  created_at                                  DateTime        @default(now()) @db.Timestamptz(6)
+  updated_at                                  DateTime        @default(now()) @db.Timestamptz(6)
+  is_admin                                    Boolean         @default(false)
   invite_codes                                invite_codes[]
-  user_roles_user_roles_granted_byTousers     user_roles[]   @relation("user_roles_granted_byTousers")
-  user_roles_user_roles_user_idTousers        user_roles[]   @relation("user_roles_user_idTousers")
-  user_roles_users_id_active_roleTouser_roles user_roles?    @relation("users_id_active_roleTouser_roles", fields: [id, active_role], references: [user_id, role], onDelete: NoAction, onUpdate: NoAction, map: "users_active_role_fk")
+  load_postings                               load_postings[]
+  user_roles_user_roles_granted_byTousers     user_roles[]    @relation("user_roles_granted_byTousers")
+  user_roles_user_roles_user_idTousers        user_roles[]    @relation("user_roles_user_idTousers")
+  user_roles_users_id_active_roleTouser_roles user_roles?     @relation("users_id_active_roleTouser_roles", fields: [id, active_role], references: [user_id, role], onDelete: NoAction, onUpdate: NoAction, map: "users_active_role_fk")
 
   @@index([created_at(sort: Desc)])
-  @@unique([id, active_role])
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model drivers {
+  id                 String   @id
+  name               String
+  email              String   @unique
+  phone              String
+  cdl_class          String   @default("A")
+  cdl_number         String   @unique
+  license_expires_on DateTime @db.Date
+  home_base_city     String
+  home_base_state    String
+  current_location   String?
+  duty_status        String
+  hos_remaining_min  Int?
+  hours_today_min    Int      @default(0)
+  hours_week_min     Int      @default(0)
+  total_miles        Int      @default(0)
+  safety_rating      Int      @default(100) @db.SmallInt
+  broker_rating_x10  Int      @default(50) @db.SmallInt
+  pay_model          String
+  pay_percent_bp     Int?
+  pay_per_mile_cents Int?     @db.SmallInt
+  created_at         DateTime @default(now()) @db.Timestamptz(6)
+  updated_at         DateTime @default(now()) @db.Timestamptz(6)
+  current_city       String?
+  current_state      String?
+  current_lat        Float?
+  current_lon        Float?
+  loads              loads[]
+  trucks             trucks?
+
+  @@index([duty_status])
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model load_postings {
+  id                  String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  origin_lat          Float
+  origin_lon          Float
+  destination_lat     Float
+  destination_lon     Float
+  origin_city         String
+  origin_state        String
+  destination_city    String
+  destination_state   String
+  broker              String
+  commodity           String
+  rate_usd            Int
+  distance_mi         Int
+  weight_lbs          Int
+  equipment_type      String
+  equipment_length_ft Int
+  posted_at           DateTime  @db.Timestamptz(6)
+  expires_at          DateTime  @db.Timestamptz(6)
+  pickup_at           DateTime  @db.Timestamptz(6)
+  delivery_at         DateTime  @db.Timestamptz(6)
+  status              String    @default("open")
+  booked_load_id      String?
+  booked_by_user_id   String?   @db.Uuid
+  booked_at           DateTime? @db.Timestamptz(6)
+  created_at          DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at          DateTime  @default(now()) @db.Timestamptz(6)
+  users               users?    @relation(fields: [booked_by_user_id], references: [id], onUpdate: NoAction)
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model loads {
+  id                  String    @id
+  origin_city         String
+  origin_state        String
+  destination_city    String
+  destination_state   String
+  broker              String
+  commodity           String    @default("")
+  rate_usd            Int
+  distance_mi         Int
+  weight_lbs          Int
+  equipment_type      String
+  equipment_length_ft Int       @db.SmallInt
+  status              String
+  driver_id           String?
+  truck_id            String?
+  booked_at           DateTime  @db.Timestamptz(6)
+  pickup_at           DateTime  @db.Timestamptz(6)
+  delivery_at         DateTime  @db.Timestamptz(6)
+  dispatched_at       DateTime? @db.Timestamptz(6)
+  eta_at              DateTime? @db.Timestamptz(6)
+  delivered_at        DateTime? @db.Timestamptz(6)
+  payment_terms       String    @default("net30")
+  invoice_paid_at     DateTime? @db.Timestamptz(6)
+  accessorials        Json      @default("[]")
+  created_at          DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at          DateTime  @default(now()) @db.Timestamptz(6)
+  drivers             drivers?  @relation(fields: [driver_id], references: [id], onUpdate: NoAction)
+  trucks              trucks?   @relation(fields: [truck_id], references: [id], onUpdate: NoAction)
+
+  @@index([broker])
+  @@index([driver_id], map: "loads_driver_idx")
+  @@index([pickup_at(sort: Desc)], map: "loads_pickup_idx")
+  @@index([status])
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model maintenance_records {
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  truck_id          String
+  service           String
+  status            String
+  due_date          DateTime? @db.Date
+  due_mileage       Int?
+  last_service_date DateTime? @db.Date
+  cost_usd          Int?
+  created_at        DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at        DateTime  @default(now()) @db.Timestamptz(6)
+  trucks            trucks    @relation(fields: [truck_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([status, due_date], map: "maint_status_due_idx")
+  @@index([truck_id], map: "maint_truck_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model truck_daily_metrics {
+  truck_id     String
+  day          DateTime @db.Date
+  distance_mi  Int      @default(0)
+  fuel_gallons Int      @default(0)
+  idle_minutes Int      @default(0)
+  fuel_pct_end Int      @db.SmallInt
+  trucks       trucks   @relation(fields: [truck_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([truck_id, day])
+  @@index([day(sort: Desc)], map: "tdm_day_idx")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model trucks {
+  id                   String                @id
+  make                 String
+  model                String
+  year                 Int                   @db.SmallInt
+  odometer_mi          Int
+  status               String
+  driver_id            String?               @unique
+  current_location     String?
+  fuel_pct             Int                   @db.SmallInt
+  fuel_gallons         Int
+  fuel_capacity_gal    Int                   @default(240)
+  last_fueled_at       DateTime?             @db.Timestamptz(6)
+  last_fueled_location String?
+  tire_front_pct       Int                   @db.SmallInt
+  tire_rear_pct        Int                   @db.SmallInt
+  created_at           DateTime              @default(now()) @db.Timestamptz(6)
+  updated_at           DateTime              @default(now()) @db.Timestamptz(6)
+  trailer_type         String?
+  loads                loads[]
+  maintenance_records  maintenance_records[]
+  truck_daily_metrics  truck_daily_metrics[]
+  drivers              drivers?              @relation(fields: [driver_id], references: [id], onUpdate: NoAction)
 }

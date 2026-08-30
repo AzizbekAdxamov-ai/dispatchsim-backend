@@ -40,9 +40,15 @@ export const ERROR_CODES = {
   INVITE_CODE_TAKEN:   { status: 409, message: 'Could not generate a unique invite code, try again' },
   // GET /loads/:id, /drivers/:id, /fleet/trucks/:id targeted an id that
   // doesn't exist. Read-only lookups added alongside migrations 005-009.
-  LOAD_NOT_FOUND:   { status: 404, message: 'Load not found' },
-  DRIVER_NOT_FOUND: { status: 404, message: 'Driver not found' },
-  TRUCK_NOT_FOUND:  { status: 404, message: 'Truck not found' },
+  LOAD_NOT_FOUND:    { status: 404, message: 'Load not found' },
+  DRIVER_NOT_FOUND:  { status: 404, message: 'Driver not found' },
+  TRUCK_NOT_FOUND:   { status: 404, message: 'Truck not found' },
+  POSTING_NOT_FOUND: { status: 404, message: 'Posting not found' },
+  POSTING_TAKEN:     { status: 409, message: 'This posting has already been booked' },
+  POSTING_EXPIRED:   { status: 410, message: 'This posting has expired' },
+  DRIVER_HAS_ACTIVE_LOAD: { status: 409, message: 'Driver already has an active load' },
+  LOAD_ID_UNAVAILABLE:    { status: 409, message: 'Load ID unavailable, try again' },
+  DRIVER_NOT_AVAILABLE:   { status: 409, message: 'No available driver for this load' },
 }
 
 export class AppError extends Error {
