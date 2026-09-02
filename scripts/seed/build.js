@@ -10,6 +10,7 @@ import { SERVICES } from './services.js'
 import { ANCHOR_LOADS, ANCHOR_DRIVERS } from './anchors.js'
 import { renderInsert, jsonb } from './render.js'
 import { buildPostingRows } from './postings.js'
+import { buildTruckRows } from './trucks.js'
 
 // Fixed point in time every generated timestamp is computed relative to.
 // Never Date.now() -- a run's output must not depend on when it happened
@@ -525,8 +526,13 @@ const POSTING_COLUMNS = [
   'origin_lat', 'origin_lon', 'destination_lat', 'destination_lon',
   'origin_city', 'origin_state', 'destination_city', 'destination_state',
   'broker', 'commodity', 'rate_usd', 'distance_mi', 'weight_lbs',
-  'equipment_type', 'equipment_length_ft',
-  'posted_at', 'expires_at', 'pickup_at', 'delivery_at', 'status',
+  'equipment_type', 'equipment_length_ft', 'posted_at', 'expires_at', 'pickup_at', 'delivery_at', 'status',
+]
+
+const TRUCK_LISTING_COLUMNS = [
+  'id', 'make', 'model', 'year', 'odometer_mi', 'price_usd', 'trailer_type',
+  'fuel_capacity_gal', 'tire_front_pct', 'tire_rear_pct', 'service_notes',
+  'seller', 'posted_at', 'expires_at', 'status',
 ]
 
 function toRows(objs, columns) {
@@ -618,8 +624,41 @@ function assertIntegrity({ drivers, trucks, loads, maintenanceRecords, postings 
 // `driverItems`/`truckItems`/`loadItems`/`maintenanceItems` are arrays of
 // already-validated items (the `.item` from validate*Item's { ok: true,
 // item } result) -- build.js never re-validates, only assembles.
-export function buildSeed({ driverItems, truckItems, loadItems, maintenanceItems, postingItems, seed }) {
+export function buildSeed({ driverItems, truckItems, loadItems, maintenanceItems, postingItems, truckListingItems, seed }) {
   const rng = mulberry32(seed)
+
+  // When --demo-fleet is not set, all fleet arrays are empty. Build
+  // postings only and skip the fleet assembly + integrity gate.
+  const fleetEmpty = driverItems.length === 0 && truckItems.length === 0 &&
+    loadItems.length === 0 && maintenanceItems.length === 0
+
+  if (fleetEmpty) {
+    const postingRows = postingItems.length > 0
+      ? buildPostingRows({ rng, postingItems, drivers: [], trucks: [], fleetEquipment: [] })
+      : []
+    // Truck listings for market-only mode
+    const truckListingRows = []
+    if (truckListingItems && truckListingItems.length > 0) {
+      const truckListingIdRows = []
+      for (let i = 0; i < truckListingItems.length; i++) {
+        truckListingIdRows.push(`t${1000 + i}`)
+      }
+      truckListingRows.push(...buildTruckRows({ rng, truckItems: truckListingItems, truckIds: truckListingIdRows }))
+    }
+    const inserts = [
+      renderInsert('drivers', DRIVER_COLUMNS, []),
+      renderInsert('trucks', TRUCK_COLUMNS, []),
+      renderInsert('loads', LOAD_COLUMNS, []),
+      renderInsert('maintenance_records', MAINTENANCE_COLUMNS, []),
+      renderInsert('truck_daily_metrics', METRICS_COLUMNS, []),
+      renderInsert('load_postings', POSTING_COLUMNS, toRows(postingRows, POSTING_COLUMNS)),
+      renderInsert('truck_listings', TRUCK_LISTING_COLUMNS, toRows(truckListingRows, TRUCK_LISTING_COLUMNS)),
+    ]
+    return {
+      inserts,
+      counts: { drivers: 0, trucks: 0, loads: 0, maintenanceRecords: 0, truckDailyMetrics: 0, postings: postingRows.length, truckListings: truckListingRows.length },
+    }
+  }
 
   const anchorDriverIds = ANCHOR_DRIVERS.map((d) => d.id)
   const aiDriverIds = driverItems.map((_, i) => `d${6 + i}`)
@@ -798,6 +837,17 @@ export function buildSeed({ driverItems, truckItems, loadItems, maintenanceItems
 
   assertIntegrity({ drivers, trucks, loads, maintenanceRecords, postings: postingsWithTier })
 
+  // ---- Truck listings: built LAST so rng draws for drivers/trucks/loads/metrics
+  // are unaffected — the determinism invariant.
+  const truckListingRows = []
+  if (truckListingItems && truckListingItems.length > 0) {
+    const truckListingIdRows = []
+    for (let i = 0; i < truckListingItems.length; i++) {
+      truckListingIdRows.push(`t${1000 + i}`)
+    }
+    truckListingRows.push(...buildTruckRows({ rng, truckItems: truckListingItems, truckIds: truckListingIdRows }))
+  }
+
   const inserts = [
     renderInsert('drivers', DRIVER_COLUMNS, toRows(drivers, DRIVER_COLUMNS)),
     renderInsert('trucks', TRUCK_COLUMNS, toRows(trucks, TRUCK_COLUMNS)),
@@ -805,6 +855,7 @@ export function buildSeed({ driverItems, truckItems, loadItems, maintenanceItems
     renderInsert('maintenance_records', MAINTENANCE_COLUMNS, toRows(maintenanceRecords, MAINTENANCE_COLUMNS)),
     renderInsert('truck_daily_metrics', METRICS_COLUMNS, toRows(truckDailyMetrics, METRICS_COLUMNS)),
     renderInsert('load_postings', POSTING_COLUMNS, toRows(postingRows, POSTING_COLUMNS)),
+    renderInsert('truck_listings', TRUCK_LISTING_COLUMNS, toRows(truckListingRows, TRUCK_LISTING_COLUMNS)),
   ]
 
   return {
@@ -816,6 +867,7 @@ export function buildSeed({ driverItems, truckItems, loadItems, maintenanceItems
       maintenanceRecords: maintenanceRecords.length,
       truckDailyMetrics: truckDailyMetrics.length,
       postings: postingRows.length,
+      truckListings: truckListingRows.length,
     },
   }
 }

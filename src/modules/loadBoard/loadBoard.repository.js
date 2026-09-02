@@ -11,19 +11,37 @@
 // roadMiles() exactly (haversine × 1.18).
 
 import { query } from '../../db/pool.js'
+import { CITIES } from '../../../scripts/seed/cities.js'
+import { statesInZone } from '../../constants/zones.js'
 
 const POSTING_COLUMNS = `
   p.id, p.origin_city AS "originCity", p.origin_state AS "originState",
   p.destination_city AS "destinationCity", p.destination_state AS "destinationState",
   p.origin_lat AS "originLat", p.origin_lon AS "originLon",
   p.destination_lat AS "destinationLat", p.destination_lon AS "destinationLon",
-  p.broker, p.commodity,
+  p.broker, p.broker_id AS "brokerId", p.commodity,
   p.rate_usd AS "rateUsd", p.distance_mi AS "distanceMi", p.weight_lbs AS "weightLbs",
   p.equipment_type AS "equipmentType", p.equipment_length_ft AS "equipmentLengthFt",
   p.posted_at AS "postedAt", p.expires_at AS "expiresAt",
   p.pickup_at AS "pickupAt", p.delivery_at AS "deliveryAt",
   p.status
 `
+
+// Broker profile columns. Kept SEPARATE from POSTING_COLUMNS on purpose:
+// POSTING_COLUMNS is also used in `UPDATE ... RETURNING`, where no join
+// exists and a `b.` reference is a hard error. Only the SELECT queries that
+// actually join brokers may add these.
+const BROKER_COLUMNS = `
+  b.mc_number AS "brokerMcNumber",
+  b.credit_rating AS "brokerCreditRating",
+  b.days_to_pay AS "brokerDaysToPay",
+  b.contact_name AS "brokerContactName"
+`
+
+// LEFT JOIN, not INNER: postings generated before migration 013 have
+// broker_id NULL and must still be listed — a missing profile shows as null
+// fields, never as a vanished row.
+const BROKER_JOIN = `LEFT JOIN brokers b ON b.id = p.broker_id`
 
 // LEFT JOIN LATERAL: find the nearest available (not off-duty, no active
 // load) driver to this posting's origin. Returns NULL when no driver has
@@ -45,11 +63,9 @@ const DEADHEAD_LATERAL = `
   ) near ON true
 `
 
-// CTE: compute deadhead once, use in both SELECT and WHERE/ORDER BY.
-// Without the CTE, the deadhead filter would need to duplicate the entire
-// JOIN LATERAL, and ORDER BY can't reference a LEFT JOIN alias at the
-// same query level in PostgreSQL.
-const BASE_CTE = `
+// CTE: compute deadhead from the nearest available driver (fleet-based).
+// Used when no fromCity/fromState is specified.
+const BASE_CTE_FLEET = `
   WITH nearest AS (
     SELECT
       p.id,
@@ -75,7 +91,38 @@ const BASE_CTE = `
   )
 `
 
-function buildFilter({ equipmentType, originState, minRatePerMile, maxDeadheadMi }) {
+// CTE: compute deadhead from a user-selected point (no driver involved).
+// NULLs for driver fields — deadhead is distance from the chosen city.
+const BASE_CTE_POINT = (lat, lon) => `
+  WITH nearest AS (
+    SELECT
+      p.id,
+      road_miles($1, $2, p.origin_lat, p.origin_lon)::int AS deadhead_mi,
+      NULL::text AS driver_id, NULL::text AS driver_name, NULL::int AS driver_hos
+    FROM load_postings p
+    WHERE p.status = 'open'
+      AND p.posted_at <= now()
+      AND p.expires_at > now()
+  )
+`
+
+// Exported for service to pick the right CTE
+export function buildBaseCte(fromCity, fromState) {
+  if (fromCity && fromState) {
+    const city = CITIES.find((c) => c.city === fromCity && c.state === fromState)
+    if (!city) {
+      // Loud, not silent. The service validates the city before calling, so
+      // reaching here means a caller skipped that check. Returning an empty
+      // board would hide the mistake — the same "silently wrong instead of
+      // loudly wrong" pattern that let the 14,676 mi deadhead sit unnoticed.
+      throw new Error(`buildBaseCte: unknown city ${fromCity}, ${fromState}`)
+    }
+    return { sql: BASE_CTE_POINT(city.lat, city.lon), lat: city.lat, lon: city.lon }
+  }
+  return { sql: BASE_CTE_FLEET, lat: null, lon: null }
+}
+
+function buildFilter({ equipmentType, originState, originZone, destinationZone, minRatePerMile, maxDeadheadMi }) {
   const conditions = []
   const params = []
 
@@ -89,6 +136,19 @@ function buildFilter({ equipmentType, originState, minRatePerMile, maxDeadheadMi
     conditions.push(`p.origin_state = $${params.length}`)
   }
 
+  // Zone -> the states it covers. No stored column and no join: the zone is
+  // derived from the state code, so filtering by zone is filtering by a set
+  // of states. A zone and a state filter intersect naturally.
+  if (originZone) {
+    params.push(statesInZone(originZone))
+    conditions.push(`p.origin_state = ANY($${params.length})`)
+  }
+
+  if (destinationZone) {
+    params.push(statesInZone(destinationZone))
+    conditions.push(`p.destination_state = ANY($${params.length})`)
+  }
+
   if (minRatePerMile != null) {
     // rate_per_mile = rate_usd / distance_mi, computed in SQL
     params.push(minRatePerMile)
@@ -96,11 +156,10 @@ function buildFilter({ equipmentType, originState, minRatePerMile, maxDeadheadMi
   }
 
   if (maxDeadheadMi != null) {
-    // COALESCE: postings with no available driver get deadhead_mi = 99999,
-    // so they are excluded by the max filter (intentional — user asked for
-    // a maximum deadhead, and "no driver" exceeds any reasonable limit).
+    // NULL deadhead = distance unknown → exclude from max filter
+    // (user asked for a maximum distance, and "unknown" doesn't answer it)
     params.push(maxDeadheadMi)
-    conditions.push(`COALESCE(n.deadhead_mi, 99999) <= $${params.length}`)
+    conditions.push(`n.deadhead_mi IS NOT NULL AND n.deadhead_mi <= $${params.length}`)
   }
 
   return { conditions, params }
@@ -109,54 +168,81 @@ function buildFilter({ equipmentType, originState, minRatePerMile, maxDeadheadMi
 function sortClause(sort) {
   switch (sort) {
     case 'ratePerMile': return 'ORDER BY (p.rate_usd::numeric / p.distance_mi) DESC'
-    case 'deadhead':    return 'ORDER BY COALESCE(n.deadhead_mi, 99999) ASC'
+    case 'deadhead':    return 'ORDER BY n.deadhead_mi ASC NULLS LAST'
     case 'pickup':      return 'ORDER BY p.pickup_at ASC'
     case 'posted':
     default:            return 'ORDER BY p.posted_at DESC'
   }
 }
 
-export async function listPostings({ equipmentType, originState, minRatePerMile, maxDeadheadMi, sort, limit, offset }) {
-  const { conditions, params } = buildFilter({ equipmentType, originState, minRatePerMile, maxDeadheadMi })
-  const where = conditions.length > 0 ? `AND ${conditions.join(' AND ')}` : ''
+export async function listPostings({ equipmentType, originState, originZone, destinationZone, minRatePerMile, maxDeadheadMi, sort, limit, offset, fromCity, fromState }) {
+  const { sql: baseCte, lat, lon } = buildBaseCte(fromCity, fromState)
+
+  const { conditions, params } = buildFilter({ equipmentType, originState, originZone, destinationZone, minRatePerMile, maxDeadheadMi })
+
+  // Point CTE uses $1/$2 for lat/lon, so filter params start at $3
+  const paramOffset = lat != null ? 2 : 0
+  const adjustedConditions = conditions.map((c) =>
+    c.replace(/\$(\d+)/g, (_, n) => `$${Number(n) + paramOffset}`),
+  )
+  const adjustedWhere = adjustedConditions.length > 0 ? `AND ${adjustedConditions.join(' AND ')}` : ''
 
   params.push(limit)
   const limitIdx = params.length
   params.push(offset)
   const offsetIdx = params.length
 
+  const sqlParams = lat != null ? [lat, lon, ...params] : params
+
   const result = await query(
-    `${BASE_CTE}
+    `${baseCte}
      SELECT ${POSTING_COLUMNS},
+            ${BROKER_COLUMNS},
             n.deadhead_mi AS "deadheadMi",
             n.driver_id AS "nearestDriverId",
             n.driver_name AS "nearestDriverName",
             n.driver_hos AS "nearestDriverHosRemainingMin"
      FROM load_postings p
      LEFT JOIN nearest n ON n.id = p.id
+     ${BROKER_JOIN}
      WHERE n.id IS NOT NULL
-       ${where}
+       ${adjustedWhere}
      ${sortClause(sort)}
-     LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
-    params,
+     LIMIT $${limitIdx + paramOffset} OFFSET $${offsetIdx + paramOffset}`,
+    sqlParams,
   )
   return result.rows
 }
 
-export async function getPostingById(id) {
+// Same deadhead reference point as listPostings: when the caller passes a
+// location the distance is measured from there, otherwise from the fleet.
+// Without this the detail view would report a different deadhead than the
+// row the user clicked.
+export async function getPostingById(id, fromCity, fromState) {
+  const { sql: baseCte, lat, lon } = buildBaseCte(fromCity, fromState)
+  const paramOffset = lat != null ? 2 : 0
+  const params = lat != null ? [lat, lon, id] : [id]
+
   const result = await query(
-    `${BASE_CTE}
+    `${baseCte}
      SELECT ${POSTING_COLUMNS},
+            ${BROKER_COLUMNS},
             n.deadhead_mi AS "deadheadMi",
             n.driver_id AS "nearestDriverId",
             n.driver_name AS "nearestDriverName",
             n.driver_hos AS "nearestDriverHosRemainingMin"
      FROM load_postings p
      LEFT JOIN nearest n ON n.id = p.id
-     WHERE p.id = $1`,
-    [id],
+     ${BROKER_JOIN}
+     WHERE p.id = $${1 + paramOffset}`,
+    params,
   )
   return result.rows[0] ?? null
+}
+
+// List cities for the location picker (from cities.js CITIES array)
+export function listCities() {
+  return CITIES.map((c) => ({ city: c.city, state: c.state }))
 }
 
 // ---------------------------------------------------------------------
@@ -181,6 +267,15 @@ export async function bookPostingAtomically(client, postingId, userId) {
     [postingId, userId],
   )
   return result.rows[0] ?? null
+}
+
+// A broker's stated days-to-pay, used to derive the load's payment terms at
+// booking time. Null when the posting predates migration 013 — the caller
+// falls back to the default term rather than failing the booking.
+export async function getBrokerDaysToPay(client, brokerId) {
+  if (!brokerId) return null
+  const result = await client.query('SELECT days_to_pay FROM brokers WHERE id = $1', [brokerId])
+  return result.rows[0]?.days_to_pay ?? null
 }
 
 // Fetch posting state AFTER a failed atomic UPDATE — used to determine

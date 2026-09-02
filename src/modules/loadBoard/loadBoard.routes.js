@@ -15,6 +15,7 @@ const router = Router()
 
 router.use(requireAuth, requireRole())
 
+router.get('/cities', loadBoardController.listCities)
 router.get('/', loadBoardController.listPostings)
 router.get('/:id', loadBoardController.getPosting)
 router.post('/:id/book', requireRole('dispatcher'), bookLimiter, loadBoardController.bookPosting)

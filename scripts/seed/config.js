@@ -13,7 +13,7 @@
 import 'dotenv/config'
 
 const DEFAULT_BASE_URL = 'https://api.groq.com/openai/v1'
-const DEFAULT_MODEL = 'llama-3.3-70b-versatile'
+const DEFAULT_MODEL = 'qwen/qwen3.8-27b'
 const DEFAULT_MAX_RPM = 25
 
 // Required by the project plan (S4): printed once, as a single block, when
@@ -31,21 +31,29 @@ Set it in backend/.env:
   AI_MODEL=${DEFAULT_MODEL}
 
 Free keys: console.groq.com  |  openrouter.ai/keys
+Note: older Llama models have been retired on Groq.
 To try the pipeline without a key:  npm run generate:seed -- --dry-run`
 
 // Reads AI_* env vars and validates them. Returns { config, errors }.
 // `config` is null when errors is non-empty. The API key's value never
 // appears in `errors` or anywhere else this function returns — only
 // config.hasKey (boolean) reflects its presence.
-export function readAiConfig() {
+//
+// `prefix` selects the env var family, so one implementation serves both
+// providers: AI_* is the seed generator (Groq, batch JSON), CHAT_* is the
+// broker conversation (OpenRouter, free-form text). Splitting them matters
+// because the two have completely different cost shapes — the seed is a
+// predictable 22 requests a day, chat is per-message and open-ended.
+export function readAiConfig({ prefix = 'AI', defaults = {} } = {}) {
   const errors = []
+  const env = (suffix) => process.env[`${prefix}_${suffix}`]
 
-  const baseUrl = (process.env.AI_BASE_URL || DEFAULT_BASE_URL).trim().replace(/\/+$/, '')
-  const model = (process.env.AI_MODEL || DEFAULT_MODEL).trim()
-  const apiKey = process.env.AI_API_KEY || ''
+  const baseUrl = (env('BASE_URL') || defaults.baseUrl || DEFAULT_BASE_URL).trim().replace(/\/+$/, '')
+  const model = (env('MODEL') || defaults.model || DEFAULT_MODEL).trim()
+  const apiKey = env('API_KEY') || ''
   const hasKey = apiKey.trim() !== ''
 
-  const rawMaxRpm = process.env.AI_MAX_RPM
+  const rawMaxRpm = env('MAX_RPM')
   let maxRpm = DEFAULT_MAX_RPM
   if (rawMaxRpm !== undefined && rawMaxRpm.trim() !== '') {
     const parsed = Number(rawMaxRpm)
@@ -57,15 +65,15 @@ export function readAiConfig() {
   }
 
   if (!hasKey) {
-    errors.push('AI_API_KEY is missing')
+    errors.push(`${prefix}_API_KEY is missing`)
   }
 
   if (baseUrl === '') {
-    errors.push('AI_BASE_URL must not be blank')
+    errors.push(`${prefix}_BASE_URL must not be blank`)
   }
 
   if (model === '') {
-    errors.push('AI_MODEL must not be blank')
+    errors.push(`${prefix}_MODEL must not be blank`)
   }
 
   if (errors.length > 0) {

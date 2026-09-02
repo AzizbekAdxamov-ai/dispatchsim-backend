@@ -14,15 +14,25 @@
     "db:pull": "prisma db pull",
     "db:studio": "prisma studio",
     "seed": "node src/db/seed.js",
-    "generate:seed": "node scripts/generate-seed.js"
+    "generate:seed": "node scripts/generate-seed.js",
+    "clear:fleet": "node scripts/clear-fleet.js",
+    "refresh:postings": "node scripts/refresh-postings.js",
+    "count:postings": "node scripts/count-postings.js",
+    "cleanup:legacy": "node scripts/cleanup-legacy.js",
+    "chat:smoke": "node scripts/chat-smoke.js",
+    "chat:diag": "node scripts/chat-diag.js",
+    "chat:compare": "node scripts/chat-compare.js"
   },
   "dependencies": {
+    "@prisma/client": "^6.19.3",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^5.1.0",
     "express-rate-limit": "^7.5.0",
     "jsonwebtoken": "^9.0.2",
+    "node-cron": "^4.6.0",
+    "pdfkit": "^0.20.2",
     "pg": "^8.13.1",
     "zod": "^3.24.1"
   },

@@ -8,6 +8,7 @@ import { Router } from 'express'
 import { requireAuth } from '../../middleware/requireAuth.js'
 import { requireRole } from '../../middleware/requireRole.js'
 import * as fleetController from './fleet.controller.js'
+import * as truckListingsController from './truckListings.controller.js'
 
 const router = Router()
 
@@ -16,5 +17,13 @@ router.use(requireAuth, requireRole('fleet-manager'))
 router.get('/trucks', fleetController.listTrucks)
 router.get('/trucks/:id', fleetController.getTruck)
 router.get('/maintenance', fleetController.listMaintenance)
+
+// Truck listings (market)
+router.get('/truck-listings', truckListingsController.listOpenListings)
+router.get('/truck-listings/:id', truckListingsController.getListing)
+router.post('/truck-listings/:id/buy', truckListingsController.buyListing)
+
+// Truck assignment
+router.post('/trucks/:id/assign', truckListingsController.assignDriver)
 
 export default router

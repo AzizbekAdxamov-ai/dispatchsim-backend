@@ -8,21 +8,44 @@ import { withTransaction } from '../../db/pool.js'
 import * as loadBoardRepo from './loadBoard.repository.js'
 import * as loadsRepo from '../../modules/loads/loads.repository.js'
 import { AppError } from '../../lib/errors.js'
+import { findCity } from '../../../scripts/seed/cities.js'
+import { termsForDaysToPay } from '../../constants/paymentTerms.js'
+import { getAgreedRate } from '../brokerChat/brokerChat.repository.js'
 
 // ---------------------------------------------------------------------
 // Read endpoints
 // ---------------------------------------------------------------------
 
-export async function listPostings({ equipmentType, originState, minRatePerMile, maxDeadheadMi, sort, page, limit }) {
+export async function listPostings({ equipmentType, originState, originZone, destinationZone, minRatePerMile, maxDeadheadMi, sort, page, limit, fromCity, fromState }) {
+  // Validate city exists if provided
+  if (fromCity && fromState) {
+    const city = findCity(fromCity, fromState)
+    if (!city) throw new AppError('UNKNOWN_CITY')
+  }
+
   const offset = (page - 1) * limit
   const postings = await loadBoardRepo.listPostings({
-    equipmentType, originState, minRatePerMile, maxDeadheadMi, sort, limit, offset,
+    equipmentType, originState, originZone, destinationZone, minRatePerMile, maxDeadheadMi, sort, limit, offset, fromCity, fromState,
   })
-  return { postings, meta: { page, limit } }
+
+  // Build deadheadFrom meta
+  let deadheadFrom = null
+  if (fromCity && fromState) {
+    deadheadFrom = { kind: 'location', city: fromCity, state: fromState }
+  } else if (postings.length > 0 && postings[0].nearestDriverId) {
+    deadheadFrom = { kind: 'driver', driverId: postings[0].nearestDriverId, driverName: postings[0].nearestDriverName }
+  }
+
+  return { postings, meta: { page, limit, deadheadFrom } }
 }
 
-export async function getPostingById(id) {
-  const posting = await loadBoardRepo.getPostingById(id)
+export async function getPostingById(id, { fromCity, fromState } = {}) {
+  if (fromCity && fromState) {
+    const city = findCity(fromCity, fromState)
+    if (!city) throw new AppError('UNKNOWN_CITY')
+  }
+
+  const posting = await loadBoardRepo.getPostingById(id, fromCity, fromState)
   if (!posting) {
     throw new AppError('POSTING_NOT_FOUND')
   }
@@ -126,6 +149,8 @@ export async function bookPosting({ postingId, userId, driverId }) {
         throw new AppError('POSTING_NOT_FOUND')
       }
 
+      const agreedRate = await getAgreedRate(client, postingId, userId)
+
       // Step 2: posting is now 'booked'. Generate load ID.
       loadId = await nextLoadId(client)
 
@@ -144,7 +169,10 @@ export async function bookPosting({ postingId, userId, driverId }) {
         destinationState: posting.destinationState,
         broker: posting.broker,
         commodity: posting.commodity,
-        rateUsd: posting.rateUsd,
+        // If this dispatcher negotiated a rate with the broker before
+        // booking, THAT is what the load is worth — not the posted number.
+        // Without this the whole conversation would be theatre.
+        rateUsd: agreedRate ?? posting.rateUsd,
         distanceMi: posting.distanceMi,
         weightLbs: posting.weightLbs,
         equipmentType: posting.equipmentType,
@@ -154,6 +182,14 @@ export async function bookPosting({ postingId, userId, driverId }) {
         pickupAt: posting.pickupAt,
         deliveryAt: posting.deliveryAt,
         bookedAt: new Date(),
+        // The consequence of who you book from. A broker that pays in 68
+        // days gets net60 terms, and finance ages the receivable from there —
+        // the student books a cheap-looking load from a D-rated broker and
+        // feels it two months later. Booking is never blocked; the lesson is
+        // in the outcome, not in a disabled button.
+        paymentTerms: termsForDaysToPay(
+          await loadBoardRepo.getBrokerDaysToPay(client, posting.brokerId),
+        ),
       })
 
       // Step 4: Link posting → load (FK requires load to exist first)

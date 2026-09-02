@@ -25,6 +25,11 @@ export const BANNED = /\b(simulation|simulated|scenario|score|scoring|training|t
 function findBannedField(item) {
   for (const [key, value] of Object.entries(item)) {
     if (typeof value === 'string' && BANNED.test(value)) return key
+    if (Array.isArray(value)) {
+      for (const el of value) {
+        if (typeof el === 'string' && BANNED.test(el)) return key
+      }
+    }
   }
   return null
 }
@@ -80,8 +85,15 @@ const MAX_DISTANCE_MI = 3500
 // never from any distance figure the model might have volunteered), or
 // { ok: false, reason }.
 export function validateLoadItem(item) {
-  const originKey = `${item.originCity}, ${item.originState}`
-  const destinationKey = `${item.destinationCity}, ${item.destinationState}`
+  // Model ko'pincha shahar maydoniga "Shahar, ST" yozib yuboradi
+  // ("Memphis, TN"), va bu State bilan birlashganda "Memphis, TN, TN"
+  // bo'lib allowlist'dan o'tmaydi. Vergulgacha bo'lgan qismni olamiz.
+  const cleanCity = (s) => String(s ?? '').split(',')[0].trim()
+
+  const originCity = cleanCity(item.originCity)
+  const destinationCity = cleanCity(item.destinationCity)
+  const originKey = `${originCity}, ${item.originState}`
+  const destinationKey = `${destinationCity}, ${item.destinationState}`
 
   if (!CITY_KEYS.has(originKey)) return { ok: false, reason: `unknown origin city: ${originKey}` }
   if (!CITY_KEYS.has(destinationKey)) return { ok: false, reason: `unknown destination city: ${destinationKey}` }
@@ -90,9 +102,9 @@ export function validateLoadItem(item) {
   const bannedField = findBannedField(item)
   if (bannedField) return { ok: false, reason: `banned word in ${bannedField}` }
 
-  const originCity = findCity(item.originCity, item.originState)
-  const destinationCity = findCity(item.destinationCity, item.destinationState)
-  const distanceMi = roadMiles(originCity, destinationCity)
+  const originGeo = findCity(originCity, item.originState)
+  const destinationGeo = findCity(destinationCity, item.destinationState)
+  const distanceMi = roadMiles(originGeo, destinationGeo)
   if (distanceMi < MIN_DISTANCE_MI || distanceMi > MAX_DISTANCE_MI) {
     return { ok: false, reason: `distance out of range (${distanceMi} mi)` }
   }
@@ -101,6 +113,8 @@ export function validateLoadItem(item) {
     ok: true,
     item: {
       ...item,
+      originCity,
+      destinationCity,
       distanceMi,
       ratePerMile: clampRatePerMile(item.equipmentType, distanceMi, item.ratePerMile),
       weightLbs: clampWeightLbs(item.weightLbs),
@@ -140,6 +154,42 @@ export function validateTruckItem(item) {
 // reason findBannedField is generic: a schema change elsewhere should not
 // require remembering to update this file too.
 export function validateMaintenanceItem(item) {
+  const bannedField = findBannedField(item)
+  if (bannedField) return { ok: false, reason: `banned word in ${bannedField}` }
+  return { ok: true, item }
+}
+
+// Validates one AI-suggested driver applicant (already zod-parsed against
+// ApplicantItem). Home base must be a real hub, pay must be in band,
+// email must be lowercased.
+export function validateApplicantItem(item) {
+  const cleanCity = (s) => String(s ?? '').split(',')[0].trim()
+
+  const homeCity = cleanCity(item.homeBaseCity)
+  const homeKey = `${homeCity}, ${item.homeBaseState}`
+  if (!CITY_KEYS.has(homeKey)) return { ok: false, reason: `unknown home base city: ${homeKey}` }
+
+  // Pay band check — exactly one of percent/permile must be in range
+  if (item.desiredPayModel === 'percent') {
+    if (!Number.isInteger(item.desiredPayValue) || item.desiredPayValue < 1000 || item.desiredPayValue > 5000)
+      return { ok: false, reason: 'percent pay out of band' }
+  } else {
+    if (!Number.isInteger(item.desiredPayValue) || item.desiredPayValue < 30 || item.desiredPayValue > 120)
+      return { ok: false, reason: 'permile pay out of band' }
+  }
+
+  const bannedField = findBannedField(item)
+  if (bannedField) return { ok: false, reason: `banned word in ${bannedField}` }
+
+  return { ok: true, item: { ...item, homeBaseCity: homeCity, email: item.email.toLowerCase() } }
+}
+
+// Validates one AI-suggested truck listing (already zod-parsed against
+// TruckListingItem). No city/distance dimension here — make/model/year
+// is all TruckListingItem carries — so this is effectively the banned-word
+// sweep, kept as its own function so every generated category goes through
+// the same "one validator per item type" shape.
+export function validateTruckListingItem(item) {
   const bannedField = findBannedField(item)
   if (bannedField) return { ok: false, reason: `banned word in ${bannedField}` }
   return { ok: true, item }

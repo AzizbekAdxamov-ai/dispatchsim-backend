@@ -4,9 +4,11 @@
 import app from './app.js'
 import config from './config.js'
 import { pool } from './db/pool.js'
+import { startJobs } from './jobs/dailyRefresh.js'
 
 const server = app.listen(config.port, () => {
   console.log('DispatchSim API → http://localhost:' + config.port)
+  startJobs()
 })
 
 async function shutdown(signal) {

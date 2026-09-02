@@ -13,6 +13,8 @@ import statsRoutes from './modules/stats/stats.routes.js'
 import fleetRoutes from './modules/fleet/fleet.routes.js'
 import financeRoutes from './modules/finance/finance.routes.js'
 import loadBoardRoutes from './modules/loadBoard/loadBoard.routes.js'
+import brokerChatRoutes from './modules/brokerChat/brokerChat.routes.js'
+import hrRoutes from './modules/hr/hr.routes.js'
 import { notFound } from './middleware/notFound.js'
 import { errorHandler } from './middleware/errorHandler.js'
 
@@ -43,6 +45,8 @@ app.use('/stats', statsRoutes)
 app.use('/fleet', fleetRoutes)
 app.use('/finance', financeRoutes)
 app.use('/load-board', loadBoardRoutes)
+app.use('/broker-chat', brokerChatRoutes)
+app.use('/hr', hrRoutes)
 
 // Must stay last, in this order: notFound only catches requests that fell
 // through every real route above, and errorHandler must be the very last

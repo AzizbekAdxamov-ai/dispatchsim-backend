@@ -43,16 +43,20 @@ function stripFences(text) {
 
 // One HTTP round trip, with retry on 429/5xx honouring Retry-After.
 // Returns the assistant message's raw text content (not yet JSON-parsed).
-async function requestCompletion({ system, user, config }) {
+async function requestCompletion({ system, user, messages, config, temperature = 0.8, maxTokens }) {
   const url = `${config.baseUrl}/chat/completions`
+  // `messages` wins when given (multi-turn conversation); system/user is the
+  // single-shot shape the seed generator uses. One retry/backoff
+  // implementation serves both rather than a second copy for chat.
+  const payloadMessages = messages ?? [
+    { role: 'system', content: system },
+    { role: 'user', content: user },
+  ]
   const body = JSON.stringify({
     model: config.model,
-    messages: [
-      { role: 'system', content: system },
-      { role: 'user', content: user },
-    ],
-    temperature: 0.8,
-    response_format: { type: 'json_object' },
+    messages: payloadMessages,
+    temperature,
+    ...(maxTokens ? { max_tokens: maxTokens } : {}),
   })
 
   let lastNetworkError = null
@@ -121,4 +125,16 @@ export async function chatJson({ system, user, config }) {
       throw new Error('AI response was not valid JSON after one retry')
     }
   }
+}
+
+// Multi-turn free-form completion — the broker conversation. Unlike
+// chatJson there is no JSON to parse and no reparse retry: a broker reply
+// is prose, and the caller (brokerChat.service.js) decides what to do with
+// text it does not like.
+//
+// maxTokens is deliberately small. A broker who answers in three sentences
+// reads like a person; one who writes six paragraphs reads like a model,
+// and no amount of prompt wording fixes that as reliably as a hard cap.
+export async function chatText({ messages, config, temperature = 0.9, maxTokens = 220 }) {
+  return requestCompletion({ messages, config, temperature, maxTokens })
 }

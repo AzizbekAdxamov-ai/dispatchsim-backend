@@ -65,6 +65,7 @@ model users {
   user_roles_user_roles_user_idTousers        user_roles[]    @relation("user_roles_user_idTousers")
   user_roles_users_id_active_roleTouser_roles user_roles?     @relation("users_id_active_roleTouser_roles", fields: [id, active_role], references: [user_id, role], onDelete: NoAction, onUpdate: NoAction, map: "users_active_role_fk")
 
+  @@unique([id, active_role])
   @@index([created_at(sort: Desc)])
 }
 

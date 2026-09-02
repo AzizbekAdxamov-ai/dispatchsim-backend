@@ -18,9 +18,9 @@ import { raw } from './render.js'
 // ---------------------------------------------------------------------
 
 export const POSTING_CONFIG = {
-  poolTarget: 400,     // target number of postings in the full seed
-  windowDays: 7,       // postings span 7 days into the future
-  backfillHours: 12,   // some postings are already in the past (board fills instantly)
+  poolTarget: 200,      // kuniga generatsiya qilinadigan e'lon
+  visibleTarget: 20,    // bir vaqtda board'da ko'rinishi kerak
+  coverageHours: 26,    // pool qancha vaqtni qoplaydi (cron 24s + 2s zaxira)
 }
 
 // ---------------------------------------------------------------------
@@ -29,42 +29,21 @@ export const POSTING_CONFIG = {
 
 const COVERED_EQUIPMENT = new Set(['dry-van', 'reefer', 'flatbed', 'tanker'])
 
-// Each tier is a function that tests whether an item qualifies.
-// `ctx` = { rateBand: [min, max], deadheadMi, pickupHoursRemaining }
-const TIERS = {
-  strong: {
-    test: (item, ctx) => ctx.rateBand[1] > 0 && item.ratePerMile >= ctx.rateBand[1] * 0.7,
-    // top 30% of rate band — genuinely attractive load
-  },
-  marginal: {
-    test: (item, ctx) => ctx.rateBand[0] > 0 && item.ratePerMile <= ctx.rateBand[0] * 1.25,
-    // bottom 25% of rate band — tight margins, dispatcher must think
-  },
-  'trap-deadhead': {
-    test: (_item, ctx) => ctx.deadheadMi >= 550,
-    // great rate but >550mi deadhead — traps dispatchers who chase rate
-  },
-  'trap-hos': {
-    test: (_item, ctx) => ctx.pickupHoursRemaining !== null && ctx.deadheadMi >= 200 && ctx.deadheadMi <= 450,
-    // moderate deadhead but pickup window too tight for remaining HOS
-  },
-  'trap-equipment': {
-    test: (item) => !COVERED_EQUIPMENT.has(item.equipmentType),
-    // uncovered equipment type — no matching truck in fleet
-  },
-  filler: {
-    test: () => true,
-    // catch-all: average load, fills the board
-  },
-}
+// Percentile boundaries for deadhead-based tier assignment.
+// The board is always educational regardless of driver spread because
+// tiers are relative, not absolute.
+const STRONG_PCT = 0.30   // closest 30%
+const MARGINAL_PCT = 0.35 // next 35% (30-65)
+// remaining = farthest 35%, split into trap-deadhead (top 20%) + rest
+const TRAP_DH_PCT = 0.20  // farthest 20%
 
 export const TIER_WEIGHTS = [
-  ['strong', 0.20],
-  ['marginal', 0.15],
-  ['trap-deadhead', 0.12],
-  ['trap-hos', 0.10],
-  ['trap-equipment', 0.08],
-  ['filler', 0.35],
+  ['strong', 0.30],
+  ['marginal', 0.35],
+  ['trap-deadhead', 0.20],
+  ['trap-hos', 0.05],
+  ['trap-equipment', 0.05],
+  ['filler', 0.05],
 ]
 
 const TIER_NAMES = TIER_WEIGHTS.map(([name]) => name)
@@ -93,12 +72,35 @@ function computeDeadhead(originCity, drivers) {
   return { deadheadMi: bestMi, nearestDriverId: bestDriver }
 }
 
-// Classify a posting item into a tier based on its properties.
-function classifyTier(item, ctx) {
-  for (const tierName of TIER_NAMES) {
-    if (TIERS[tierName].test(item, ctx)) return tierName
+// Classify items into tiers by deadhead percentile.
+// Deterministic: ties broken by original index.
+function classifyByPercentile(itemCtxs) {
+  // Sort by deadhead ascending, then by index for deterministic tiebreak
+  const sorted = itemCtxs.map((ctx, idx) => ({ ...ctx, _idx: idx }))
+  sorted.sort((a, b) => a.deadheadMi - b.deadheadMi || a._idx - b._idx)
+
+  const n = sorted.length
+  const strongEnd = Math.max(1, Math.ceil(n * STRONG_PCT))
+  const marginalEnd = Math.max(strongEnd + 1, Math.ceil(n * (STRONG_PCT + MARGINAL_PCT)))
+  const trapDhEnd = Math.max(marginalEnd + 1, Math.ceil(n * (STRONG_PCT + MARGINAL_PCT + TRAP_DH_PCT)))
+
+  for (let i = 0; i < n; i++) {
+    const ctx = sorted[i]
+    if (i < strongEnd) {
+      ctx.tier = 'strong'
+    } else if (i < marginalEnd) {
+      ctx.tier = 'marginal'
+    } else if (i < trapDhEnd) {
+      ctx.tier = 'trap-deadhead'
+    } else if (!COVERED_EQUIPMENT.has(ctx.item.equipmentType)) {
+      ctx.tier = 'trap-equipment'
+    } else {
+      // Remaining 15%: alternate between filler and trap-hos
+      ctx.tier = ((i - trapDhEnd) % 2 === 0) ? 'filler' : 'trap-hos'
+    }
   }
-  return 'filler'
+
+  return sorted
 }
 
 // ---------------------------------------------------------------------
@@ -116,83 +118,43 @@ function classifyTier(item, ctx) {
  * always fresh — no frozen REFERENCE_NOW date. Offsets are integers,
  * preserving md5sum determinism across runs with the same seed.
  */
-export function buildPostingRows({ rng, postingItems, drivers, trucks, fleetEquipment }) {
+export function buildPostingRows({ rng, postingItems, drivers, trucks, fleetEquipment, brokerIds }) {
   if (postingItems.length === 0) return []
+
+  // Little qonuni: o'rtacha umr — visibleTarget × coverageMinutes / poolTarget
+  const avgLifetimeMin = Math.round(
+    (POSTING_CONFIG.visibleTarget * POSTING_CONFIG.coverageHours * 60) /
+     POSTING_CONFIG.poolTarget
+  )
 
   // ---- Step 1: compute deadhead for each item ----
   const itemCtxs = postingItems.map((item) => {
     const { deadheadMi, nearestDriverId } = computeDeadhead(item, drivers)
-    const rateBand = rateBandFor(item.equipmentType, item.distanceMi)
-    const pickupHoursRemaining = null // no HOS data at posting time
-    return { item, deadheadMi, nearestDriverId, rateBand, pickupHoursRemaining }
+    return { item, deadheadMi, nearestDriverId }
   })
 
-  // ---- Step 2: classify into tiers ----
-  const classified = itemCtxs.map((ctx) => ({
-    ...ctx,
-    tier: classifyTier(ctx.item, ctx),
-  }))
-
-  // ---- Step 3: round-robin + weighted assignment ----
-  // Group items by their classified tier
-  const byTier = new Map(TIER_NAMES.map((n) => [n, []]))
-  for (const c of classified) byTier.get(c.tier).push(c)
-
-  // Round-robin: take one from each non-empty tier in sequence.
-  // Guarantees every tier that has at least one candidate gets represented.
-  const assigned = []
-  const tierCounts = new Map(TIER_NAMES.map((n) => [n, 0]))
-  let rrIdx = 0
-  while (true) {
-    const tierName = TIER_NAMES[rrIdx % TIER_NAMES.length]
-    const queue = byTier.get(tierName)
-    if (queue.length === 0) {
-      rrIdx++
-      // Check if all queues are empty
-      if (TIER_NAMES.every((n) => byTier.get(n).length === 0)) break
-      continue
-    }
-    const item = queue.shift()
-    item.tier = tierName
-    assigned.push(item)
-    tierCounts.set(tierName, tierCounts.get(tierName) + 1)
-    rrIdx++
-  }
-
-  // Remaining items (from tiers that ran out during round-robin)
-  // are assigned by TIER_WEIGHTS.
-  const totalWeight = TIER_WEIGHTS.reduce((s, [, w]) => s + w, 0)
-  for (const tierName of TIER_NAMES) {
-    for (const c of byTier.get(tierName)) {
-      let r = rng() * totalWeight
-      let picked = TIER_NAMES[TIER_NAMES.length - 1]
-      for (const [name, w] of TIER_WEIGHTS) {
-        if (r < w) { picked = name; break }
-        r -= w
-      }
-      c.tier = picked
-      assigned.push(c)
-    }
-  }
+  // ---- Step 2: classify by deadhead percentile ----
+  // Deterministic: ties broken by original array index.
+  const assigned = classifyByPercentile(itemCtxs)
 
   // ---- Step 4: build rows with now()-relative timestamps ----
-  // First ~40% of postings are backfilled into the past so the board is
-  // immediately populated. The rest are in the future (drip-feed).
-  // Backfilled items: posted_at in [-720, -1] (up to 12h ago),
-  //   expires_at = posted_at + [720, 2880] → lands in [0, 2879] (future).
-  // Future items: posted_at in [0, 10080] (up to 7 days forward).
-  const backfillCount = Math.max(1, Math.floor(assigned.length * 0.4))
+  // First `visibleTarget` postings are backfilled into the past so the board
+  // is immediately populated. The rest are in the future (drip-feed).
+  const backfillCount = Math.max(1, Math.min(POSTING_CONFIG.visibleTarget, assigned.length))
 
-  const rows = assigned.map(({ item, deadheadMi }, idx) => {
+  const rows = assigned.map(({ item, deadheadMi, tier }, idx) => {
     const originCity = findCity(item.originCity, item.originState)
     const destinationCity = findCity(item.destinationCity, item.destinationState)
 
+    // Per-posting lifetime: avgLifetimeMin ± 70% jitter, min 20 min
+    const lifetimeMin = Math.max(20, Math.round(avgLifetimeMin * (0.3 + rng() * 1.4)))
+
     // Timestamp offsets (integer minutes — deterministic, no floating point)
     const postedOffset = idx < backfillCount
-      ? -(1 + Math.floor(rng() * 720))       // [-720, -1] — in the past
-      : Math.floor(rng() * 10081)             // [0, 10080] — in the future
-    const expiresOffset = postedOffset + 720 + Math.floor(rng() * (2880 - 720 + 1))
-    const pickupOffset = expiresOffset + 60 + Math.floor(rng() * (2880 - 60 + 1))
+      ? -(1 + Math.floor(rng() * lifetimeMin))     // in the past (backfill)
+      : Math.floor(rng() * (POSTING_CONFIG.coverageHours * 60 + 1))  // in the future
+    const expiresOffset = postedOffset + lifetimeMin
+    const pickupOffset = expiresOffset + 60 + Math.floor(rng() * 2821)
     const { minH, maxH } = transitBand(item.distanceMi)
     const transitH = minH + rng() * (maxH - minH)
     const deliveryOffset = pickupOffset + Math.ceil(transitH * 60)
@@ -217,6 +179,11 @@ export function buildPostingRows({ rng, postingItems, drivers, trucks, fleetEqui
       destination_city: item.destinationCity,
       destination_state: item.destinationState,
       broker: item.broker,
+      // Null when the generated name is not in the brokers table (migration
+      // 013). validate.js restricts the name to the BROKERS list, so a null
+      // here means the list and the table drifted apart — worth surfacing,
+      // not worth failing the whole batch over.
+      broker_id: brokerIds?.get(item.broker) ?? null,
       commodity: item.commodity,
       rate_usd: rateUsd,
       distance_mi: item.distanceMi,
@@ -228,6 +195,7 @@ export function buildPostingRows({ rng, postingItems, drivers, trucks, fleetEqui
       pickup_at: raw(`now() + interval '${pickupOffset} minutes'`),
       delivery_at: raw(`now() + interval '${deliveryOffset} minutes'`),
       status: 'open',
+      tier,
     }
   })
 

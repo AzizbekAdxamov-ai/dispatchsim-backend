@@ -221,7 +221,7 @@ export async function createLoad(client, {
   id, originCity, originState, destinationCity, destinationState,
   broker, commodity, rateUsd, distanceMi, weightLbs,
   equipmentType, equipmentLengthFt, driverId, truckId,
-  pickupAt, deliveryAt, bookedAt,
+  pickupAt, deliveryAt, bookedAt, paymentTerms,
 }) {
   const result = await client.query(
     `INSERT INTO loads (
@@ -237,7 +237,7 @@ export async function createLoad(client, {
        $11, $12,
        $13, $14, $15,
        $16, $17, $18,
-       'net30', '[]'::jsonb
+       $19, '[]'::jsonb
      )
      RETURNING id`,
     [
@@ -246,6 +246,9 @@ export async function createLoad(client, {
       equipmentType, equipmentLengthFt,
       driverId ? 'ontime' : 'neutral', driverId, truckId,
       bookedAt, pickupAt, deliveryAt,
+      // Derived from the broker's stated days-to-pay (constants/paymentTerms.js).
+      // Defaults to net30 when the posting has no broker on file.
+      paymentTerms || 'net30',
     ],
   )
   return result.rows[0]

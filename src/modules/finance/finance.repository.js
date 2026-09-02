@@ -28,6 +28,7 @@
 // finance.service.js to do that math on.
 
 import { query } from '../../db/pool.js'
+import { termsIntervalSql } from '../../constants/paymentTerms.js'
 
 // Every load, with its invoice status/dueAt/daysPastDue computed once so
 // every query below stays consistent with the others. A load is a "draft"
@@ -39,11 +40,7 @@ const INVOICE_CTE = `
       l.id AS "loadId", l.broker, l.rate_usd AS "rateUsd", l.accessorials,
       l.payment_terms AS "paymentTerms", l.booked_at AS "bookedAt",
       l.delivered_at AS "deliveredAt", l.invoice_paid_at AS "invoicePaidAt",
-      l.delivered_at + (CASE l.payment_terms
-        WHEN 'net30'    THEN interval '30 days'
-        WHEN 'net15'    THEN interval '15 days'
-        WHEN 'quickpay' THEN interval '2 days'
-      END) AS "dueAt"
+      l.delivered_at + (${termsIntervalSql()}) AS "dueAt"
     FROM loads l
   ),
   invoice_status AS (

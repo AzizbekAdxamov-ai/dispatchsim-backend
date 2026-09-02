@@ -36,3 +36,23 @@ export const bookLimiter = rateLimit({
   legacyHeaders: false,
   handler: (req, res, next) => next(new AppError('RATE_LIMITED')),
 })
+
+// Applicant hiring: 5/minute per IP. Hire creates a driver row + updates
+// the applicant in a transaction — more expensive than booking.
+export const hireLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 5,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  handler: (req, res, next) => next(new AppError('RATE_LIMITED')),
+})
+
+// Broker chat. Each message is a model call, so this is tighter than the
+// read limiters — it stops a stuck client loop from burning the free tier's
+// 200 requests/day in under a minute.
+export const chatLimiter = rateLimit({
+  windowMs: 60_000,
+  max: 12,
+  standardHeaders: true,
+  legacyHeaders: false,
+})

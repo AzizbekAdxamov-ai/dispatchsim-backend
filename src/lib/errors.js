@@ -44,11 +44,28 @@ export const ERROR_CODES = {
   DRIVER_NOT_FOUND:  { status: 404, message: 'Driver not found' },
   TRUCK_NOT_FOUND:   { status: 404, message: 'Truck not found' },
   POSTING_NOT_FOUND: { status: 404, message: 'Posting not found' },
+
+  CONVERSATION_NOT_FOUND: { status: 404, message: 'Conversation not found' },
+  BROKER_UNAVAILABLE:     { status: 409, message: 'This posting has no broker on file' },
+  CHAT_DAILY_LIMIT:       { status: 429, message: 'Daily message limit reached, try again tomorrow' },
+  CHAT_UNAVAILABLE:       { status: 503, message: 'The broker cannot be reached right now' },
+  RATE_OUT_OF_BAND:       { status: 400, message: 'That rate is outside the allowed range for this distance' },
   POSTING_TAKEN:     { status: 409, message: 'This posting has already been booked' },
   POSTING_EXPIRED:   { status: 410, message: 'This posting has expired' },
   DRIVER_HAS_ACTIVE_LOAD: { status: 409, message: 'Driver already has an active load' },
   LOAD_ID_UNAVAILABLE:    { status: 409, message: 'Load ID unavailable, try again' },
   DRIVER_NOT_AVAILABLE:   { status: 409, message: 'No available driver for this load' },
+  APPLICANT_NOT_FOUND:    { status: 404, message: 'Applicant not found' },
+  APPLICANT_EXPIRED:      { status: 410, message: 'This applicant is no longer available' },
+  APPLICANT_ALREADY_HIRED:{ status: 409, message: 'This applicant has already been hired' },
+  DRIVER_EMAIL_TAKEN:     { status: 409, message: 'A driver with this email already exists' },
+  UNKNOWN_CITY:           { status: 400, message: 'City not found in the system' },
+  LISTING_NOT_FOUND:      { status: 404, message: 'Truck listing not found' },
+  LISTING_ALREADY_BOUGHT: { status: 409, message: 'This listing has already been purchased' },
+  LISTING_EXPIRED:        { status: 410, message: 'This listing has expired' },
+  TRUCK_HAS_DRIVER:       { status: 409, message: 'This truck already has a driver assigned' },
+  DRIVER_HAS_TRUCK:       { status: 409, message: 'This driver already has a truck assigned' },
+  NOT_AGREED_YET:         { status: 409, message: 'No agreement on file — agree on a rate first' },
 }
 
 export class AppError extends Error {

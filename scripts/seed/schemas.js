@@ -11,21 +11,28 @@ import { z } from 'zod'
 import { EQUIPMENT_KEYS } from '../../src/constants/equipment.js'
 import { SERVICE_NAMES } from './services.js'
 
-// Brokers the AI is allowed to attribute a load to. Kept as a closed list
-// (like EQUIPMENT_KEYS) so the model can't invent a broker name that
-// looks real but isn't -- there's no upstream source of truth for this
-// one yet, so it's defined here.
+// Brokers the AI is allowed to attribute a load to. Closed list (like
+// EQUIPMENT_KEYS) so the model can't invent one.
+//
+// Every name here is INVENTED. That is deliberate, not a placeholder: the
+// app attaches an MC number, a credit rating and payment behaviour to each
+// broker, and doing that to a real company would mean stating false,
+// damaging facts about a real business. These names must stay in sync with
+// migration 013_brokers.sql, which is the source of truth for their MC
+// numbers and ratings.
 export const BROKERS = [
-  'XPO Logistics',
-  'TQL',
-  'Coyote Logistics',
-  'Landstar',
-  'C.H. Robinson',
-  'Echo Global',
-  'RXO',
-  'Werner',
-  'Schneider',
-  'J.B. Hunt',
+  'Harbor Line Freight Exchange',
+  'Cedar Ridge Transport Services',
+  'Ironwood Freight Partners',
+  'Northgate Cargo Solutions',
+  'Blue Meridian Logistics Group',
+  'Stonebridge Carrier Network',
+  'Sunbelt Freight Alliance',
+  'Pioneer Valley Transport Co',
+  'Redstone Logistics Partners',
+  'Copperfield Freight Group',
+  'Marshfield Cargo Brokers',
+  'Tidewater Merchant Freight',
 ]
 
 const stateCode = z.string().regex(/^[A-Z]{2}$/)
@@ -69,9 +76,47 @@ export const TruckItem = z
   })
   .strict()
 
+export const ENDORSEMENTS = ['hazmat', 'tanker', 'doubles']
+
+export const ApplicantItem = z
+  .object({
+    fullName:            z.string().min(2).max(120),
+    email:               z.string().email(),
+    phone:               z.string().min(7).max(24),
+    cdlClass:            z.enum(['A', 'B']),
+    cdlState:            z.string().length(2),
+    yearsExperience:     z.number().int().min(0).max(45),
+    homeBaseCity:        z.string().min(2),
+    homeBaseState:       z.string().length(2),
+    endorsements:        z.array(z.enum(ENDORSEMENTS)),
+    desiredEquipment:    z.enum(EQUIPMENT_KEYS),
+    mvrViolations:       z.number().int().min(0).max(20),
+    preventableAccidents: z.number().int().min(0).max(10),
+    employmentGapMonths: z.number().int().min(0).max(240),
+    desiredPayModel:     z.enum(['percent', 'permile']),
+    desiredPayValue:     z.number(),   // percent → 1000-5000 bp; permile → 30-120 sent
+  })
+  .strict()
+
 export const MaintenanceItem = z
   .object({
     service: z.enum(SERVICE_NAMES),
     notes: z.string().min(3).max(120),
+  })
+  .strict()
+
+export const TRAILER_TYPES = ['dry-van', 'reefer', 'flatbed', 'step-deck', 'tanker', 'power-only']
+
+export const TruckListingItem = z
+  .object({
+    make:            z.string().min(2).max(60),
+    model:           z.string().min(1).max(60),
+    year:            z.number().int().min(1995).max(2030),
+    odometerMi:      z.number().int().min(0).max(2000000),
+    trailerType:     z.enum(TRAILER_TYPES),
+    tireFrontPct:    z.number().int().min(0).max(100),
+    tireRearPct:     z.number().int().min(0).max(100),
+    serviceNotes:    z.string().min(3).max(200),
+    seller:          z.string().min(3).max(80),
   })
   .strict()

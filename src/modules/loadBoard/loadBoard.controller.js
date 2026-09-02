@@ -2,8 +2,9 @@
 // loadBoard.service.js and loadBoard.repository.js. Every route is already
 // behind requireAuth + requireRole() (see loadBoard.routes.js).
 
-import { listPostingsSchema, postingIdSchema, bookPostingSchema } from './loadBoard.schemas.js'
+import { listPostingsSchema, postingDetailQuerySchema, postingIdSchema, bookPostingSchema } from './loadBoard.schemas.js'
 import * as loadBoardService from './loadBoard.service.js'
+import * as loadBoardRepo from './loadBoard.repository.js'
 
 export async function listPostings(req, res) {
   const input = listPostingsSchema.parse(req.query)
@@ -11,9 +12,14 @@ export async function listPostings(req, res) {
   res.status(200).json(result)
 }
 
+export function listCities(_req, res) {
+  res.status(200).json(loadBoardRepo.listCities())
+}
+
 export async function getPosting(req, res) {
   const id = postingIdSchema.parse(req.params.id)
-  const posting = await loadBoardService.getPostingById(id)
+  const where = postingDetailQuerySchema.parse(req.query)
+  const posting = await loadBoardService.getPostingById(id, where)
   res.status(200).json(posting)
 }
 
