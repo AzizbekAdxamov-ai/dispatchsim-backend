@@ -8,7 +8,6 @@
 import { Router } from 'express'
 import { requireAuth } from '../../middleware/requireAuth.js'
 import { requireRole } from '../../middleware/requireRole.js'
-import { bookLimiter } from '../../middleware/rateLimit.js'
 import * as loadBoardController from './loadBoard.controller.js'
 
 const router = Router()
@@ -18,6 +17,9 @@ router.use(requireAuth, requireRole())
 router.get('/cities', loadBoardController.listCities)
 router.get('/', loadBoardController.listPostings)
 router.get('/:id', loadBoardController.getPosting)
-router.post('/:id/book', requireRole('dispatcher'), bookLimiter, loadBoardController.bookPosting)
+// No POST /:id/book. A load is created by accepting a rate confirmation
+// (POST /broker-chat/:id/accept), never by a button on the board — you
+// cannot book freight you have not talked to anyone about. bookPosting
+// itself lives on in loadBoard.service and is called from there.
 
 export default router

@@ -66,6 +66,9 @@ export const ERROR_CODES = {
   TRUCK_HAS_DRIVER:       { status: 409, message: 'This truck already has a driver assigned' },
   DRIVER_HAS_TRUCK:       { status: 409, message: 'This driver already has a truck assigned' },
   NOT_AGREED_YET:         { status: 409, message: 'No agreement on file — agree on a rate first' },
+  ALREADY_BOOKED:         { status: 409, message: 'This rate confirmation has already been accepted' },
+  RATE_CON_NOT_ARRIVED:   { status: 409, message: 'The broker has not sent the rate confirmation yet' },
+  BROKER_NOT_FOUND:       { status: 404, message: 'No carrier record found for that MC number' },
 }
 
 export class AppError extends Error {

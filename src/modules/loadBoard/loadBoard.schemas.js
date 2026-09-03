@@ -45,13 +45,7 @@ export const postingDetailQuerySchema = z
 // Route param for GET /load-board/:id — UUID format (load_postings.id).
 export const postingIdSchema = z.string().uuid()
 
-// POST /load-board/:id/book body — driverId is optional.
-// When driverId is provided the load status is 'ontime'; when absent it
-// is 'neutral' (booked but not yet dispatched).
-// truckId is NOT accepted from the client — resolved server-side from
-// the driver's truck assignment.
-export const bookPostingSchema = z
-  .object({
-    driverId: z.string().optional(),
-  })
-  .strict()
+// bookPostingSchema is gone with the /book route (2026-09-02). The service
+// function bookPosting({ postingId, userId, driverId }) is still there and
+// is called from brokerChat.service.acceptRateCon with driverId null —
+// dispatch assigns the driver afterwards, against the whole fleet.

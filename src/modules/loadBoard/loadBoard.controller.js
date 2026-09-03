@@ -2,7 +2,7 @@
 // loadBoard.service.js and loadBoard.repository.js. Every route is already
 // behind requireAuth + requireRole() (see loadBoard.routes.js).
 
-import { listPostingsSchema, postingDetailQuerySchema, postingIdSchema, bookPostingSchema } from './loadBoard.schemas.js'
+import { listPostingsSchema, postingDetailQuerySchema, postingIdSchema } from './loadBoard.schemas.js'
 import * as loadBoardService from './loadBoard.service.js'
 import * as loadBoardRepo from './loadBoard.repository.js'
 
@@ -23,24 +23,8 @@ export async function getPosting(req, res) {
   res.status(200).json(posting)
 }
 
-// POST /load-board/:id/book — book a posting, creating a load.
-// Idempotent: same user re-booking returns 200 with existing load.
-// Fix 2: unified response shape { load, posting, warnings } for both codes.
-// Fix 4: truckId removed from schema — resolved server-side.
-export async function bookPosting(req, res, next) {
-  try {
-    const postingId = postingIdSchema.parse(req.params.id)
-    const { driverId } = bookPostingSchema.parse(req.body)
-    const userId = req.auth.userId
-
-    const result = await loadBoardService.bookPosting({ postingId, userId, driverId })
-
-    res.status(result.isNew ? 201 : 200).json({
-      load: result.load,
-      posting: result.posting,
-      warnings: result.warnings,
-    })
-  } catch (err) {
-    next(err)
-  }
-}
+// There is no booking controller here any more (2026-09-02). A load is
+// created by accepting a rate confirmation in the broker thread, so the
+// HTTP entry point lives in brokerChat.controller.acceptRateCon. Leaving a
+// live /book endpoint behind would be a way to create a load without ever
+// talking to the broker — the one thing this design is built to prevent.

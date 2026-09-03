@@ -37,7 +37,7 @@ function formatDateTime(dateStr) {
  * @param {Object} data.posting - { originCity, originState, destinationCity, destinationState,
  *   distanceMi, equipmentType, equipmentLengthFt, commodity, weightLbs, pickupAt, deliveryAt,
  *   bookedLoadId }
- * @param {Object} data.broker - { name, contactName, mcNumber, creditRating, daysToPay }
+ * @param {Object} data.broker - { name, contactName, mcNumber, paymentTerms }
  * @param {Object} data.user - { name, company }
  * @returns {Buffer} PDF buffer
  */
@@ -91,7 +91,9 @@ export function generateRateConfirmation({ conversation, posting, broker, user }
     doc.text('MC —', rightCol, y)
 
     y += 15
-    doc.text(`MC ${broker.mcNumber || '—'}`, leftCol, y)
+    // Not `MC ${mcNumber}` -- the stored value already starts with "MC-",
+    // so that printed "MC MC-207863".
+    doc.text(broker.mcNumber || 'MC —', leftCol, y)
 
     // --- Separator ---
     y += 25
@@ -104,7 +106,10 @@ export function generateRateConfirmation({ conversation, posting, broker, user }
 
     y += 18
     doc.fontSize(10).font('Helvetica')
-    doc.text(`${posting.originCity}, ${posting.originState}  →  ${posting.destinationCity}, ${posting.destinationState}`, leftCol, y)
+    // No → here: PDFKit's built-in Helvetica is WinAnsi-encoded and has no
+    // arrow glyph, so it came out as garbage in the file. "to" is what a
+    // real rate confirmation says anyway.
+    doc.text(`${posting.originCity}, ${posting.originState}  to  ${posting.destinationCity}, ${posting.destinationState}`, leftCol, y)
 
     y += 15
     doc.text(`${posting.distanceMi.toLocaleString()} mi  ·  ${posting.equipmentType} ${posting.equipmentLengthFt || '53'} ft`, leftCol, y)
@@ -140,7 +145,12 @@ export function generateRateConfirmation({ conversation, posting, broker, user }
     doc.text(`Posted rate   ${formatCurrency(posting.rateUsd)}`, leftCol, y)
 
     y += 15
-    doc.text(`Payment terms ${broker.daysToPay ? `net${broker.daysToPay}` : 'net30'}`, leftCol, y)
+    // The term the load will actually carry (net15/30/45/60), not the
+    // broker's raw days_to_pay -- "net68" is not a payment term, and the
+    // exact day count is part of what Broker Check is for. The terms
+    // belong on the document: a rate confirmation states them, and a
+    // dispatcher who reads this one learns how long the money will take.
+    doc.text(`Payment terms ${broker.paymentTerms || 'net30'}`, leftCol, y)
 
     // --- Load number ---
     y += 25
@@ -148,7 +158,7 @@ export function generateRateConfirmation({ conversation, posting, broker, user }
 
     y += 15
     doc.fontSize(10).font('Helvetica')
-    doc.text(posting.bookedLoadId ? `Load #${posting.bookedLoadId}` : 'Load #not yet booked', leftCol, y)
+    doc.text(posting.bookedLoadId ? `Load #${posting.bookedLoadId}` : 'Load — not yet booked', leftCol, y)
 
     // --- Footer ---
     doc.fontSize(8)

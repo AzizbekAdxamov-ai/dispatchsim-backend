@@ -7,10 +7,17 @@ import {
   agreeRateSchema,
 } from './brokerChat.schemas.js'
 import * as service from './brokerChat.service.js'
+import { termsForDaysToPay } from '../../constants/paymentTerms.js'
 
 export async function openConversation(req, res) {
   const postingId = postingIdSchema.parse(req.params.postingId)
   const result = await service.openConversation({ postingId, userId: req.auth.userId })
+  res.status(200).json(result)
+}
+
+export async function getThread(req, res) {
+  const conversationId = conversationIdSchema.parse(req.params.id)
+  const result = await service.getThread({ conversationId, userId: req.auth.userId })
   res.status(200).json(result)
 }
 
@@ -28,6 +35,14 @@ export async function agreeRate(req, res) {
   res.status(200).json({ conversation })
 }
 
+// POST /broker-chat/:id/accept — sign the rate confirmation. This is the
+// only path that creates a load; the board has no booking button any more.
+export async function acceptRateCon(req, res) {
+  const conversationId = conversationIdSchema.parse(req.params.id)
+  const result = await service.acceptRateCon({ conversationId, userId: req.auth.userId })
+  res.status(result.alreadyAccepted ? 200 : 201).json(result)
+}
+
 export async function listConversations(req, res) {
   const result = await service.listConversations({ userId: req.auth.userId })
   res.status(200).json(result)
@@ -39,7 +54,15 @@ export async function rateConfirmation(req, res) {
   const data = await service.getRateConfirmation({ conversationId, userId: req.auth.userId })
 
   const pdf = await generateRateConfirmation({
-    conversation: { id: data.id, agreedRateUsd: data.agreedRateUsd, updatedAt: data.updatedAt },
+    // rate_con_rate_usd first: this document IS the paper, so it prints
+    // what the paper says. When the broker's number came back below the
+    // handshake, the difference is visible only to a dispatcher who opens
+    // the PDF and compares — which is the point of the step.
+    conversation: {
+      id: data.id,
+      agreedRateUsd: data.rateConRateUsd ?? data.agreedRateUsd,
+      updatedAt: data.updatedAt,
+    },
     posting: {
       originCity: data.originCity, originState: data.originState,
       destinationCity: data.destinationCity, destinationState: data.destinationState,
@@ -50,8 +73,8 @@ export async function rateConfirmation(req, res) {
     },
     broker: {
       name: data.brokerName, contactName: data.brokerContactName,
-      mcNumber: data.mcNumber, creditRating: data.creditRating,
-      daysToPay: data.daysToPay,
+      mcNumber: data.mcNumber,
+      paymentTerms: termsForDaysToPay(data.daysToPay),
     },
     user: req.auth,
   })

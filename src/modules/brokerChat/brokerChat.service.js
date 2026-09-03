@@ -8,6 +8,8 @@ import { readAiConfig } from '../../../scripts/seed/config.js'
 import { chatText } from '../../../scripts/seed/aiClient.js'
 import { AppError } from '../../lib/errors.js'
 import * as repo from './brokerChat.repository.js'
+import { replyDelaySec, rateConAmount } from './replyTiming.js'
+import { bookPosting } from '../loadBoard/loadBoard.service.js'
 import {
   buildBrokerSystemPrompt,
   buildMessages,
@@ -61,13 +63,37 @@ export async function openConversation({ postingId, userId }) {
   return {
     conversation,
     messages,
+    // The MC number and nothing else. Credit rating and payment days used
+    // to ride along here; they are what Broker Check is for now. A chat
+    // header that prints the rating hands back exactly what the board
+    // stopped giving away, and the dispatcher never learns to look.
     broker: {
       name: posting.name,
       contactName: posting.contactName,
       mcNumber: posting.mcNumber,
-      creditRating: posting.creditRating,
-      daysToPay: posting.daysToPay,
     },
+    awaitingReply: await repo.hasPendingReply(conversation.id),
+  }
+}
+
+// Read one thread. openConversation creates-or-opens and is a POST; this
+// is the plain read the panel polls, so a refresh does not look like a
+// write. Same payload either way, so the client has one shape to render.
+export async function getThread({ conversationId, userId }) {
+  const conversation = await repo.getConversation(conversationId, userId)
+  if (!conversation) throw new AppError('CONVERSATION_NOT_FOUND')
+
+  const posting = await repo.getPostingWithBroker(conversation.postingId)
+
+  return {
+    conversation,
+    messages: await repo.listMessages(conversationId),
+    broker: posting && {
+      name: posting.name,
+      contactName: posting.contactName,
+      mcNumber: posting.mcNumber,
+    },
+    awaitingReply: await repo.hasPendingReply(conversationId),
   }
 }
 
@@ -132,8 +158,25 @@ export async function sendMessage({ conversationId, userId, text }) {
     throw new AppError('CHAT_UNAVAILABLE')
   }
 
-  const brokerMessage = await repo.addMessage(conversationId, 'broker', reply.trim())
-  return { dispatcherMessage, brokerMessage }
+  // The reply is written now and shown later. Generating it up front means
+  // the token is spent once, on the turn that caused it, and the wait is a
+  // database fact rather than a timer in a browser tab that a reload would
+  // skip. The trade is that the broker cannot see a follow-up sent during
+  // the wait -- which is exactly what happens with a real broker who has
+  // already hit send.
+  // If a reply is already waiting to be delivered, this one replaces it in
+  // the same slot rather than stacking a second answer behind it -- see
+  // replacePendingReply. Only when nothing is pending does the broker draw
+  // a fresh delay.
+  const replaced = await repo.replacePendingReply(conversationId, reply.trim())
+  if (!replaced) {
+    const delaySec = replyDelaySec(posting.creditRating)
+    await repo.addMessage(conversationId, 'broker', reply.trim(), { delaySec })
+  }
+
+  // brokerMessage is deliberately NOT returned. Handing the caller a
+  // message it is not allowed to show yet is how a delay becomes a bug.
+  return { dispatcherMessage, awaitingReply: true }
 }
 
 // The dispatcher records what they settled on. Not parsed from the broker's
@@ -157,9 +200,80 @@ export async function agreeRate({ conversationId, userId, rateUsd }) {
       `Rate must be between $${minRate} and $${maxRate} for ${posting.distanceMi} miles`)
   }
 
+  if (conversation.status === 'booked') throw new AppError('ALREADY_BOOKED')
+
   const updated = await repo.setAgreedRate(conversationId, userId, rateUsd)
   if (!updated) throw new AppError('CONVERSATION_NOT_FOUND')
-  return updated
+
+  // Settling on a new number withdraws whatever paper was already on its
+  // way. Without this a dispatcher could re-negotiate up and then accept
+  // the old, lower rate confirmation still sitting in the thread.
+  await repo.clearRateCon(conversationId)
+
+  // The broker draws up the paper. Sometimes the paper does not say what
+  // the handshake said -- see replyTiming.rateConAmount. The load is
+  // created at whatever this number is, so reading the document before
+  // accepting it is the entire point of the step.
+  const paperRate = rateConAmount(rateUsd, posting.creditRating, { minRate })
+  const withPaper = await repo.setRateCon(conversationId, paperRate)
+  if (!withPaper) throw new AppError('CONVERSATION_NOT_FOUND')
+
+  await repo.addMessage(
+    conversationId,
+    'broker',
+    'Rate confirmation attached. Look it over and send it back signed.',
+    { kind: 'rate_con', delaySec: replyDelaySec(posting.creditRating) },
+  )
+
+  return { ...withPaper, awaitingReply: true }
+}
+
+// The dispatcher signs the paper. This -- not a button on the board -- is
+// what brings a load into existence: negotiate, get the rate confirmation,
+// read it, accept it. bookPosting reads the rate con's own number through
+// getAgreedRate, so a document that came back low produces a load worth
+// exactly that much.
+export async function acceptRateCon({ conversationId, userId }) {
+  const conversation = await repo.getConversation(conversationId, userId)
+  if (!conversation) throw new AppError('CONVERSATION_NOT_FOUND')
+
+  // Idempotent: a second click, or a second tab, gets the same load back
+  // instead of a second load or an error.
+  if (conversation.status === 'booked') {
+    // bookPosting is idempotent for the same user and hands back the load
+    // it already created, so the reply has the same shape either way --
+    // a caller should not have to branch on whether it got there first.
+    const again = await bookPosting({ postingId: conversation.postingId, userId, driverId: null })
+    return { conversation, load: again.load, warnings: again.warnings, alreadyAccepted: true }
+  }
+
+  if (conversation.status !== 'agreed') throw new AppError('NOT_AGREED_YET')
+  if (!(await repo.rateConDelivered(conversationId))) throw new AppError('RATE_CON_NOT_ARRIVED')
+
+  const posting = await repo.getPostingWithBroker(conversation.postingId)
+  assertPostingOpen(posting)
+
+  // No driver here on purpose. Accepting the paper commits the company to
+  // the freight; deciding who runs it is dispatch's next decision, made
+  // against the whole fleet rather than in a chat window.
+  const booked = await bookPosting({ postingId: conversation.postingId, userId, driverId: null })
+
+  // The load is already committed at this point. If the status update
+  // loses a race with another tab, that is not a reason to report failure
+  // and strand the thread on 'agreed' -- the posting is booked, and a
+  // second accept would then hit POSTING_TAKEN forever. Report what is
+  // true: the load exists.
+  const marked = await repo.markBooked(conversationId, userId)
+  if (!marked) {
+    console.warn(`[brokerChat] load ${booked.load?.id} created but conversation ${conversationId} was not marked booked`)
+  }
+
+  return {
+    conversation: marked ?? (await repo.getConversation(conversationId, userId)),
+    load: booked.load,
+    warnings: booked.warnings,
+    alreadyAccepted: false,
+  }
 }
 
 export async function listConversations({ userId }) {
@@ -169,6 +283,8 @@ export async function listConversations({ userId }) {
 export async function getRateConfirmation({ conversationId, userId }) {
   const row = await repo.getConversationForPDF(conversationId, userId)
   if (!row) throw new AppError('CONVERSATION_NOT_FOUND')
-  if (row.status !== 'agreed') throw new AppError('NOT_AGREED_YET')
+  if (row.status !== 'agreed' && row.status !== 'booked') throw new AppError('NOT_AGREED_YET')
+  // The document cannot be opened before the broker has sent it.
+  if (!(await repo.rateConDelivered(conversationId))) throw new AppError('RATE_CON_NOT_ARRIVED')
   return row
 }

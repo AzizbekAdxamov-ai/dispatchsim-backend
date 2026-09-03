@@ -31,10 +31,13 @@ const POSTING_COLUMNS = `
 // POSTING_COLUMNS is also used in `UPDATE ... RETURNING`, where no join
 // exists and a `b.` reference is a hard error. Only the SELECT queries that
 // actually join brokers may add these.
+// The MC number and a name to ask for. NOT credit_rating, NOT days_to_pay
+// (2026-09-02): a board that prints the rating is passing a verdict, and it
+// removes the only reason to ever check a broker. The rating exists — it
+// still sets payment terms at booking, and Broker Check will return it to a
+// dispatcher who goes and looks it up. It just does not arrive unasked.
 const BROKER_COLUMNS = `
   b.mc_number AS "brokerMcNumber",
-  b.credit_rating AS "brokerCreditRating",
-  b.days_to_pay AS "brokerDaysToPay",
   b.contact_name AS "brokerContactName"
 `
 

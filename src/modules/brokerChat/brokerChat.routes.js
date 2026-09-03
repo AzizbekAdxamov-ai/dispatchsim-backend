@@ -6,7 +6,7 @@
 import { Router } from 'express'
 import { requireAuth } from '../../middleware/requireAuth.js'
 import { requireRole } from '../../middleware/requireRole.js'
-import { chatLimiter } from '../../middleware/rateLimit.js'
+import { chatLimiter, bookLimiter } from '../../middleware/rateLimit.js'
 import * as controller from './brokerChat.controller.js'
 
 const router = Router()
@@ -15,8 +15,10 @@ router.use(requireAuth, requireRole('dispatcher'))
 
 router.get('/', controller.listConversations)
 router.post('/postings/:postingId', controller.openConversation)
+router.get('/:id', controller.getThread)
 router.post('/:id/messages', chatLimiter, controller.sendMessage)
 router.post('/:id/agree', controller.agreeRate)
+router.post('/:id/accept', bookLimiter, controller.acceptRateCon)
 router.get('/:id/rate-confirmation.pdf', controller.rateConfirmation)
 
 export default router
