@@ -13,6 +13,10 @@
 
 import 'dotenv/config'
 import { pool } from '../src/db/pool.js'
+// Exported so this file checks the SAME string finance.repository.js runs.
+// A copy pasted here would pass forever while the original drifted.
+import { INVOICE_CTE } from '../src/modules/finance/finance.repository.js'
+import { DASHBOARD_COUNTS_SQL } from '../src/modules/loads/loads.repository.js'
 
 const STATEMENTS = [
   ['replacePendingReply', `
@@ -86,6 +90,182 @@ const STATEMENTS = [
               credit_rating AS "creditRating", days_to_pay AS "daysToPay",
               checked_at AS "checkedAt"`],
 
+  ['claimArrivedLoads (with driver pay)', `
+    SELECT l.id, l.rate_usd AS "rateUsd", l.distance_mi AS "distanceMi",
+           l.payment_terms AS "paymentTerms", l.driver_id AS "driverId", l.broker,
+           d.name AS "driverName", d.pay_model AS "payModel",
+           d.pay_percent_bp AS "payPercentBp",
+           d.pay_per_mile_cents AS "payPerMileCents"
+      FROM loads l
+      LEFT JOIN drivers d ON d.id = l.driver_id
+     WHERE l.delivered_at IS NULL AND l.eta_at IS NOT NULL AND l.eta_at <= now()
+       AND l.status <> 'done'
+     ORDER BY l.eta_at
+     LIMIT $1
+     FOR UPDATE OF l SKIP LOCKED`],
+
+  ['markLate', `
+    UPDATE loads
+       SET status = CASE WHEN now() > delivery_at THEN 'crit' ELSE 'warn' END
+     WHERE delivered_at IS NULL
+       AND status IN ('ontime', 'warn')
+       AND (now() > delivery_at OR eta_at > delivery_at)
+       AND status <> CASE WHEN now() > delivery_at THEN 'crit' ELSE 'warn' END
+     RETURNING id, status`],
+
+  ['cancelDispatch', `
+    UPDATE loads
+       SET status = 'neutral', driver_id = NULL, truck_id = NULL,
+           dispatched_at = NULL, eta_at = NULL
+     WHERE id = $1 AND delivered_at IS NULL
+       AND status IN ('ontime', 'warn', 'crit')
+     RETURNING id, driver_id AS "driverId"`],
+
+  ['sim_state: read insurance', `
+    SELECT value FROM sim_state WHERE key = 'insurance' FOR UPDATE`],
+
+  ['countInsurableTrucks', `SELECT count(*)::int AS n FROM trucks`],
+
+  ['finance dueAt (compressed calendar)', `
+    SELECT coalesce(l.invoice_due_at,
+             l.delivered_at + interval '30 days') AS "dueAt"
+      FROM loads l`],
+
+  ['sim_state: read interest', `
+    SELECT value FROM sim_state WHERE key = 'interest' FOR UPDATE`],
+
+  ['sim_state: write interest', `
+    INSERT INTO sim_state (key, value, updated_at)
+    VALUES ('interest', jsonb_build_object('lastAt', $1::text, 'accruedUsd', $2::numeric), now())
+    ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = now()`],
+
+  ['claimDueInvoices (with accessorials)', `
+    SELECT id, rate_usd AS "rateUsd", broker, payment_terms AS "paymentTerms",
+           coalesce((SELECT sum((a->>'amountUsd')::int)
+                       FROM jsonb_array_elements(accessorials) a), 0)::int
+             AS "accessorialsUsd"
+      FROM loads
+     WHERE delivered_at IS NOT NULL AND invoice_paid_at IS NULL
+       AND invoice_due_at IS NOT NULL AND invoice_due_at <= now()
+     ORDER BY invoice_due_at
+     LIMIT $1
+     FOR UPDATE SKIP LOCKED`],
+
+  ['releaseDriver', `
+    UPDATE drivers SET duty_status = 'resting', hos_remaining_min = 660 WHERE id = $1`],
+
+  ['driver availability (real statuses)', `
+    SELECT count(*)::int FROM loads l
+     WHERE l.driver_id = $1 AND l.status IN ('ontime','warn','crit')`],
+
+  ['cash: balance', `SELECT coalesce(sum(amount_usd), 0)::int AS balance FROM cash_ledger`],
+
+  ['cash: summary', `
+    SELECT
+      coalesce(sum(amount_usd), 0)::int                                AS balance,
+      coalesce(sum(amount_usd) FILTER (WHERE amount_usd > 0), 0)::int  AS "totalIn",
+      coalesce(sum(amount_usd) FILTER (WHERE amount_usd < 0), 0)::int  AS "totalOut",
+      count(*)::int                                                    AS entries
+    FROM cash_ledger`],
+
+  ['cash: receivables', `
+    SELECT
+      coalesce(sum(rate_usd), 0)::int                                        AS "outstandingUsd",
+      count(*)::int                                                          AS "openInvoices",
+      coalesce(sum(rate_usd) FILTER (WHERE invoice_due_at <= now()), 0)::int AS "overdueUsd"
+    FROM loads
+    WHERE delivered_at IS NOT NULL AND invoice_paid_at IS NULL`],
+
+  ['cash: addEntry', `
+    INSERT INTO cash_ledger (kind, amount_usd, description, ref_type, ref_id, created_by, occurred_at)
+    VALUES ($1, $2, $3, $4, $5, $6, coalesce($7::timestamptz, now()))
+    RETURNING id, occurred_at AS "occurredAt", kind, amount_usd AS "amountUsd",
+              description, ref_type AS "refType", ref_id AS "refId"`],
+
+  ['cash: listEntries', `
+    SELECT id, occurred_at AS "occurredAt", kind, amount_usd AS "amountUsd",
+           description, ref_type AS "refType", ref_id AS "refId"
+      FROM cash_ledger
+     WHERE ($2::text IS NULL OR kind = $2)
+     ORDER BY occurred_at DESC, id DESC
+     LIMIT $1`],
+
+  ['dispatchLoad', `
+    UPDATE loads
+       SET status = 'ontime', driver_id = $2, truck_id = $3,
+           dispatched_at = now(),
+           eta_at = now() + ($4::int * interval '1 second')
+     WHERE id = $1 AND status = 'neutral'
+     RETURNING id, eta_at AS "etaAt", distance_mi AS "distanceMi", rate_usd AS "rateUsd"`],
+
+  ['getDriverForDispatch', `
+    SELECT d.id, d.name, d.hos_remaining_min AS "hosRemainingMin",
+           t.id AS "truckId",
+           (SELECT count(*) FROM loads l
+             WHERE l.driver_id = d.id AND l.status <> 'done')::int AS "activeLoads"
+      FROM drivers d
+      LEFT JOIN trucks t ON t.driver_id = d.id
+     WHERE d.id = $1`],
+
+  ['claimArrivedLoads', `
+    SELECT id, rate_usd AS "rateUsd", distance_mi AS "distanceMi",
+           payment_terms AS "paymentTerms", driver_id AS "driverId", broker
+      FROM loads
+     WHERE delivered_at IS NULL AND eta_at IS NOT NULL AND eta_at <= now()
+       AND status <> 'done'
+     ORDER BY eta_at
+     LIMIT $1
+     FOR UPDATE SKIP LOCKED`],
+
+  ['markDelivered', `
+    UPDATE loads
+       SET status = 'done', delivered_at = now(),
+           invoice_due_at = now() + ($2::int * interval '1 second')
+     WHERE id = $1 AND delivered_at IS NULL
+     RETURNING id, delivered_at AS "deliveredAt", invoice_due_at AS "invoiceDueAt"`],
+
+  ['claimDueInvoices', `
+    SELECT id, rate_usd AS "rateUsd", broker, payment_terms AS "paymentTerms"
+      FROM loads
+     WHERE delivered_at IS NOT NULL AND invoice_paid_at IS NULL
+       AND invoice_due_at IS NOT NULL AND invoice_due_at <= now()
+     ORDER BY invoice_due_at
+     LIMIT $1
+     FOR UPDATE SKIP LOCKED`],
+
+  ['markInvoicePaid', `
+    UPDATE loads SET invoice_paid_at = now()
+     WHERE id = $1 AND invoice_paid_at IS NULL
+     RETURNING id`],
+
+  ['truck listing columns (spec sheet)', `
+    SELECT l.id, l.make, l.model, l.year, l.odometer_mi, l.price_usd,
+           l.trailer_type, l.fuel_capacity_gal, l.tire_front_pct,
+           l.tire_rear_pct, l.service_notes, l.seller,
+           l.vin, l.engine_make, l.engine_model, l.horsepower,
+           l.transmission, l.sleeper, l.suspension, l.axle_config,
+           l.wheelbase_in, l.front_axle_lbs, l.rear_axle_lbs, l.gvwr_lbs,
+           l.has_apu, l.location_city, l.location_state
+      FROM truck_listings l WHERE l.id = $1`],
+
+  ['insertTruck (with spec sheet)', `
+    INSERT INTO trucks (
+      id, make, model, year, odometer_mi, status, trailer_type,
+      fuel_capacity_gal, fuel_pct, fuel_gallons, tire_front_pct, tire_rear_pct,
+      vin, engine_make, engine_model, horsepower, transmission, sleeper,
+      suspension, axle_config, wheelbase_in, front_axle_lbs,
+      rear_axle_lbs, gvwr_lbs, has_apu, current_location
+    ) VALUES ($1,$2,$3,$4,$5,'idle',$6,$7,50,$8,$9,$10,
+      $11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)
+    RETURNING id`],
+
+  ['truck columns (spec sheet)', `
+    SELECT t.id, t.vin, t.engine_make, t.engine_model, t.horsepower,
+           t.transmission, t.sleeper, t.suspension, t.axle_config,
+           t.wheelbase_in, t.front_axle_lbs, t.rear_axle_lbs,
+           t.gvwr_lbs, t.has_apu
+      FROM trucks t WHERE t.id = $1`],
+
   ['listChecks', `
     SELECT k.id, k.mc_number AS "mcNumber", k.broker_id AS "brokerId",
            k.credit_rating AS "creditRating", k.days_to_pay AS "daysToPay",
@@ -96,6 +276,76 @@ const STATEMENTS = [
      WHERE k.user_id = $1
      ORDER BY k.checked_at DESC
      LIMIT $2`],
+
+  // --- promised_eta_at (migration 023). The three statements that decide
+  // whether a load can ever be late. The previous lateness fix shipped
+  // looking correct and never fired once; nothing here is trusted until
+  // PostgreSQL has parsed it against the real schema.
+  ['dispatchLoad (eta + promise)', `
+    UPDATE loads
+       SET status = 'ontime',
+           driver_id = $2,
+           truck_id = $3,
+           dispatched_at = now(),
+           promised_eta_at = now() + ($5::int * interval '1 second'),
+           eta_at = now() + ($4::int * interval '1 second')
+     WHERE id = $1 AND status = 'neutral'
+     RETURNING id, eta_at AS "etaAt", promised_eta_at AS "promisedEtaAt",
+               distance_mi AS "distanceMi", rate_usd AS "rateUsd"`],
+
+  ['markLate (reveal fraction)', `
+    UPDATE loads
+       SET status = CASE
+             WHEN now() > promised_eta_at THEN 'crit'
+             ELSE 'warn'
+           END
+     WHERE delivered_at IS NULL
+       AND promised_eta_at IS NOT NULL
+       AND dispatched_at IS NOT NULL
+       AND status IN ('ontime', 'warn')
+       AND (
+             now() > promised_eta_at
+             OR (
+               eta_at > promised_eta_at
+               AND now() >= dispatched_at
+                           + (promised_eta_at - dispatched_at) * $1::float8
+             )
+           )
+       AND status <> CASE
+             WHEN now() > promised_eta_at THEN 'crit'
+             ELSE 'warn'
+           END
+     RETURNING id, status`],
+
+  ['cancelDispatch (clears promise)', `
+    UPDATE loads
+       SET status = 'neutral', driver_id = NULL, truck_id = NULL,
+           dispatched_at = NULL, eta_at = NULL, promised_eta_at = NULL
+     WHERE id = $1 AND delivered_at IS NULL
+       AND status IN ('ontime', 'warn', 'crit')
+     RETURNING id, driver_id AS "driverId"`],
+
+  // --- The two on-time readings. Both compared the wrong thing and both
+  // could only ever return 100%; parsed here so the corrected versions
+  // are checked against the real columns.
+  ['getDashboardCounts (on-time is a fact)', DASHBOARD_COUNTS_SQL],
+
+  ['getOnTimeTrend (same clock)', `
+    SELECT
+      date_trunc('day', delivered_at)::date AS day,
+      round(100.0 * count(*) FILTER (
+        WHERE promised_eta_at IS NULL OR delivered_at <= promised_eta_at
+      ) / count(*))::int AS "onTimePct"
+    FROM loads
+    WHERE delivered_at IS NOT NULL AND delivered_at >= current_date - $1::int
+    GROUP BY 1
+    ORDER BY 1`],
+
+  // --- The invoice CTE every Finance query builds on. daysPastDue was
+  // counted in real calendar days against a compressed-calendar due date
+  // and could only ever be 0; the aging buckets and the past-due badge
+  // both read it.
+  ['INVOICE_CTE (sim-day aging)', `${INVOICE_CTE} SELECT * FROM invoice_status`],
 ]
 
 const client = await pool.connect()
@@ -103,11 +353,21 @@ let failed = 0
 
 try {
   await client.query('BEGIN')
+  let i = 0
   for (const [name, sql] of STATEMENTS) {
+    i += 1
+    // SAVEPOINT per statement. Without it the first failure aborts the
+    // whole transaction and PostgreSQL rejects everything after it with
+    // "current transaction is aborted" -- which this script then printed
+    // as FAIL, reporting six working queries as broken (2026-09-03). A
+    // checker that lies about what it checked is worse than no checker.
+    await client.query('SAVEPOINT stmt')
     try {
-      await client.query(`PREPARE chk_${STATEMENTS.findIndex((s) => s[0] === name)} AS ${sql}`)
+      await client.query(`PREPARE chk_${i} AS ${sql}`)
+      await client.query('RELEASE SAVEPOINT stmt')
       console.log(`  ok    ${name}`)
     } catch (err) {
+      await client.query('ROLLBACK TO SAVEPOINT stmt')
       failed += 1
       console.log(`  FAIL  ${name}`)
       console.log(`        ${err.message}`)

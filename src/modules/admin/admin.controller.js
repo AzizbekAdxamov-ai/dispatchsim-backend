@@ -46,6 +46,15 @@ export async function updateUser(req, res) {
   res.status(200).json(user)
 }
 
+export async function deleteUser(req, res) {
+  const targetId = userIdSchema.parse(req.params.id)
+  const result = await adminService.deleteUser({
+    actorId: req.auth.userId,
+    targetId,
+  })
+  res.status(200).json(result)
+}
+
 export async function bulkAssignRoles(req, res) {
   const body = bulkRolesSchema.parse(req.body)
   const result = await adminService.bulkAssignRoles({

@@ -334,7 +334,7 @@ export async function hasAvailableDriver() {
        AND d.current_lon IS NOT NULL
        AND NOT EXISTS (
          SELECT 1 FROM loads l
-         WHERE l.driver_id = d.id AND l.status IN ('ontime','delayed')
+         WHERE l.driver_id = d.id AND l.status IN ('ontime','warn','crit')
        )
      LIMIT 1`,
   )
@@ -353,7 +353,7 @@ export async function findNearestAvailableDriver(originLat, originLon) {
        AND d.current_lon IS NOT NULL
        AND NOT EXISTS (
          SELECT 1 FROM loads l
-         WHERE l.driver_id = d.id AND l.status IN ('ontime','delayed')
+         WHERE l.driver_id = d.id AND l.status IN ('ontime','warn','crit')
        )
      ORDER BY road_miles(d.current_lat, d.current_lon, $1, $2) ASC
      LIMIT 1`,

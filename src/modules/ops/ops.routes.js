@@ -1,0 +1,62 @@
+// The tick, reachable over HTTP.
+//
+// node-cron only exists inside a process that keeps running. On Vercel
+// there is no such process: api/index.js exports the Express app and
+// server.js -- the only file that calls startOpsTick() -- is never
+// imported. So on the deployed app no load was ever delivered, no invoice
+// was ever paid, no interest was ever charged. The entire cash model that
+// migrations 019-022 exist for was dead in production and alive only on
+// the developer's laptop.
+//
+// This endpoint is the serverless half: a scheduler calls it, it runs one
+// tick, it returns. Locally node-cron still drives the same function, and
+// both are safe to run at once -- every stage is guarded by a conditional
+// UPDATE, a unique index or SELECT ... FOR UPDATE, which is what made the
+// tick idempotent in the first place.
+import { Router } from 'express'
+import { runTick } from '../loads/dispatch.service.js'
+import config from '../../config.js'
+import { AppError } from '../../lib/errors.js'
+
+const router = Router()
+
+// GET as well as POST. Vercel's scheduler issues an HTTP **GET** to the
+// path named in vercel.json -- confirmed in their docs, not assumed -- so
+// a POST-only route would never be called and the bug this endpoint
+// exists to fix would still be there, now with a config file that made it
+// look fixed.
+//
+// Not requireAuth: a cron service has no session. Without a secret
+// configured the endpoint refuses rather than running unauthenticated --
+// an open tick endpoint would let anyone drive the company's clock.
+//
+// Two header shapes are accepted: `x-ops-secret` for an external
+// scheduler, and `Authorization: Bearer <secret>`, which is what Vercel
+// sends when CRON_SECRET is set on the project. Set both env vars to the
+// same value and either path works.
+async function handleTick(req, res, next) {
+  try {
+    const expected = config.opsTickSecret
+    if (!expected) throw new AppError('TICK_NOT_CONFIGURED')
+    const bearer = (req.get('authorization') || '').replace(/^Bearer\s+/i, '')
+    if (req.get('x-ops-secret') !== expected && bearer !== expected) {
+      throw new AppError('UNAUTHORIZED')
+    }
+
+    const result = await runTick()
+    res.status(200).json({
+      delivered: result.delivered.length,
+      paid: result.paid.length,
+      late: result.late.length,
+      interestUsd: result.interest?.amountUsd ?? 0,
+      insuranceUsd: result.insurance?.amountUsd ?? 0,
+    })
+  } catch (err) {
+    next(err)
+  }
+}
+
+router.get('/tick', handleTick)
+router.post('/tick', handleTick)
+
+export default router

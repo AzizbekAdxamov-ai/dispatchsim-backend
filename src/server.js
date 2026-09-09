@@ -5,10 +5,12 @@ import app from './app.js'
 import config from './config.js'
 import { pool } from './db/pool.js'
 import { startJobs } from './jobs/dailyRefresh.js'
+import { startOpsTick } from './jobs/opsTick.js'
 
 const server = app.listen(config.port, () => {
   console.log('DispatchSim API → http://localhost:' + config.port)
   startJobs()
+  startOpsTick()
 })
 
 async function shutdown(signal) {

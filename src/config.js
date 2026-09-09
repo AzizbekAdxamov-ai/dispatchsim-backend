@@ -59,8 +59,15 @@ const corsOrigin = process.env.CORS_ORIGIN || 'http://localhost:5173'
 const nodeEnv = process.env.NODE_ENV || 'development'
 const isProd = nodeEnv === 'production'
 
+// Shared secret for POST /ops/tick. Absent by default: the endpoint
+// refuses to run rather than exposing the company clock to anyone who
+// finds the URL. Only needed where no long-lived process exists to run
+// node-cron -- i.e. serverless.
+const opsTickSecret = process.env.OPS_TICK_SECRET || ''
+
 export default {
   databaseUrl,
+  opsTickSecret,
   jwtSecret,
   jwtExpiresIn,
   port,

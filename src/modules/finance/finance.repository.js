@@ -29,18 +29,25 @@
 
 import { query } from '../../db/pool.js'
 import { termsIntervalSql } from '../../constants/paymentTerms.js'
+import { REAL_SEC_PER_SIM_DAY } from '../../constants/simClock.js'
 
 // Every load, with its invoice status/dueAt/daysPastDue computed once so
 // every query below stays consistent with the others. A load is a "draft"
 // invoice until delivered (see Finance §"nima hisoblanadi" in the plan) —
 // there is no separate invoices table, so this CTE IS the invoice list.
-const INVOICE_CTE = `
+export const INVOICE_CTE = `
   WITH invoice_base AS (
     SELECT
       l.id AS "loadId", l.broker, l.rate_usd AS "rateUsd", l.accessorials,
       l.payment_terms AS "paymentTerms", l.booked_at AS "bookedAt",
       l.delivered_at AS "deliveredAt", l.invoice_paid_at AS "invoicePaidAt",
-      l.delivered_at + (${termsIntervalSql()}) AS "dueAt"
+      -- invoice_due_at is what the TICK will actually pay against, on the
+      -- compressed calendar (one simulated day = two real minutes). This
+      -- used to recompute the date here as delivered_at + interval '30
+      -- days', the real calendar -- so Finance and the collector
+      -- disagreed by weeks and nothing was ever shown as overdue.
+      -- The fallback keeps rows written before migration 019 readable.
+      coalesce(l.invoice_due_at, l.delivered_at + (${termsIntervalSql()})) AS "dueAt"
     FROM loads l
   ),
   invoice_status AS (
@@ -51,7 +58,19 @@ const INVOICE_CTE = `
         WHEN now() > ib."dueAt" THEN 'overdue'
         ELSE 'open'
       END AS status,
-      GREATEST(0, (current_date - ib."dueAt"::date))::int AS "daysPastDue"
+      -- Days past due, counted in SIMULATED days.
+      --
+      -- This was current_date - "dueAt"::date: real calendar days against
+      -- a due date that lives on the compressed calendar, minutes rather
+      -- than weeks away. Both dates therefore always fell on today and
+      -- the answer was 0 for every invoice ever written -- the aging
+      -- buckets, avgDaysToPay and the past-due badge were all reading a
+      -- number that could not be anything else. One simulated day is
+      -- REAL_SEC_PER_SIM_DAY real seconds; that is the only unit in which
+      -- "45 days late" means what a student thinks it means.
+      GREATEST(0, floor(
+        EXTRACT(EPOCH FROM (now() - ib."dueAt")) / ${REAL_SEC_PER_SIM_DAY}
+      ))::int AS "daysPastDue"
     FROM invoice_base ib
   )
 `

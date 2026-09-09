@@ -9,6 +9,12 @@ const LISTING_COLUMNS = `
   l.fuel_capacity_gal AS "fuelCapacityGal",
   l.tire_front_pct AS "tireFrontPct", l.tire_rear_pct AS "tireRearPct",
   l.service_notes AS "serviceNotes", l.seller,
+  l.vin, l.engine_make AS "engineMake", l.engine_model AS "engineModel",
+  l.horsepower, l.transmission, l.sleeper, l.suspension,
+  l.axle_config AS "axleConfig", l.wheelbase_in AS "wheelbaseIn",
+  l.front_axle_lbs AS "frontAxleLbs", l.rear_axle_lbs AS "rearAxleLbs",
+  l.gvwr_lbs AS "gvwrLbs", l.has_apu AS "hasApu",
+  l.location_city AS "locationCity", l.location_state AS "locationState",
   l.posted_at AS "postedAt", l.expires_at AS "expiresAt",
   l.status, l.bought_truck_id AS "boughtTruckId",
   l.bought_by_user_id AS "boughtByUserId", l.bought_at AS "boughtAt",
@@ -52,16 +58,39 @@ export async function buyListing(client, { listingId, userId, truckId }) {
   return updateResult.rowCount
 }
 
-export async function insertTruck(client, { id, make, model, year, odometerMi, trailerType, fuelCapacityGal, tireFrontPct, tireRearPct }) {
+// The spec sheet is copied onto the truck, not left behind on the
+// listing. A page that can tell you whether a truck may legally take
+// 44,000 lbs is exactly the fleet page, and the listing is gone the
+// moment it is bought.
+export async function insertTruck(client, listing) {
+  const {
+    id, make, model, year, odometerMi, trailerType, fuelCapacityGal,
+    tireFrontPct, tireRearPct,
+    vin, engineMake, engineModel, horsepower, transmission, sleeper,
+    suspension, axleConfig, wheelbaseIn, frontAxleLbs, rearAxleLbs,
+    gvwrLbs, hasApu, locationCity, locationState,
+  } = listing
+
   const result = await client.query(
     `INSERT INTO trucks (
        id, make, model, year, odometer_mi, status, trailer_type,
        fuel_capacity_gal, fuel_pct, fuel_gallons,
-       tire_front_pct, tire_rear_pct
-     ) VALUES ($1, $2, $3, $4, $5, 'idle', $6, $7, 50, $8, $9, $10)
+       tire_front_pct, tire_rear_pct,
+       vin, engine_make, engine_model, horsepower, transmission, sleeper,
+       suspension, axle_config, wheelbase_in, front_axle_lbs,
+       rear_axle_lbs, gvwr_lbs, has_apu, current_location
+     ) VALUES ($1, $2, $3, $4, $5, 'idle', $6, $7, 50, $8, $9, $10,
+       $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
      RETURNING id`,
     [id, make, model, year, odometerMi, trailerType, fuelCapacityGal,
-     Math.round(fuelCapacityGal * 0.5), tireFrontPct, tireRearPct],
+     Math.round(fuelCapacityGal * 0.5), tireFrontPct, tireRearPct,
+     vin ?? null, engineMake ?? null, engineModel ?? null, horsepower ?? null,
+     transmission ?? null, sleeper ?? null, suspension ?? null,
+     axleConfig ?? null, wheelbaseIn ?? null, frontAxleLbs ?? null,
+     rearAxleLbs ?? null, gvwrLbs ?? null, hasApu ?? null,
+     // Where it is parked becomes where the truck currently is. It does
+     // not teleport to you when you pay for it.
+     locationCity && locationState ? `${locationCity}, ${locationState}` : null],
   )
   return result.rows[0]
 }

@@ -25,6 +25,7 @@
 // only if `loads` grows by an order of magnitude.
 
 import { query } from '../../db/pool.js'
+import { LATE_REVEAL_FRACTION } from '../../constants/simClock.js'
 
 const LOAD_COLUMNS = `
   l.id, l.origin_city AS "originCity", l.origin_state AS "originState",
@@ -116,8 +117,9 @@ export async function listLoads({ status, equipmentType, search, limit, offset }
   return result.rows
 }
 
-export async function getLoadById(id) {
-  const result = await query(`${ROW_SELECT} WHERE l.id = $1`, [id])
+export async function getLoadById(id, client = null) {
+  const runner = client ?? { query }
+  const result = await runner.query(`${ROW_SELECT} WHERE l.id = $1`, [id])
   return result.rows[0] ?? null
 }
 
@@ -163,16 +165,37 @@ export async function listLoadsByDriverId(driverId, { limit = 10 } = {}) {
 // stats.service.js, which turns these into the dashboard's stat tiles
 // without this file needing to know a single thing about how they're
 // labeled or displayed.
+// The dashboard's five counts, as one exported string.
+//
+// Exported because scripts/late-proof.js runs it inside the same
+// transaction as the rows it inserts -- getDashboardCounts() goes through
+// the pool and would never see them. A copy pasted into the proof would
+// keep passing while this one drifted, which is the failure mode that let
+// a broken on-time percentage sit unnoticed for weeks.
+export const DASHBOARD_COUNTS_SQL = `
+  SELECT
+    count(*) FILTER (WHERE status <> 'done')::int                  AS "activeLoads",
+    count(*) FILTER (WHERE status IN ('ontime','warn','crit'))::int AS "inTransit",
+    count(*) FILTER (WHERE status IN ('warn','crit'))::int          AS "atRisk",
+    count(*) FILTER (WHERE status <> 'neutral')::int                AS "evaluatedLoads",
+    -- On time is a FACT about the delivery, not the status.
+    -- markDelivered sets status='done' for every load, late or not, so
+    -- FILTER (status IN ('ontime','done')) counted a load that ran 40%
+    -- over as on-time the instant it delivered -- the percentage could
+    -- only ever read 100 for finished work. The two timestamps below are
+    -- both on the compressed calendar and neither is overwritten, so the
+    -- answer stays true for as long as the row exists. promised_eta_at
+    -- IS NULL is the pre-migration-023 backfill: those loads had no
+    -- promise to miss.
+    count(*) FILTER (
+      WHERE status = 'ontime'
+         OR (status = 'done'
+             AND (promised_eta_at IS NULL OR delivered_at <= promised_eta_at))
+    )::int AS "onTimeLoads"
+  FROM loads`
+
 export async function getDashboardCounts() {
-  const result = await query(
-    `SELECT
-       count(*) FILTER (WHERE status <> 'done')::int                  AS "activeLoads",
-       count(*) FILTER (WHERE status IN ('ontime','warn','crit'))::int AS "inTransit",
-       count(*) FILTER (WHERE status IN ('warn','crit'))::int          AS "atRisk",
-       count(*) FILTER (WHERE status <> 'neutral')::int                AS "evaluatedLoads",
-       count(*) FILTER (WHERE status IN ('ontime','done'))::int        AS "onTimeLoads"
-     FROM loads`,
-  )
+  const result = await query(DASHBOARD_COUNTS_SQL)
   return result.rows[0]
 }
 
@@ -202,7 +225,14 @@ export async function getOnTimeTrend(days = 7) {
   const result = await query(
     `SELECT
        date_trunc('day', delivered_at)::date AS day,
-       round(100.0 * count(*) FILTER (WHERE delivered_at <= delivery_at) / count(*))::int AS "onTimePct"
+       -- delivery_at is the broker's window on the REAL calendar, hours
+       -- away; delivered_at lands minutes after dispatch on the
+       -- compressed one. The comparison was therefore true for every row
+       -- ever written and this trend has always drawn a flat 100. Same
+       -- clock on both sides now.
+       round(100.0 * count(*) FILTER (
+         WHERE promised_eta_at IS NULL OR delivered_at <= promised_eta_at
+       ) / count(*))::int AS "onTimePct"
      FROM loads
      WHERE delivered_at IS NOT NULL AND delivered_at >= current_date - $1::int
      GROUP BY 1
@@ -252,4 +282,250 @@ export async function createLoad(client, {
     ],
   )
   return result.rows[0]
+}
+
+// ---------------------------------------------------------------------
+// Dispatch and delivery (2026-09-03)
+// ---------------------------------------------------------------------
+// Until now nothing here wrote: /loads was two GETs, so a load created by
+// accepting a rate confirmation sat at 'neutral' forever and no money ever
+// came back in. These are the writes that let a load finish.
+
+// Claim a load for a driver and truck. Conditional on status = 'neutral'
+// so two dispatchers cannot send the same load twice; the caller reads 0
+// rows and works out why. eta_at is set on the compressed calendar --
+// see src/constants/simClock.js.
+// Two timestamps, both on the compressed clock: what was promised, and
+// what the road is going to do. They are equal on a run that goes fine.
+//
+// delivery_at -- the broker's contractual window -- is deliberately NOT
+// touched. It is on the real calendar, it is what the rate confirmation
+// says, and it is what the dispatcher reads. Comparing it against eta_at
+// was the bug migration 023 exists to fix: 11 hours against 6.7 minutes.
+export async function dispatchLoad(client, { loadId, driverId, truckId, etaSeconds, promisedSeconds }) {
+  const result = await client.query(
+    `UPDATE loads
+        SET status = 'ontime',
+            driver_id = $2,
+            truck_id = $3,
+            dispatched_at = now(),
+            promised_eta_at = now() + ($5::int * interval '1 second'),
+            eta_at = now() + ($4::int * interval '1 second')
+      WHERE id = $1 AND status = 'neutral'
+      RETURNING id, eta_at AS "etaAt", promised_eta_at AS "promisedEtaAt",
+                distance_mi AS "distanceMi", rate_usd AS "rateUsd"`,
+    [loadId, driverId, truckId, etaSeconds, promisedSeconds],
+  )
+  return result.rows[0] ?? null
+}
+
+// A driver who can take a load: on the roster, not off duty is fine (they
+// come on duty by being dispatched), but not already running something.
+// The partial unique index loads_one_active_per_driver is the real guard;
+// this is the readable pre-flight that produces a decent error.
+export async function getDriverForDispatch(client, driverId) {
+  const result = await client.query(
+    `SELECT d.id, d.name, d.hos_remaining_min AS "hosRemainingMin",
+            t.id AS "truckId",
+            (SELECT count(*) FROM loads l
+              WHERE l.driver_id = d.id AND l.status <> 'done')::int AS "activeLoads"
+       FROM drivers d
+       LEFT JOIN trucks t ON t.driver_id = d.id
+      WHERE d.id = $1`,
+    [driverId],
+  )
+  return result.rows[0] ?? null
+}
+
+// Loads whose ETA has passed and that have not been marked delivered.
+// FOR UPDATE SKIP LOCKED so two ticks overlapping never process the same
+// load twice -- the second one simply does not see it.
+export async function claimArrivedLoads(client, limit = 1) {
+  const result = await client.query(
+    `SELECT l.id, l.rate_usd AS "rateUsd", l.distance_mi AS "distanceMi",
+            l.payment_terms AS "paymentTerms", l.driver_id AS "driverId", l.broker,
+            -- The driver's terms travel with the load, so settlement can be
+            -- written in the same transaction that delivers it. A driver
+            -- paid in a second pass could be paid twice, or not at all.
+            d.name AS "driverName", d.pay_model AS "payModel",
+            d.pay_percent_bp AS "payPercentBp",
+            d.pay_per_mile_cents AS "payPerMileCents"
+       FROM loads l
+       LEFT JOIN drivers d ON d.id = l.driver_id
+      WHERE l.delivered_at IS NULL AND l.eta_at IS NOT NULL AND l.eta_at <= now()
+        AND l.status <> 'done'
+      ORDER BY l.eta_at
+      LIMIT $1
+      -- OF l, not a bare FOR UPDATE: PostgreSQL refuses to lock the
+      -- nullable side of an outer join, and the driver join is a LEFT
+      -- JOIN because a load can be delivered with no driver on it.
+      FOR UPDATE OF l SKIP LOCKED`,
+    [limit],
+  )
+  return result.rows
+}
+
+// Mark it delivered and set when the money is due, on the compressed
+// calendar. loads_done_iff_time requires status and delivered_at to move
+// together, so both are set here or neither is.
+export async function markDelivered(client, { loadId, dueSeconds }) {
+  const result = await client.query(
+    `UPDATE loads
+        SET status = 'done',
+            delivered_at = now(),
+            invoice_due_at = now() + ($2::int * interval '1 second')
+      WHERE id = $1 AND delivered_at IS NULL
+      RETURNING id, delivered_at AS "deliveredAt", invoice_due_at AS "invoiceDueAt"`,
+    [loadId, dueSeconds],
+  )
+  return result.rows[0] ?? null
+}
+
+// Delivered loads whose invoice has come due and is still unpaid.
+export async function claimDueInvoices(client, limit = 1) {
+  const result = await client.query(
+    `SELECT id, rate_usd AS "rateUsd", broker, payment_terms AS "paymentTerms",
+            -- Accessorials are billed on the invoice and were never
+            -- collected: finance counted them as revenue, the ledger
+            -- received only rate_usd. Summed here so the payment matches
+            -- what was invoiced.
+            coalesce((SELECT sum((a->>'amountUsd')::int)
+                        FROM jsonb_array_elements(accessorials) a), 0)::int
+              AS "accessorialsUsd"
+       FROM loads
+      WHERE delivered_at IS NOT NULL AND invoice_paid_at IS NULL
+        AND invoice_due_at IS NOT NULL AND invoice_due_at <= now()
+      ORDER BY invoice_due_at
+      LIMIT $1
+      FOR UPDATE SKIP LOCKED`,
+    [limit],
+  )
+  return result.rows
+}
+
+export async function markInvoicePaid(client, loadId) {
+  const result = await client.query(
+    `UPDATE loads SET invoice_paid_at = now()
+      WHERE id = $1 AND invoice_paid_at IS NULL
+      RETURNING id`,
+    [loadId],
+  )
+  return result.rows[0] ?? null
+}
+
+// The run is over: the driver comes off the load, rests, and is
+// available again.
+//
+// This used to set duty_status = 'off' and hos_remaining_min = NULL, and
+// that made the driver INVISIBLE. Every availability and deadhead query
+// on the board requires `duty_status <> 'off'`, so a driver who finished
+// one load never appeared again -- no deadhead, no nearest-driver, and
+// the HOS warning compared against NULL and stopped firing entirely. A
+// company whose drivers had all completed a run looked, to the board,
+// like a company with no drivers.
+//
+// 'resting' is the honest state for a driver between loads: not on a
+// load, not unavailable. HOS resets because the rest is what resets it.
+export async function releaseDriver(client, { driverId }) {
+  if (!driverId) return
+  await client.query(
+    `UPDATE drivers SET duty_status = 'resting', hos_remaining_min = 660 WHERE id = $1`,
+    [driverId],
+  )
+}
+
+// Put the driver on duty at dispatch.
+export async function setDriverDriving(client, { driverId }) {
+  await client.query(
+    `UPDATE drivers SET duty_status = 'driving' WHERE id = $1`,
+    [driverId],
+  )
+}
+
+// Move loads in transit onto the status their timing actually warrants.
+//
+// One statement, two transitions, so the tick cannot leave a load half
+// re-classified: 'crit' when the promised delivery time has passed and
+// the freight is not there, 'warn' when the current ETA already runs past
+// the promise. Ordered by CASE so a load that qualifies for both lands on
+// 'crit'. Only touches loads whose status would actually change, so the
+// statement is cheap and idempotent.
+// Move a load off 'ontime' when the road has gone wrong.
+//
+// Two different facts, two different statuses:
+//
+//   'crit'  the promised delivery time has passed and the load is still
+//           not delivered. This is not a prediction -- it has happened.
+//
+//   'warn'  the run is going to overshoot the promise, AND the truck is
+//           far enough along that a driver would have called it in.
+//
+// The reveal fraction is the reason for that second clause. eta_at is
+// decided at dispatch, so without it every load that will run late is
+// flagged 'warn' on the first tick after dispatch -- the board would be
+// telling the student the outcome before the road produced it. That is a
+// forecast wearing a fact's clothes, and this project does not ship
+// those. At 0.6 the delay surfaces roughly where a real one does: past
+// the halfway point, with time left to call the broker.
+export async function markLate(client, revealFraction = LATE_REVEAL_FRACTION) {
+  const result = await client.query(
+    `UPDATE loads
+        SET status = CASE
+              WHEN now() > promised_eta_at THEN 'crit'
+              ELSE 'warn'
+            END
+      WHERE delivered_at IS NULL
+        AND promised_eta_at IS NOT NULL
+        AND dispatched_at IS NOT NULL
+        AND status IN ('ontime', 'warn')
+        AND (
+              now() > promised_eta_at
+              OR (
+                eta_at > promised_eta_at
+                AND now() >= dispatched_at
+                            + (promised_eta_at - dispatched_at) * $1::float8
+              )
+            )
+        AND status <> CASE
+              WHEN now() > promised_eta_at THEN 'crit'
+              ELSE 'warn'
+            END
+      RETURNING id, status`,
+    [revealFraction],
+  )
+  return result.rows
+}
+
+// Take a load back off a driver.
+//
+// Once a load went to 'ontime' the only exit was the tick: a load
+// dispatched to the wrong driver, or to a driver who then could not run
+// it, was stuck in transit until it "arrived". Cancelling returns it to
+// 'neutral' -- booked, unassigned -- which is where it was before, and
+// loads_pending_clean requires driver, truck and dispatched_at to be
+// cleared together with it.
+//
+// Only before delivery. A delivered load has an invoice against it and
+// cash has already moved; unwinding that is an accounting question, not
+// an UPDATE.
+export async function cancelDispatch(client, loadId) {
+  const result = await client.query(
+    `UPDATE loads
+        SET status = 'neutral', driver_id = NULL, truck_id = NULL,
+            dispatched_at = NULL, eta_at = NULL, promised_eta_at = NULL
+      WHERE id = $1 AND delivered_at IS NULL
+        AND status IN ('ontime', 'warn', 'crit')
+      RETURNING id, driver_id AS "driverId"`,
+    [loadId],
+  )
+  return result.rows[0] ?? null
+}
+
+// Who was on it, so they can be released after the cancel.
+export async function getLoadDriver(client, loadId) {
+  const result = await client.query(
+    `SELECT driver_id AS "driverId" FROM loads WHERE id = $1`,
+    [loadId],
+  )
+  return result.rows[0]?.driverId ?? null
 }

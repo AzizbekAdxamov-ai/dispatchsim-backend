@@ -69,6 +69,13 @@ export const ERROR_CODES = {
   ALREADY_BOOKED:         { status: 409, message: 'This rate confirmation has already been accepted' },
   RATE_CON_NOT_ARRIVED:   { status: 409, message: 'The broker has not sent the rate confirmation yet' },
   BROKER_NOT_FOUND:       { status: 404, message: 'No carrier record found for that MC number' },
+  TICK_NOT_CONFIGURED:    { status: 503, message: 'OPS_TICK_SECRET is not set on this deployment' },
+  LOAD_NOT_CANCELLABLE:   { status: 409, message: 'This load has already been delivered' },
+  INSUFFICIENT_FUNDS:     { status: 409, message: 'Not enough cash, even on the credit line' },
+  LOAD_NOT_FOUND:         { status: 404, message: 'Load not found' },
+  LOAD_NOT_DISPATCHABLE:  { status: 409, message: 'This load is not waiting to be dispatched' },
+  DRIVER_UNAVAILABLE:     { status: 409, message: 'That driver is not available' },
+  DRIVER_HAS_NO_TRUCK:    { status: 409, message: 'That driver has no truck assigned' },
 }
 
 export class AppError extends Error {

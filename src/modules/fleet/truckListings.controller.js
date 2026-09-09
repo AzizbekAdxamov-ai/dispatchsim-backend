@@ -3,6 +3,7 @@
 // is already behind requireAuth + requireRole('fleet-manager') (see fleet.routes.js).
 
 import * as truckListingsService from './truckListings.service.js'
+import { assignDriverSchema } from './fleet.schemas.js'
 
 export async function listOpenListings(req, res) {
   const limit = Number(req.query.limit) || 100
@@ -18,16 +19,18 @@ export async function getListing(req, res) {
 export async function buyListing(req, res) {
   const result = await truckListingsService.buyListing({
     listingId: req.params.id,
-    userId: req.user.sub,
+    userId: req.auth.userId,
   })
   res.status(201).json(result)
 }
 
 export async function assignDriver(req, res) {
-  const { driverId } = req.body
-  if (!driverId) {
-    return res.status(400).json({ message: 'driverId is required' })
-  }
+  // Validated with zod like every other endpoint. The hand-rolled check
+  // this replaces answered `{ message }` directly, bypassing errorHandler
+  // and the `{ error: { code, message } }` contract the whole client
+  // reads -- so a caller matching on err.code got undefined and could not
+  // tell a missing field from a network fault.
+  const { driverId } = assignDriverSchema.parse(req.body)
   const result = await truckListingsService.assignDriver({
     truckId: req.params.id,
     driverId,

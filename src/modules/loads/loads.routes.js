@@ -18,4 +18,9 @@ router.use(requireAuth, requireRole())
 router.get('/', loadsController.listLoads)
 router.get('/:id', loadsController.getLoad)
 
+// Dispatch is dispatcher work, unlike the reads above which every role
+// can see.
+router.post('/:id/dispatch', requireRole('dispatcher'), loadsController.dispatchLoad)
+router.post('/:id/cancel', requireRole('dispatcher'), loadsController.cancelDispatch)
+
 export default router

@@ -8,6 +8,8 @@ import { withTransaction } from '../../db/pool.js'
 import * as hrRepo from './hr.repository.js'
 import { AppError } from '../../lib/errors.js'
 import { findCity } from '../../../scripts/seed/cities.js'
+import * as cash from '../cash/cash.service.js'
+import { DRIVER_ONBOARDING_USD } from '../../constants/simClock.js'
 
 // ---------------------------------------------------------------------
 // Read endpoints
@@ -96,10 +98,27 @@ export async function hireApplicant({ applicantId, userId }) {
         currentState: homeCity?.state ?? applicant.homeBaseState,
         currentLat: homeCity?.lat ?? null,
         currentLon: homeCity?.lon ?? null,
-        dutyStatus: 'off',
+        // NOT 'off'. Every availability and deadhead query on the load
+        // board filters on `duty_status <> 'off'`, so a roster hired
+        // through HR was invisible to dispatch -- the board reported no
+        // available driver for a company that had just hired three.
+        dutyStatus: 'resting',
         payModel: applicant.desiredPayModel,
         payPercentBp: applicant.desiredPayPercentBp,
         payPerMileCents: applicant.desiredPayPerMileCents,
+      })
+
+      // Step 3b: hiring is not free -- DOT physical, drug screen, MVR
+      // pull, orientation. Small on its own; the point is that hiring
+      // five drivers for a fleet with two trucks shows up in the ledger
+      // instead of costing nothing.
+      await cash.spend(client, {
+        kind: 'driver_onboarding',
+        amountUsd: DRIVER_ONBOARDING_USD,
+        description: `Onboarding — ${applicant.fullName}`,
+        refType: 'driver',
+        refId: driverId,
+        userId,
       })
 
       // Step 4: Atomically mark applicant as hired

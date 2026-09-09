@@ -31,6 +31,7 @@ router.get('/users', adminController.listUsers)
 // becomes a real bug if a method ever changes.
 router.post('/users/bulk-roles', adminController.bulkAssignRoles)
 router.patch('/users/:id', adminController.updateUser)
+router.delete('/users/:id', adminController.deleteUser)
 
 router.get('/invites', adminController.listInvites)
 router.post('/invites', adminController.createInvite)

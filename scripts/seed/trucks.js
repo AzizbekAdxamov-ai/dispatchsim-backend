@@ -9,6 +9,15 @@
 // ...) matching the listings_id_format CHECK.
 
 import { raw } from './render.js'
+import { buildSpecs } from '../../src/constants/truckSpecs.js'
+import { CITIES } from './cities.js'
+
+// Where the truck is parked. Straight from the same city list the load
+// board uses, so a truck in Spokane is a truck in a city the board also
+// posts freight out of -- the distance is a real one, not a label.
+function pickCity(rng) {
+  return CITIES[Math.floor(rng() * CITIES.length)]
+}
 
 // ---------------------------------------------------------------------
 // Configuration — lifetime is CALCULATED, never hardcoded
@@ -161,6 +170,14 @@ export function buildTruckRows({ rng, truckItems, truckIds }) {
     // Fuel capacity: 100-300 gal typical for Class 8
     const fuelCapacityGal = 120 + Math.floor(rng() * 120)
 
+    const specs = buildSpecs({
+      make: item.make,
+      year: item.year,
+      trailerType: item.trailerType,
+      rng,
+    })
+    const where = pickCity(rng)
+
     return {
       id: truckIds[idx],
       make: item.make,
@@ -174,6 +191,28 @@ export function buildTruckRows({ rng, truckItems, truckIds }) {
       tire_rear_pct: item.tireRearPct,
       service_notes: item.serviceNotes,
       seller: item.seller,
+
+      // Spec sheet. Derived, never asked of the model -- see
+      // src/constants/truckSpecs.js for why. `rng` is the same seeded
+      // generator the rest of this file uses, so a run is reproducible.
+      vin: specs.vin,
+      engine_make: specs.engineMake,
+      engine_model: specs.engineModel,
+      horsepower: specs.horsepower,
+      transmission: specs.transmission,
+      sleeper: specs.sleeper,
+      suspension: specs.suspension,
+      axle_config: specs.axleConfig,
+      wheelbase_in: specs.wheelbaseIn,
+      front_axle_lbs: specs.frontAxleLbs,
+      rear_axle_lbs: specs.rearAxleLbs,
+      gvwr_lbs: specs.gvwrLbs,
+      has_apu: specs.hasApu,
+      // The truck sits somewhere real. Buying one in Spokane when your
+      // freight runs out of Atlanta is a cost, and the listing should say
+      // so rather than let it be a surprise.
+      location_city: where.city,
+      location_state: where.state,
       posted_at: raw(`now() + interval '${postedOffset} minutes'`),
       expires_at: raw(`now() + interval '${expiresOffset} minutes'`),
       status: 'open',

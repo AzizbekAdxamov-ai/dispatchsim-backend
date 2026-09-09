@@ -5,6 +5,7 @@ import { pool } from '../../db/pool.js'
 import * as truckListingsRepo from './truckListings.repository.js'
 import { AppError } from '../../lib/errors.js'
 import { findCity } from '../../../scripts/seed/cities.js'
+import * as cash from '../cash/cash.service.js'
 
 export async function listOpenListings({ limit }) {
   const listings = await truckListingsRepo.listOpenListings({ limit })
@@ -45,23 +46,31 @@ export async function buyListing({ listingId, userId }) {
     await client.query('BEGIN')
 
     // Insert truck
-    const truck = await truckListingsRepo.insertTruck(client, {
-      id: plate,
-      make: listing.make,
-      model: listing.model,
-      year: listing.year,
-      odometerMi: listing.odometerMi,
-      trailerType: listing.trailerType,
-      fuelCapacityGal: listing.fuelCapacityGal,
-      tireFrontPct: listing.tireFrontPct,
-      tireRearPct: listing.tireRearPct,
-    })
+    // The whole listing goes through: the spec sheet has to survive the
+    // purchase, and naming fifteen fields here would mean adding a
+    // sixteenth in two places the next time one is added.
+    const truck = await truckListingsRepo.insertTruck(client, { ...listing, id: plate })
 
     // Mark listing as bought
     const updated = await truckListingsRepo.buyListing(client, {
       listingId,
       userId,
       truckId: plate,
+    })
+
+    // The money leaves in the SAME transaction as the truck arriving.
+    // A truck on the yard that nobody paid for, or a payment with no
+    // truck, are both worse than the purchase failing outright.
+    // assertCanSpend inside this lets the balance go negative -- that is
+    // the credit line, and the interest is the lesson -- and refuses only
+    // past the limit, where a real lender would decline too.
+    await cash.spend(client, {
+      kind: 'truck_purchase',
+      amountUsd: listing.priceUsd,
+      description: `${listing.year} ${listing.make} ${listing.model} — ${plate}`,
+      refType: 'truck',
+      refId: plate,
+      userId,
     })
 
     if (updated === 0) {

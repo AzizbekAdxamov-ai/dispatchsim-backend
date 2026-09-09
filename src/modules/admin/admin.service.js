@@ -111,6 +111,35 @@ export async function updateUser({ actorId, targetId, roles, rolesProvided, isAd
 // inside its own transaction, for every element of the batch, or two
 // concurrent bulk demotions could still race past each other the same way
 // the comment on lockAdminIds warns about for the single-user case.
+export async function deleteUser({ actorId, targetId }) {
+  // Cannot delete yourself
+  if (targetId === actorId) {
+    throw new AppError('SELF_ADMIN_CHANGE')
+  }
+
+  const deleted = await withTransaction(async (client) => {
+    // Lock every admin row so concurrent deletes can't race past
+    const adminIds = await usersRepo.lockAdminIds(client)
+    const existing = await usersRepo.findById(targetId, client)
+    if (!existing) {
+      return null
+    }
+
+    // Cannot delete the last admin
+    if (existing.isAdmin && adminIds.length <= 1) {
+      throw new AppError('LAST_ADMIN')
+    }
+
+    return usersRepo.deleteUser(client, targetId)
+  })
+
+  if (!deleted) {
+    throw new AppError('USER_NOT_FOUND')
+  }
+
+  return { deleted: true, id: targetId }
+}
+
 export async function bulkAssignRoles({ actorId, userIds, mode, roles }) {
   const results = []
   let updated = 0

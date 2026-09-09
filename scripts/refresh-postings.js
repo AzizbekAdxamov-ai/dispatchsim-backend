@@ -382,6 +382,11 @@ export async function runRefresh() {
     'id', 'make', 'model', 'year', 'odometer_mi', 'price_usd', 'trailer_type',
     'fuel_capacity_gal', 'tire_front_pct', 'tire_rear_pct', 'service_notes',
     'seller', 'posted_at', 'expires_at', 'status',
+    // Spec sheet (migration 020) — derived in seed/trucks.js, not generated.
+    'vin', 'engine_make', 'engine_model', 'horsepower', 'transmission',
+    'sleeper', 'suspension', 'axle_config', 'wheelbase_in',
+    'front_axle_lbs', 'rear_axle_lbs', 'gvwr_lbs', 'has_apu',
+    'location_city', 'location_state',
   ]
   const applicantColumns = [
     'id', 'full_name', 'email', 'phone', 'cdl_class', 'cdl_state',

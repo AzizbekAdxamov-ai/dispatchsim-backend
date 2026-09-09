@@ -123,7 +123,10 @@ export async function insertDriver(client, {
        $1, $2, $3, $4, $5, $6, $7,
        $8, $9, $10, $11,
        $12, $13,
-       $14, NULL,
+       -- A full clock, not NULL. NULL meant collectWarnings compared the
+       -- pickup drive time against nothing, so tight-pickup-window never
+       -- fired for a driver hired through HR.
+       $14, 660,
        $15, $16, $17
      )
      RETURNING id`,

@@ -2,10 +2,21 @@
 // the thread and the agreed rate, broker_messages holds the turns.
 import { query } from '../../db/pool.js'
 
+// rate_con_rate_usd is deliberately ABSENT here.
+//
+// This constant feeds every conversation payload the client receives, and
+// the number on the paper is not the dispatcher's to know until the paper
+// arrives. Shipping it on the Agree response handed away the whole point
+// of the rate confirmation: a broker whose document comes back 3-8% light
+// (replyTiming.rateConAmount) was exposed in the JSON minutes before the
+// message was delivered, so the only reader who ever fell for the trap
+// was one who did not open dev tools.
+//
+// Booking reads it server-side through getAgreedRate, and the PDF prints
+// it once rateConDelivered() says the broker has sent it.
 const CONVERSATION_COLUMNS = `
   c.id, c.posting_id AS "postingId", c.user_id AS "userId",
-  c.agreed_rate_usd AS "agreedRateUsd",
-  c.rate_con_rate_usd AS "rateConRateUsd", c.status,
+  c.agreed_rate_usd AS "agreedRateUsd", c.status,
   c.created_at AS "createdAt", c.updated_at AS "updatedAt"
 `
 
@@ -166,7 +177,6 @@ export async function countTodaysMessages(userId) {
 export async function listConversations(userId) {
   const result = await query(
     `SELECT c.id, c.posting_id AS "postingId", c.agreed_rate_usd AS "agreedRateUsd",
-            c.rate_con_rate_usd AS "rateConRateUsd",
             c.status, c.updated_at AS "updatedAt",
             p.origin_city AS "originCity", p.origin_state AS "originState",
             p.destination_city AS "destinationCity", p.destination_state AS "destinationState",

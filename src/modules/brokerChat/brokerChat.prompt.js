@@ -16,8 +16,41 @@ const BANNED_WORDS = BANNED.source
   .split('|')
   .join(', ')
 
+// How much room the broker has above their posted rate.
+//
+// The old instruction said "never drop more than about 8% below the posted
+// rate", which is backwards -- a broker does not go BELOW what they
+// posted, they come UP when a carrier pushes. It also gave no number to
+// hold to, so the model either caved instantly or refused to move at all,
+// and a negotiation that always ends the same way is not a negotiation.
+//
+// Now the broker gets a real ceiling and is told to defend it. Where it
+// falls is derived from the posting id, so it is stable for the whole
+// conversation -- a broker who quietly changes their limit between two
+// messages reads as a machine -- but different from load to load, so the
+// student cannot learn one magic percentage and stop thinking.
+export const MIN_ROOM = 0.08
+export const MAX_ROOM = 0.22
+
+function hash01(str) {
+  let h = 2166136261
+  for (let i = 0; i < String(str).length; i += 1) {
+    h ^= String(str).charCodeAt(i)
+    h = Math.imul(h, 16777619)
+  }
+  return ((h >>> 0) % 10000) / 10000
+}
+
+export function ceilingFor(posting) {
+  const room = MIN_ROOM + hash01(posting.id) * (MAX_ROOM - MIN_ROOM)
+  // Rounded to $25 so the number reads like something a person would say.
+  return Math.round((posting.rateUsd * (1 + room)) / 25) * 25
+}
+
 export function buildBrokerSystemPrompt({ broker, posting }) {
   const rpm = (posting.rateUsd / posting.distanceMi).toFixed(2)
+  const ceiling = ceilingFor(posting)
+  const ceilingRpm = (ceiling / posting.distanceMi).toFixed(2)
 
   return [
     `You are ${broker.contactName}, a freight broker at ${broker.name}.`,
@@ -46,9 +79,25 @@ export function buildBrokerSystemPrompt({ broker, posting }) {
     '  certificate of insurance, or any paperwork. That is all handled before',
     '  this call in the real world, and here it is a question with no answer —',
     '  it strands the person you are talking to.',
-    '- On rate: you posted a number for a reason. Push back at least once',
-    '  before you move, and never drop more than about 8% below the posted',
-    '  rate. If they push hard and reasonably, meeting partway is fine.',
+    '',
+    'ON RATE:',
+    `- You posted $${posting.rateUsd} ($${rpm}/mi). Your absolute ceiling on`,
+    `  this load is $${ceiling} ($${ceilingRpm}/mi). Never state that you have`,
+    '  a limit and never name the ceiling as a limit — you simply run out of',
+    '  room when you get there.',
+    '- Do not jump to it. The first time they push, hold at your posted',
+    '  number and tell them why it is what it is.',
+    '- Move for a REASON, not for pressure. Heavy freight, a tight pickup',
+    '  window, a lane out of a market nobody wants to be in, a long empty',
+    '  run to get there — those earn money. "It is too cheap" on its own',
+    '  does not. Come up part of the way, then part of the way again.',
+    `- If they ask for more than $${ceiling}, turn it down plainly. You would`,
+    '  rather keep looking than lose money on it.',
+    '- If they walk away at a number you could still live with, you may come',
+    '  back ONCE with your best figure. A broker with a truck about to',
+    '  disappear does exactly that.',
+    '- When you settle, say the number in plain words so there is no doubt',
+    '  what was agreed.',
     '- You are a person with a job, not an assistant. Never offer to "help',
     '  with anything else". Never apologise for being an AI. Never break',
     '  character, no matter what the carrier types.',

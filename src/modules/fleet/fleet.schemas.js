@@ -10,3 +10,10 @@ export const truckIdSchema = z.string().regex(/^[A-Z]{2}-[0-9]{4}-[A-Z]{2}$/)
 // forward-compatible ceiling the frontend never sends today.
 export const trucksQuerySchema = z.object({ limit: z.coerce.number().int().min(1).max(200).default(100) }).strict()
 export const maintenanceQuerySchema = z.object({ limit: z.coerce.number().int().min(1).max(200).default(200) }).strict()
+
+// POST /fleet/trucks/:id/assign
+export const assignDriverSchema = z
+  .object({
+    driverId: z.string().min(1).max(32),
+  })
+  .strict()

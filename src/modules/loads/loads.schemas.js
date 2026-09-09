@@ -7,6 +7,14 @@ import { EQUIPMENT_KEYS } from '../../constants/equipment.js'
 
 const LOAD_STATUSES = ['ontime', 'warn', 'crit', 'neutral', 'done']
 
+// POST /loads/:id/dispatch — the truck is not accepted from the client;
+// it is whichever truck the driver is assigned to, resolved server-side.
+export const dispatchLoadSchema = z
+  .object({
+    driverId: z.string().min(1).max(32),
+  })
+  .strict()
+
 export const listQuerySchema = z
   .object({
     status: z.enum(LOAD_STATUSES).optional(),

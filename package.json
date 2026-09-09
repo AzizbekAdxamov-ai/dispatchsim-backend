@@ -16,13 +16,15 @@
     "seed": "node src/db/seed.js",
     "generate:seed": "node scripts/generate-seed.js",
     "clear:fleet": "node scripts/clear-fleet.js",
+    "reset:company": "node scripts/reset-company.js",
     "refresh:postings": "node scripts/refresh-postings.js",
     "count:postings": "node scripts/count-postings.js",
     "sql:check": "node scripts/sql-check.js",
     "cleanup:legacy": "node scripts/cleanup-legacy.js",
     "chat:smoke": "node scripts/chat-smoke.js",
     "chat:diag": "node scripts/chat-diag.js",
-    "chat:compare": "node scripts/chat-compare.js"
+    "chat:compare": "node scripts/chat-compare.js",
+    "late:proof": "node scripts/late-proof.js"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",

@@ -235,6 +235,19 @@ export async function setActiveRole({ id, role }, client) {
   return result.rows[0] ?? null
 }
 
+// Permanently deletes a user and cascades through user_roles (CASCADE),
+// broker_conversations (CASCADE), broker_checks (CASCADE), and zeroes
+// out references in cash_ledger, driver_applicants, invite_codes,
+// load_postings, truck_listings, user_roles.granted_by (all SET NULL).
+// Must run inside a transaction with lockAdminIds to prevent races.
+export async function deleteUser(client, id) {
+  const result = await client.query(
+    `DELETE FROM users WHERE id = $1 RETURNING id`,
+    [id],
+  )
+  return result.rows[0] ?? null
+}
+
 // Grants admin access by email, for the one-off CLI bootstrap script
 // (scripts/grant-admin.js). Returns the row it updated, or undefined if no
 // user has that email — the caller decides how to report that. Untouched

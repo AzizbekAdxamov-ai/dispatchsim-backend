@@ -14,6 +14,13 @@ const TRUCK_COLUMNS = `
   t.last_fueled_at AS "lastFueledAt", t.last_fueled_location AS "lastFueledLocation",
   t.tire_front_pct AS "tireFrontPct", t.tire_rear_pct AS "tireRearPct",
   t.trailer_type AS "trailerType",
+  -- Spec sheet, carried over from the listing at purchase (migration 020).
+  -- This is the page you check before putting 44,000 lbs behind it.
+  t.vin, t.engine_make AS "engineMake", t.engine_model AS "engineModel",
+  t.horsepower, t.transmission, t.sleeper, t.suspension,
+  t.axle_config AS "axleConfig", t.wheelbase_in AS "wheelbaseIn",
+  t.front_axle_lbs AS "frontAxleLbs", t.rear_axle_lbs AS "rearAxleLbs",
+  t.gvwr_lbs AS "gvwrLbs", t.has_apu AS "hasApu",
   t.created_at AS "createdAt", t.updated_at AS "updatedAt"
 `
 
