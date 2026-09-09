@@ -17,6 +17,10 @@ import { pool } from '../src/db/pool.js'
 // A copy pasted here would pass forever while the original drifted.
 import { INVOICE_CTE } from '../src/modules/finance/finance.repository.js'
 import { DASHBOARD_COUNTS_SQL } from '../src/modules/loads/loads.repository.js'
+// Every export of alerts.sql.js is a statement, and every one of them is
+// checked -- see the loop below. A query added to that module is parsed
+// against the real schema without anyone having to register it here.
+import * as alertSql from '../src/modules/alerts/alerts.sql.js'
 
 const STATEMENTS = [
   ['replacePendingReply', `
@@ -347,6 +351,16 @@ const STATEMENTS = [
   // both read it.
   ['INVOICE_CTE (sim-day aging)', `${INVOICE_CTE} SELECT * FROM invoice_status`],
 ]
+
+// The alerts module registers itself. This is the only block in the file
+// that does not name its statements by hand, and it exists because the
+// hand-written list is the part that rots: someone adds a query, forgets
+// this file, and the checker keeps reporting a clean run it never earned.
+for (const [name, sql] of Object.entries(alertSql)) {
+  if (typeof sql === 'string' && /^\s*(SELECT|INSERT|UPDATE|DELETE|WITH)/i.test(sql)) {
+    STATEMENTS.push([`alerts: ${name}`, sql])
+  }
+}
 
 const client = await pool.connect()
 let failed = 0
