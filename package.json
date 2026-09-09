@@ -24,7 +24,8 @@
     "chat:smoke": "node scripts/chat-smoke.js",
     "chat:diag": "node scripts/chat-diag.js",
     "chat:compare": "node scripts/chat-compare.js",
-    "late:proof": "node scripts/late-proof.js"
+    "late:proof": "node scripts/late-proof.js",
+    "test": "node --test \"test/**/*.test.js\""
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",

@@ -69,10 +69,21 @@ export function interestForPeriod(balanceUsd, simDays) {
   return Math.round(interestForPeriodExact(balanceUsd, simDays))
 }
 
-// The same figure unrounded. The tick charges every 30 seconds, which at
-// -$10,000 is $1.23 -- rounding that up on each tick would bill about a
-// fifth more than the rate says over an hour. The fraction is carried
-// forward in sim_state instead and only whole dollars reach the ledger.
+// The same figure unrounded.
+//
+// The tick charges every 30 real seconds -- a quarter of a simulated day.
+// At -$10,000 the true charge per tick is $1.23, and Math.round drops the
+// $0.23 every single time: about a fifth LESS than the rate says, not
+// more. Worse, below roughly -$4,055 the per-tick figure falls under half
+// a dollar and rounds to zero, so a student carrying a small balance
+// would be charged nothing at all, forever, at an advertised 18% APR.
+//
+// The direction of the error depends on the balance, which is harder to
+// notice than a consistent bias. So the fraction is carried forward in
+// sim_state and only whole dollars ever reach the ledger.
+//
+// (The earlier version of this comment claimed rounding billed a fifth
+// MORE. It was wrong, and stayed wrong until money.test.js measured it.)
 export function interestForPeriodExact(balanceUsd, simDays) {
   if (balanceUsd >= 0 || simDays <= 0) return 0
   return (Math.abs(balanceUsd) * CREDIT_APR * simDays) / 365
