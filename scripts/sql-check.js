@@ -21,6 +21,15 @@ import { DASHBOARD_COUNTS_SQL } from '../src/modules/loads/loads.repository.js'
 // checked -- see the loop below. A query added to that module is parsed
 // against the real schema without anyone having to register it here.
 import * as alertSql from '../src/modules/alerts/alerts.sql.js'
+import * as payrollSql from '../src/modules/payroll/payroll.sql.js'
+import * as driverChatSql from '../src/modules/driverChat/driverChat.sql.js'
+import * as availabilitySql from '../src/modules/availability/availability.sql.js'
+import * as loadEventsSql from '../src/modules/loadEvents/loadEvents.sql.js'
+import * as solvencySql from '../src/modules/cash/solvency.sql.js'
+// reset-company.js cannot be imported -- it wipes on load -- so the query
+// it depends on lives in a module that can be.
+import * as chatBudgetSql from '../src/modules/chat/chatBudget.sql.js'
+import { REACHABLE_SQL } from '../src/db/companyTables.js'
 
 const STATEMENTS = [
   ['replacePendingReply', `
@@ -350,15 +359,38 @@ const STATEMENTS = [
   // and could only ever be 0; the aging buckets and the past-due badge
   // both read it.
   ['INVOICE_CTE (sim-day aging)', `${INVOICE_CTE} SELECT * FROM invoice_status`],
+
+  // --- migration 030. rate_usd is suppressed in the SELECT, excluded from
+  // the rate filter, and sorted last -- three places, because ordering and
+  // filtering leak a number just as surely as printing it does.
+  ['loadBoard: hidden rate is suppressed', `
+    SELECT p.id,
+           CASE WHEN p.rate_hidden THEN NULL ELSE p.rate_usd END AS "rateUsd",
+           p.rate_hidden AS "rateHidden"
+      FROM load_postings p
+     WHERE p.status = 'open'
+       AND (p.rate_hidden = false AND (p.rate_usd::numeric / p.distance_mi) >= $1)
+     ORDER BY p.rate_hidden ASC, (p.rate_usd::numeric / p.distance_mi) DESC`],
+
+  ['brokerChat: the broker still knows the rate', `
+    SELECT p.rate_usd AS "rateUsd", p.rate_hidden AS "rateHidden"
+      FROM load_postings p WHERE p.id = $1`],
+
+  ['refresh: broker relationship history', `
+    SELECT broker, count(*)::int AS n FROM loads GROUP BY broker`],
+
+  ['reset: tables reachable from the company', REACHABLE_SQL],
 ]
 
 // The alerts module registers itself. This is the only block in the file
 // that does not name its statements by hand, and it exists because the
 // hand-written list is the part that rots: someone adds a query, forgets
 // this file, and the checker keeps reporting a clean run it never earned.
-for (const [name, sql] of Object.entries(alertSql)) {
-  if (typeof sql === 'string' && /^\s*(SELECT|INSERT|UPDATE|DELETE|WITH)/i.test(sql)) {
-    STATEMENTS.push([`alerts: ${name}`, sql])
+for (const [label, mod] of [['alerts', alertSql], ['payroll', payrollSql], ['driverChat', driverChatSql], ['availability', availabilitySql], ['loadEvents', loadEventsSql], ['solvency', solvencySql], ['chatBudget', chatBudgetSql]]) {
+  for (const [name, sql] of Object.entries(mod)) {
+    if (typeof sql === 'string' && /^\s*(SELECT|INSERT|UPDATE|DELETE|WITH)/i.test(sql)) {
+      STATEMENTS.push([`${label}: ${name}`, sql])
+    }
   }
 }
 

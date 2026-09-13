@@ -19,6 +19,7 @@
 import 'dotenv/config'
 import { pool } from '../src/db/pool.js'
 import { OPENING_BALANCE_USD } from '../src/constants/simClock.js'
+import { COMPANY_ROOTS, KEEP, REACHABLE_SQL, quoteIdent } from '../src/db/companyTables.js'
 
 const DB_URL = process.env.DATABASE_URL
 if (!DB_URL) {
@@ -36,10 +37,34 @@ const CONFIRM = process.argv.includes('--confirm')
 // Order matters: children before parents, so no FK has to be deferred.
 // broker_conversations cascades from load_postings, but the postings
 // themselves stay -- so the conversations are deleted explicitly.
+//
+// Every table here is named even when ON DELETE CASCADE would have carried
+// it away. Migration 025 is why: it shipped driver_settlements with
+// ON DELETE RESTRICT, and reset stopped working -- not loudly, it just
+// refused to delete drivers, because a settlement was holding them. The
+// fix was a later migration. Nothing about the reset script had to change,
+// which is exactly the problem: reset was correct by accident, and it was
+// a foreign key in another file that decided whether it stayed correct.
+// A named DELETE is a promise this script makes itself; CASCADE is a
+// promise some migration made, possibly years ago, possibly not again.
 const WIPE = [
+  // Chat: messages before conversations, conversations before the driver.
+  ['driver_messages',      'DELETE FROM driver_messages'],
+  ['driver_conversations', 'DELETE FROM driver_conversations'],
   ['broker_messages',      'DELETE FROM broker_messages'],
   ['broker_conversations', 'DELETE FROM broker_conversations'],
   ['broker_checks',        'DELETE FROM broker_checks'],
+
+  // Pay and road events: both hang off loads and drivers.
+  ['driver_settlements',   'DELETE FROM driver_settlements'],
+  ['load_events',          'DELETE FROM load_events'],
+
+  // Acknowledgements. These do NOT cascade -- alert_acks points at users,
+  // and the users survive a company reset. Without this line every alert
+  // the student ever dismissed stays dismissed for a company that no
+  // longer exists: a fresh account, silent about its own first late load.
+  ['alert_acks',           'DELETE FROM alert_acks'],
+
   ['maintenance_records',  'DELETE FROM maintenance_records'],
   ['truck_daily_metrics',  'DELETE FROM truck_daily_metrics'],
   ['loads',                'DELETE FROM loads'],
@@ -47,6 +72,9 @@ const WIPE = [
   ['drivers',              'DELETE FROM drivers'],
   ['cash_ledger',          'DELETE FROM cash_ledger'],
 ]
+
+// The tables above, as a set, for the check that follows the wipe.
+const WIPED = new Set(WIPE.map(([name]) => name))
 
 // Marketplace rows that pointed at something the company owned have to
 // forget it FIRST. Not for tidiness: applicants_hired_clean says
@@ -83,6 +111,10 @@ try {
       (SELECT count(*) FROM broker_conversations)::int AS conversations,
       (SELECT count(*) FROM broker_checks)::int        AS checks,
       (SELECT count(*) FROM cash_ledger)::int          AS ledger,
+      (SELECT count(*) FROM driver_settlements)::int   AS settlements,
+      (SELECT count(*) FROM load_events)::int          AS road_events,
+      (SELECT count(*) FROM driver_conversations)::int AS driver_chats,
+      (SELECT count(*) FROM alert_acks)::int           AS alert_acks,
       (SELECT count(*) FROM load_postings WHERE status = 'booked')::int    AS booked_postings,
       (SELECT count(*) FROM driver_applicants WHERE status = 'hired')::int AS hired_applicants,
       (SELECT count(*) FROM truck_listings WHERE status <> 'open')::int    AS sold_listings
@@ -105,6 +137,43 @@ try {
   for (const [name, sql] of WIPE) {
     const r = await client.query(sql)
     console.log(`  wiped    ${name.padEnd(24)} ${r.rowCount}`)
+  }
+
+  // Everything above ran. Now ask the database whether it agrees that the
+  // company is gone -- before the opening balance is written, so a table
+  // still holding rows is caught while the transaction can still be
+  // rolled back and while cash_ledger is legitimately empty.
+  //
+  // Two different failures are looked for, and they are not the same fact:
+  //
+  //   unknown -- a table hangs off the company but this script has never
+  //   heard of it. It may be empty today because CASCADE emptied it. That
+  //   is not a reset working; that is a reset that happens not to be
+  //   broken yet. It is reported whether or not it holds rows.
+  //
+  //   survived -- a table this script deleted from, or reached, still has
+  //   rows in it after the wipe. Something re-inserted, or a DELETE was
+  //   quietly refused.
+  const reachable = await client.query(REACHABLE_SQL, [COMPANY_ROOTS])
+  const reached = reachable.rows.map((r) => r.table_name)
+
+  const unknown = reached.filter((t) => !WIPED.has(t) && !KEEP.has(t))
+
+  const survived = []
+  for (const table of new Set([...WIPED, ...reached])) {
+    if (KEEP.has(table)) continue
+    const c = await client.query(`SELECT count(*)::int AS n FROM ${quoteIdent(table)}`)
+    if (c.rows[0].n > 0) survived.push(`${table} (${c.rows[0].n})`)
+  }
+
+  if (unknown.length || survived.length) {
+    const lines = []
+    if (survived.length) lines.push(`  wipe qilingandan keyin ham qator bor: ${survived.join(', ')}`)
+    if (unknown.length) {
+      lines.push(`  bu jadvallarni reset skripti bilmaydi: ${unknown.join(', ')}`)
+      lines.push('  ularni scripts/reset-company.js ichidagi WIPE ro\'yxatiga qo\'shing')
+    }
+    throw new Error(`reset to\'liq emas\n${lines.join('\n')}`)
   }
 
   await client.query(

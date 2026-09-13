@@ -8,3 +8,7 @@ node_modules/
 # README "Browsing the database"), so this directory should never exist,
 # but is ignored defensively in case someone runs it by mistake anyway.
 prisma/migrations/
+
+# Qo'lda sinash uchun vaqtincha fayllar. Ular loyihaning bir qismi emas.
+tmp/
+test-rc.pdf

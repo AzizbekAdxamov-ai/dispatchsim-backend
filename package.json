@@ -18,14 +18,17 @@
     "clear:fleet": "node scripts/clear-fleet.js",
     "reset:company": "node scripts/reset-company.js",
     "refresh:postings": "node scripts/refresh-postings.js",
+    "refresh:vocabulary": "node scripts/refresh-vocabulary.js",
     "count:postings": "node scripts/count-postings.js",
     "sql:check": "node scripts/sql-check.js",
     "cleanup:legacy": "node scripts/cleanup-legacy.js",
     "chat:smoke": "node scripts/chat-smoke.js",
     "chat:diag": "node scripts/chat-diag.js",
     "chat:compare": "node scripts/chat-compare.js",
+    "chat:usage": "node scripts/chat-usage.js",
     "late:proof": "node scripts/late-proof.js",
-    "test": "node --test \"test/**/*.test.js\""
+    "test": "node --test \"test/**/*.test.js\"",
+    "mig:status": "node scripts/mig-status.js"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",

@@ -15,6 +15,7 @@
 // tick idempotent in the first place.
 import { Router } from 'express'
 import { runTick } from '../loads/dispatch.service.js'
+import { refreshIfNeeded, OUTCOME } from '../../jobs/dailyRefresh.js'
 import config from '../../config.js'
 import { AppError } from '../../lib/errors.js'
 
@@ -56,7 +57,46 @@ async function handleTick(req, res, next) {
   }
 }
 
+// The daily board refresh, reachable the same way and for the same reason.
+//
+// The comment at the top of this file describes a bug: node-cron only
+// exists inside a process that keeps running, server.js is the only file
+// that starts it, and Vercel never imports server.js -- so on the deployed
+// app the tick never ran. That was found and fixed for the tick.
+//
+// dailyRefresh.js had the identical defect and kept it. startJobs() is
+// called from server.js and nowhere else, so on Vercel no posting was ever
+// refreshed. Nothing would look broken on the day of a deploy: the board
+// is full, because refresh:postings was run by hand before shipping. It
+// empties about twenty-six hours later (POSTING_CONFIG.coverageHours),
+// with no error anywhere, and the app looks like it has no freight.
+//
+// Same shape as the tick: the scheduler calls it, it runs one refresh, it
+// returns. refreshIfNeeded keeps its own cooldown in sim_state, so calling
+// this more often than needed costs a database round trip and does
+// nothing else -- which is what makes it safe to point a once-an-hour
+// scheduler at it and not think about it again.
+async function handleRefresh(req, res, next) {
+  try {
+    const expected = config.opsTickSecret
+    if (!expected) throw new AppError('TICK_NOT_CONFIGURED')
+    const bearer = (req.get('authorization') || '').replace(/^Bearer\s+/i, '')
+    if (req.get('x-ops-secret') !== expected && bearer !== expected) {
+      throw new AppError('UNAUTHORIZED')
+    }
+
+    const outcome = await refreshIfNeeded('http')
+    // The outcome, not a boolean. "refreshed: false" covers three
+    // different situations and only one of them is worth looking into.
+    res.status(200).json({ outcome, refreshed: outcome === OUTCOME.RAN })
+  } catch (err) {
+    next(err)
+  }
+}
+
 router.get('/tick', handleTick)
 router.post('/tick', handleTick)
+router.get('/refresh', handleRefresh)
+router.post('/refresh', handleRefresh)
 
 export default router
