@@ -20,7 +20,14 @@ const POSTING_COLUMNS = `
   p.origin_lat AS "originLat", p.origin_lon AS "originLon",
   p.destination_lat AS "destinationLat", p.destination_lon AS "destinationLon",
   p.broker, p.broker_id AS "brokerId", p.commodity,
-  p.rate_usd AS "rateUsd", p.distance_mi AS "distanceMi", p.weight_lbs AS "weightLbs",
+  -- rate_usd is sent as NULL when the posting is "call for rate".
+  -- Suppressed HERE rather than in the UI: a number that reaches the
+  -- browser has been published, whatever the component chooses to draw,
+  -- and the whole point of this posting is that the student has to ask.
+  -- The broker still knows it -- brokerChat reads the column directly.
+  CASE WHEN p.rate_hidden THEN NULL ELSE p.rate_usd END AS "rateUsd",
+  p.rate_hidden AS "rateHidden",
+  p.distance_mi AS "distanceMi", p.weight_lbs AS "weightLbs",
   p.equipment_type AS "equipmentType", p.equipment_length_ft AS "equipmentLengthFt",
   p.posted_at AS "postedAt", p.expires_at AS "expiresAt",
   p.pickup_at AS "pickupAt", p.delivery_at AS "deliveryAt",
@@ -153,9 +160,20 @@ function buildFilter({ equipmentType, originState, originZone, destinationZone, 
   }
 
   if (minRatePerMile != null) {
-    // rate_per_mile = rate_usd / distance_mi, computed in SQL
+    // rate_per_mile = rate_usd / distance_mi, computed in SQL.
+    //
+    // A hidden-rate posting is EXCLUDED by this filter rather than tested
+    // against its hidden number. Testing it would answer the question the
+    // posting exists to make the student ask: set the minimum to $3.00,
+    // and a "call for rate" load that survives the filter has told you it
+    // pays at least $3.00. Excluding is the honest reading anyway -- the
+    // board does not know the rate, so it cannot say the load clears a
+    // floor. The filter is off by default, and the student can clear it to
+    // see those loads again.
     params.push(minRatePerMile)
-    conditions.push(`(p.rate_usd::numeric / p.distance_mi) >= $${params.length}`)
+    conditions.push(
+      `(p.rate_hidden = false AND (p.rate_usd::numeric / p.distance_mi) >= $${params.length})`,
+    )
   }
 
   if (maxDeadheadMi != null) {
@@ -170,7 +188,15 @@ function buildFilter({ equipmentType, originState, originZone, destinationZone, 
 
 function sortClause(sort) {
   switch (sort) {
-    case 'ratePerMile': return 'ORDER BY (p.rate_usd::numeric / p.distance_mi) DESC'
+    // Hidden-rate postings sort LAST, not by their hidden number.
+    //
+    // Ordering is a channel. Suppressing rate_usd in the SELECT while
+    // still sorting on it would have let a student read the rate off the
+    // row's position -- sort by $/mi, and the "call for rate" load sitting
+    // between a $3.10 and a $3.05 is a $3.07 load. The whole point of the
+    // posting is that the only way to learn the number is to ask for it.
+    case 'ratePerMile':
+      return 'ORDER BY p.rate_hidden ASC, (p.rate_usd::numeric / p.distance_mi) DESC'
     case 'deadhead':    return 'ORDER BY n.deadhead_mi ASC NULLS LAST'
     case 'pickup':      return 'ORDER BY p.pickup_at ASC'
     case 'posted':

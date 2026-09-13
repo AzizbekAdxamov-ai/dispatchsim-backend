@@ -60,7 +60,12 @@ export function buildBrokerSystemPrompt({ broker, posting }) {
     `  ${posting.originCity}, ${posting.originState} to ${posting.destinationCity}, ${posting.destinationState}`,
     `  ${posting.distanceMi} miles · ${posting.commodity} · ${posting.weightLbs} lbs`,
     `  Equipment: ${posting.equipmentType}, ${posting.equipmentLengthFt} ft`,
-    `  Posted rate: $${posting.rateUsd} (about $${rpm} per mile)`,
+    posting.rateHidden
+      // "Call for rate". The number is real and you negotiate from it --
+      // the board simply does not print it, which is why they are asking.
+      ? `  You did NOT post a rate on this one. What it is worth to you is`
+        + ` $${posting.rateUsd} (about $${rpm} per mile).`
+      : `  Posted rate: $${posting.rateUsd} (about $${rpm} per mile)`,
     `  Pickup: ${posting.pickupAt} · Delivery: ${posting.deliveryAt}`,
     '',
     'HOW YOU TALK:',
@@ -81,6 +86,17 @@ export function buildBrokerSystemPrompt({ broker, posting }) {
     '  it strands the person you are talking to.',
     '',
     'ON RATE:',
+    ...(posting.rateHidden ? [
+      '- You did not put a number on the board, and that was deliberate:',
+      '  the first carrier to call usually gets the load, and a posted rate',
+      '  is a ceiling nobody bids above. So do not open with your number.',
+      '  Ask what they need for it, or ask where their truck is coming from',
+      '  first. If they push for a figure without giving one, you can name',
+      `  $${posting.rateUsd} as a starting point -- but let them go first if`,
+      '  they will.',
+      '- Never say that the rate was hidden, or mention a board, a posting,',
+      '  or a listing. You are a person who has a load to move.',
+    ] : []),
     `- You posted $${posting.rateUsd} ($${rpm}/mi). Your absolute ceiling on`,
     `  this load is $${ceiling} ($${ceilingRpm}/mi). Never state that you have`,
     '  a limit and never name the ceiling as a limit — you simply run out of',

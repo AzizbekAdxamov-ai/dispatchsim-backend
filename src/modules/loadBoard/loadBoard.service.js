@@ -6,6 +6,7 @@
 
 import { withTransaction } from '../../db/pool.js'
 import * as loadBoardRepo from './loadBoard.repository.js'
+import * as cash from '../cash/cash.service.js'
 import * as loadsRepo from '../../modules/loads/loads.repository.js'
 import { AppError } from '../../lib/errors.js'
 import { findCity } from '../../../scripts/seed/cities.js'
@@ -116,6 +117,15 @@ export async function bookPosting({ postingId, userId, driverId }) {
 
   try {
     await withTransaction(async (client) => {
+      // Step 0: is the company in a position to take on freight at all?
+      //
+      // A booking costs nothing at the moment it is made, so the cash
+      // guard on spending never sees it -- which is how a company deep
+      // past its credit line could keep accepting loads it had no way to
+      // fund. Fuel and a driver's settlement come due on delivery
+      // whatever the balance says.
+      await cash.assertCanCommit(client, 'booking a load')
+
       // Step 1: Atomic conditional UPDATE (the race-condition gate)
       posting = await loadBoardRepo.bookPostingAtomically(client, postingId, userId)
 

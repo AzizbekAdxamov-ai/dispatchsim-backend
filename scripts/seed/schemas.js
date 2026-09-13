@@ -10,6 +10,7 @@
 import { z } from 'zod'
 import { EQUIPMENT_KEYS } from '../../src/constants/equipment.js'
 import { SERVICE_NAMES } from './services.js'
+import { RATE_ABSOLUTE_MAX } from './validate.js'
 
 // Brokers the AI is allowed to attribute a load to. Closed list (like
 // EQUIPMENT_KEYS) so the model can't invent one.
@@ -47,10 +48,21 @@ export const LoadItem = z
     commodity: z.string().min(3).max(60),
     equipmentType: z.enum(EQUIPMENT_KEYS),
     weightLbs: z.number().int().min(1000).max(45000),
-    // Market band, not the DB's wider CHECK range -- keeps AI output
-    // inside plausible real-world rates so downstream rate*distance
-    // math doesn't need to fight the loads_rpm_band constraint.
-    ratePerMile: z.number().min(1.2).max(4.0),
+    // Bounds taken from validate.js's own multipliers, not typed here.
+    //
+    // These used to read .min(1.2).max(4.0) while rateBandFor() could
+    // return 4.375 for a short-haul tanker -- a rate the pricing model
+    // considers correct and this schema rejected. The AI path never hit it
+    // because it parses BEFORE the clamp: the model was told 1.2-4.0,
+    // obeyed, and the clamp raised the value afterwards. Generating from
+    // the band directly walked straight into it, 18 times in 50,000.
+    //
+    // The floor stays below the band's own minimum on purpose: a model
+    // proposing a cheap rate should be clamped up, not dropped.
+    ratePerMile: z.number().min(1.2).max(RATE_ABSOLUTE_MAX),
+    // Whether the board prints the rate. Optional so the AI path -- which
+    // never produced this field -- still parses; absent means shown.
+    rateHidden: z.boolean().optional(),
   })
   .strict()
 

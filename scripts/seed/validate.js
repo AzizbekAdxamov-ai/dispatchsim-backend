@@ -12,10 +12,24 @@
 // are normalization of a number that's expected to vary).
 import { CITY_KEYS, findCity, roadMiles } from './cities.js'
 
+// The words themselves, as data, so a prompt can tell a model what to
+// avoid. On 2026-09-13 scripts/refresh-vocabulary.js asked Groq for
+// service notes without mentioning this list, and four of seventeen came
+// back with "leak test", "pressure tested", "flow tested". The validator
+// caught them and rejected the batch, which is correct and also a waste:
+// the model was never told. The deleted AI prompts used to carry this
+// list; re-writing them without it lost the instruction.
+export const BANNED_WORDS = Object.freeze([
+  'simulation', 'simulated', 'scenario', 'score', 'scoring',
+  'training', 'test', 'tested', 'ball',
+])
+
 // Product-rules banned-word list (Mahsulot-qoidalari SS2). This is the
 // single definition -- every other file that needs it imports this one,
-// so there is exactly one regex to keep in sync with the rule.
-export const BANNED = /\b(simulation|simulated|scenario|score|scoring|training|test|tested|ball)\b/i
+// so there is exactly one regex to keep in sync with the rule. Built from
+// BANNED_WORDS so the list a prompt shows and the list the checker
+// enforces cannot drift apart.
+export const BANNED = new RegExp(`\\b(${BANNED_WORDS.join('|')})\\b`, 'i')
 
 // Sweeps every string-valued field of a generated item and returns the
 // first field name that matches BANNED, or null if none do. Generic over
@@ -47,6 +61,24 @@ const EQUIPMENT_RATE_MULTIPLIER = {
 }
 const SHORT_HAUL_MAX_MI = 250
 const SHORT_HAUL_MULTIPLIER = 1.25
+
+// The widest band rateBandFor can ever return, computed from the same
+// multipliers rather than typed out beside them.
+//
+// schemas.js bounds LoadItem.ratePerMile with these. Before, the schema
+// said 1.2-4.0 while this function could produce 4.375 for a short-haul
+// tanker -- so a rate this file considered correct was rejected by the
+// validator two steps earlier. Nothing caught it because the AI path
+// parsed BEFORE clamping: the model was told "1.2 to 4.0", obeyed, and
+// the clamp then quietly raised it. A generator that produces the band
+// directly hit the wall the model had been steered around.
+//
+// Derived, so the two can no longer disagree. Change a multiplier and the
+// schema follows.
+const ALL_MULTIPLIERS = [1, ...Object.values(EQUIPMENT_RATE_MULTIPLIER)]
+export const RATE_ABSOLUTE_MIN = BASE_RATE_BAND[0] * Math.min(...ALL_MULTIPLIERS)
+export const RATE_ABSOLUTE_MAX =
+  BASE_RATE_BAND[1] * Math.max(...ALL_MULTIPLIERS) * SHORT_HAUL_MULTIPLIER
 
 export function rateBandFor(equipmentType, distanceMi) {
   const equipmentMultiplier = EQUIPMENT_RATE_MULTIPLIER[equipmentType] ?? 1

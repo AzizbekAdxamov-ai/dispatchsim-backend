@@ -8,6 +8,7 @@
 // same as postings.js and applicants.js. IDs are sequential (t1000, t1001,
 // ...) matching the listings_id_format CHECK.
 
+import { listingPriceUsd } from '../../src/constants/truckValue.js'
 import { raw } from './render.js'
 import { buildSpecs } from '../../src/constants/truckSpecs.js'
 import { CITIES } from './cities.js'
@@ -23,11 +24,11 @@ function pickCity(rng) {
 // Configuration — lifetime is CALCULATED, never hardcoded
 // ---------------------------------------------------------------------
 
-export const TRUCK_CONFIG = {
-  poolTarget: 8,        // kuniga generatsiya
-  visibleTarget: 5,     // bir vaqtda bozorda
-  coverageHours: 26,    // cron 24s + 2s zaxira
-}
+// Five trucks on the market meant the choice was usually "this one or
+// wait". Twelve gives a fleet manager something to compare: age against
+// odometer against price, which is the whole decision.
+export { TRUCK_CONFIG } from './marketTargets.js'
+import { TRUCK_CONFIG } from './marketTargets.js'
 
 // Little qonuni — same formula as postings.js / applicants.js
 const avgLifetimeMin = Math.round(
@@ -160,12 +161,12 @@ export function buildTruckRows({ rng, truckItems, truckIds }) {
       : Math.floor(rng() * (TRUCK_CONFIG.coverageHours * 60 + 1))  // in the future
     const expiresOffset = postedOffset + lifetimeMin
 
-    // Price: correlates with year and odometer — clean trucks cost more
-    const basePrice = 80000 + (item.year - 2015) * 5000
-    const odometerDiscount = Math.floor(item.odometerMi / 10000) * 200
-    const priceUsd = Math.max(5000, Math.min(250000,
-      basePrice - odometerDiscount + Math.floor(rng() * 10000) - 5000
-    ))
+    // Price: age and miles, plus the seller's spread. The model moved to
+    // src/constants/truckValue.js so the solvency test values a fleet the
+    // same way the market prices one -- two answers to "what is this truck
+    // worth" is how a balance sheet ends up disagreeing with the lot it
+    // was bought from.
+    const priceUsd = listingPriceUsd({ year: item.year, odometerMi: item.odometerMi, rng })
 
     // Fuel capacity: 100-300 gal typical for Class 8
     const fuelCapacityGal = 120 + Math.floor(rng() * 120)

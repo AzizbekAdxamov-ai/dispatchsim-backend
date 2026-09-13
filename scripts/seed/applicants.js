@@ -34,11 +34,13 @@ export function emailWithId(rawEmail, id) {
 // Configuration — lifetime is CALCULATED, never hardcoded
 // ---------------------------------------------------------------------
 
-export const APPLICANT_CONFIG = {
-  poolTarget: 20,       // kuniga generatsiya
-  visibleTarget: 6,     // bir vaqtda bozorda ko'rinadigani
-  coverageHours: 26,    // cron 24s + 2s zaxira
-}
+// Six applicants at a time was not a hiring decision, it was a queue.
+// Fifteen is enough that a student can pass on a driver with four
+// violations and still have someone to hire -- which is the point of
+// showing violations at all. Generation is local now, so the old ceiling
+// (every applicant was a share of a model call) no longer applies.
+export { APPLICANT_CONFIG } from './marketTargets.js'
+import { APPLICANT_CONFIG } from './marketTargets.js'
 
 // Little qonuni — same formula as postings.js
 const avgLifetimeMin = Math.round(

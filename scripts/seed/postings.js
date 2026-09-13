@@ -17,11 +17,32 @@ import { raw } from './render.js'
 // Configuration
 // ---------------------------------------------------------------------
 
-export const POSTING_CONFIG = {
-  poolTarget: 200,      // kuniga generatsiya qilinadigan e'lon
-  visibleTarget: 20,    // bir vaqtda board'da ko'rinishi kerak
-  coverageHours: 26,    // pool qancha vaqtni qoplaydi (cron 24s + 2s zaxira)
-}
+// Volume.
+//
+// These were sized when every posting cost a model call: 200 a day was
+// twenty network requests, and asking for more meant asking for more ways
+// to be rate-limited. Generation is local now (seed/generate.js), so the
+// ceiling that shaped these numbers is gone and the only real constraints
+// are how a board should FEEL and what the drip pace should be.
+//
+// 60 visible, because 20 is thin once a zone or an equipment filter is on
+// -- a dispatcher looking at flatbeds out of the Southeast was seeing two
+// or three rows. 600 a day follows from Little's Law at the same average
+// lifetime, and works out to a new posting roughly every two and a half
+// minutes: often enough that the board is alive while you work a load,
+// not so often that it churns while you read one.
+//
+// 600 rows a day against a two-day retention is about 1,200 rows. The
+// database does not notice.
+export { POSTING_CONFIG } from './marketTargets.js'
+import { POSTING_CONFIG } from './marketTargets.js'
+
+// One posting in ten goes up without a price.
+//
+// Not a decoration: it is the only kind of load that cannot be worked by
+// sorting a column. The student has to open the chat and ask, which is
+// how the rate gets negotiated rather than accepted.
+export const HIDDEN_RATE_SHARE = 0.1
 
 // ---------------------------------------------------------------------
 // Tier definitions — the quality spectrum that makes the board educational
@@ -186,6 +207,9 @@ export function buildPostingRows({ rng, postingItems, drivers, trucks, fleetEqui
       broker_id: brokerIds?.get(item.broker) ?? null,
       commodity: item.commodity,
       rate_usd: rateUsd,
+      // The broker's number either way. rate_hidden decides whether the
+      // board prints it; see migration 030.
+      rate_hidden: item.rateHidden === true,
       distance_mi: item.distanceMi,
       weight_lbs: item.weightLbs,
       equipment_type: item.equipmentType,
