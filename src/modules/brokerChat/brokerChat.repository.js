@@ -28,6 +28,11 @@ export async function getPostingWithBroker(postingId) {
     `SELECT p.id, p.origin_city AS "originCity", p.origin_state AS "originState",
             p.destination_city AS "destinationCity", p.destination_state AS "destinationState",
             p.commodity, p.rate_usd AS "rateUsd", p.distance_mi AS "distanceMi",
+            -- The broker knows the number whether or not the board printed
+            -- it. This is the one place rate_usd is read unsuppressed, and
+            -- it is correct: a "call for rate" load has a rate, and the
+            -- whole point is that you have to ask the person who knows it.
+            p.rate_hidden AS "rateHidden",
             p.weight_lbs AS "weightLbs", p.equipment_type AS "equipmentType",
             p.equipment_length_ft AS "equipmentLengthFt",
             p.pickup_at AS "pickupAt", p.delivery_at AS "deliveryAt",
@@ -159,18 +164,10 @@ export async function setAgreedRate(conversationId, userId, rateUsd) {
 
 // Messages this user sent today, for the daily cap. Counts only dispatcher
 // turns — a broker reply is a consequence of one, never its own cost.
-export async function countTodaysMessages(userId) {
-  const result = await query(
-    `SELECT count(*)::int AS n
-       FROM broker_messages m
-       JOIN broker_conversations c ON c.id = m.conversation_id
-      WHERE c.user_id = $1
-        AND m.role = 'dispatcher'
-        AND m.created_at >= date_trunc('day', now())`,
-    [userId],
-  )
-  return result.rows[0].n
-}
+// The per-chat daily counter that used to live here is gone -- see
+// src/modules/chat/chatBudget.sql.js. It counted the broker chat against
+// its own cap of 60 while the driver chat counted itself against another
+// 60, on one key rated for fewer requests than the two of them together.
 
 // The dispatcher's threads, newest activity first. Joined to the posting so
 // the list can show what each conversation is about without N+1 lookups.

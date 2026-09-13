@@ -4,8 +4,10 @@
 // OpenRouter (CHAT_*). Two different cost shapes — the seed is a predictable
 // 22 requests a day, chat is per-message and open-ended — so they get
 // separate budgets, keys and models.
-import { readAiConfig } from '../../../scripts/seed/config.js'
 import { chatText } from '../../../scripts/seed/aiClient.js'
+import { assertCanSend } from '../chat/chatBudget.service.js'
+import { tooLongForChat, CHAT_REPLY_MAX_CHARS } from '../../constants/chatBudget.js'
+import { chatConfigFor } from '../chat/chatProvider.js'
 import { AppError } from '../../lib/errors.js'
 import * as repo from './brokerChat.repository.js'
 import { replyDelaySec, rateConAmount } from './replyTiming.js'
@@ -18,27 +20,10 @@ import {
   FALLBACK_REPLY,
 } from './brokerChat.prompt.js'
 
-// Per-user, per-day cap on dispatcher turns. Not a money guard — at
-// OpenRouter's prices $5 buys tens of thousands of messages — but a guard
-// against a stuck loop or a bored student burning the free tier's 200/day.
-const DAILY_MESSAGE_CAP = 60
-
 // Only the last N turns go to the model. The context window is not the
 // constraint (the free models carry 250K+); a broker who still remembers a
 // throwaway line from forty messages ago does not read like a person.
 const HISTORY_TURNS = 20
-
-function chatConfig() {
-  const { config, errors } = readAiConfig({
-    prefix: 'CHAT',
-    defaults: {
-      baseUrl: 'https://openrouter.ai/api/v1',
-      model: 'minimax/minimax-m3:free',
-    },
-  })
-  if (!config) throw new AppError('CHAT_UNAVAILABLE', errors.join('; '))
-  return config
-}
 
 // The posting has to be live to talk about it: a broker will not discuss a
 // load that has expired or has already gone to someone else. Same
@@ -104,10 +89,12 @@ export async function sendMessage({ conversationId, userId, text }) {
   const posting = await repo.getPostingWithBroker(conversation.postingId)
   assertPostingOpen(posting)
 
-  const sentToday = await repo.countTodaysMessages(userId)
-  if (sentToday >= DAILY_MESSAGE_CAP) throw new AppError('CHAT_DAILY_LIMIT')
+  // Shared with the driver chat and derived from the provider's published
+  // daily limit -- see src/constants/chatBudget.js. One budget, counted
+  // across both, because one key pays for both.
+  await assertCanSend(userId, 'broker')
 
-  const config = chatConfig()
+  const config = chatConfigFor('broker')
 
   // Persist the dispatcher's turn BEFORE calling the model. If the call
   // fails, what they typed is still in the thread — losing a person's own
@@ -136,12 +123,21 @@ export async function sendMessage({ conversationId, userId, text }) {
     //   ("We need to respond as Devin Marlowe...") instead of the broker's
     //   words. Seen live on 2026-08-31 from a 120B model. Nothing destroys
     //   the illusion faster.
-    const unusable = (t) => trippedBannedWord(t) !== null || leaksReasoning(t)
+    //
+    // Too long: the token budget used to enforce this by itself -- a reply
+    //   could not exceed 220 tokens because 220 was all it was given. That
+    //   stopped being true when the budget had to grow to let a reasoning
+    //   model think (src/constants/chatBudget.js). The length rule did not
+    //   go away with it; it moved here, where it is about the REPLY rather
+    //   than about the reply plus whatever the model thought first.
+    const unusable = (t) => trippedBannedWord(t) !== null || leaksReasoning(t) || tooLongForChat(t)
 
     if (unusable(reply)) {
       const why = trippedBannedWord(reply)
         ? 'used a forbidden word'
-        : 'showed your own reasoning instead of speaking as the broker'
+        : leaksReasoning(reply)
+          ? 'showed your own reasoning instead of speaking as the broker'
+          : `ran to ${reply.trim().length} characters when the limit is ${CHAT_REPLY_MAX_CHARS}`
       console.warn(`[brokerChat] retrying — reply ${why}`)
       reply = await chatText({
         messages: buildMessages({
@@ -155,6 +151,17 @@ export async function sendMessage({ conversationId, userId, text }) {
     }
   } catch (err) {
     console.error(`[brokerChat] model call failed: ${err.message}`)
+    // The provider ran out before the app's own budget did. Saying the
+    // broker cannot be reached would be a sentence about a person who is
+    // standing right there; what happened is that the account is out of
+    // requests, which is a different fact with a different answer.
+    if (err.quotaExhausted) {
+      throw new AppError('CHAT_DAILY_LIMIT', {
+        message: "Provayder bugungi so'rovlar limitini tugatdi. Ertaga yangilanadi."
+          + (err.providerMessage ? ` (${err.providerMessage})` : ''),
+        source: 'provider',
+      })
+    }
     throw new AppError('CHAT_UNAVAILABLE')
   }
 

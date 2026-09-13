@@ -44,12 +44,32 @@ To try the pipeline without a key:  npm run generate:seed -- --dry-run`
 // broker conversation (OpenRouter, free-form text). Splitting them matters
 // because the two have completely different cost shapes — the seed is a
 // predictable 22 requests a day, chat is per-message and open-ended.
-export function readAiConfig({ prefix = 'AI', defaults = {} } = {}) {
+// `requireModel` turns an unset model into an error instead of a fallback.
+// The seed generator wants the fallback -- one provider, one model, and a
+// missing var is a convenience, not a mistake. The chat does not: its
+// model is chosen per deployment, it changes when a provider retires one,
+// and a silent fallback there sent every request to an id that had not
+// existed for weeks. The call failed as someone else's 404.
+// `fallbackPrefix` lets one family inherit from another: CHAT_BROKER_MODEL
+// overrides CHAT_MODEL, and anything CHAT_BROKER_* does not set comes from
+// CHAT_*. That is what makes one key work without writing it twice and two
+// keys work without a second code path. A variable set to the empty string
+// counts as unset -- otherwise commenting a value out by emptying it would
+// produce a blank base URL rather than falling through to the shared one.
+export function readAiConfig({ prefix = 'AI', defaults = {}, requireModel = false, fallbackPrefix = null } = {}) {
   const errors = []
-  const env = (suffix) => process.env[`${prefix}_${suffix}`]
+  const raw = (name) => {
+    const v = process.env[name]
+    return typeof v === 'string' && v.trim() !== '' ? v : undefined
+  }
+  const env = (suffix) => raw(`${prefix}_${suffix}`)
+    ?? (fallbackPrefix ? raw(`${fallbackPrefix}_${suffix}`) : undefined)
 
   const baseUrl = (env('BASE_URL') || defaults.baseUrl || DEFAULT_BASE_URL).trim().replace(/\/+$/, '')
-  const model = (env('MODEL') || defaults.model || DEFAULT_MODEL).trim()
+  const rawModel = env('MODEL')
+  const model = requireModel
+    ? (rawModel || '').trim()
+    : (rawModel || defaults.model || DEFAULT_MODEL).trim()
   const apiKey = env('API_KEY') || ''
   const hasKey = apiKey.trim() !== ''
 
@@ -73,7 +93,18 @@ export function readAiConfig({ prefix = 'AI', defaults = {} } = {}) {
   }
 
   if (model === '') {
-    errors.push(`${prefix}_MODEL must not be blank`)
+    // Name both variables. The specific one is where an override goes; the
+    // shared one is where most people will actually set it, and an error
+    // that names only CHAT_BROKER_MODEL sends someone looking for a
+    // variable their .env does not have and was never meant to.
+    const where = fallbackPrefix
+      ? `${prefix}_MODEL (yoki ${fallbackPrefix}_MODEL)`
+      : `${prefix}_MODEL`
+    errors.push(requireModel
+      ? `${where} is not set. No default on purpose: a retired model id as a `
+        + 'default turns every call into someone else\'s 404. '
+        + 'Run `npm run chat:diag` to see which models this key can call.'
+      : `${prefix}_MODEL must not be blank`)
   }
 
   if (errors.length > 0) {

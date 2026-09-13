@@ -9,24 +9,14 @@
 
 import 'dotenv/config'
 import { pool } from '../src/db/pool.js'
-import { readAiConfig } from './seed/config.js'
+import { chatConfigFor } from '../src/modules/chat/chatProvider.js'
+import { CHAT_REPLY_MAX_CHARS } from '../src/constants/chatBudget.js'
+import { FALLBACK_REPLY } from '../src/modules/brokerChat/brokerChat.prompt.js'
 import * as service from '../src/modules/brokerChat/brokerChat.service.js'
 
 const text = process.argv[2] || "Hi — is this load still available? What's your best rate on it?"
 
-const { config, errors } = readAiConfig({
-  prefix: 'CHAT',
-  defaults: { baseUrl: 'https://openrouter.ai/api/v1', model: 'minimax/minimax-m3:free' },
-})
-if (!config) {
-  console.error('Chat is not configured:')
-  for (const e of errors) console.error(`  - ${e}`)
-  console.error('\nAdd to backend/.env:')
-  console.error('  CHAT_BASE_URL=https://openrouter.ai/api/v1')
-  console.error('  CHAT_API_KEY=<your OpenRouter key>')
-  console.error('  CHAT_MODEL=minimax/minimax-m3:free')
-  process.exit(1)
-}
+const config = chatConfigFor('broker')
 console.log(`model : ${config.model}`)
 console.log(`base  : ${config.baseUrl}\n`)
 
@@ -66,12 +56,52 @@ console.log(`thread: ${opened.conversation.id} (${opened.messages.length} existi
 
 console.log(`dispatcher > ${text}\n`)
 const t0 = Date.now()
-const { brokerMessage } = await service.sendMessage({
-  conversationId: opened.conversation.id,
-  userId,
-  text,
-})
-console.log(`${p.contact_name} > ${brokerMessage.content}\n`)
-console.log(`(${Date.now() - t0} ms, ${brokerMessage.content.length} chars)`)
+await service.sendMessage({ conversationId: opened.conversation.id, userId, text })
+const elapsedMs = Date.now() - t0
+
+// sendMessage does NOT return the reply, deliberately: "Handing the caller
+// a message it is not allowed to show yet is how a delay becomes a bug."
+// This script destructured { brokerMessage } from it anyway, and had done
+// since the delayed reply shipped -- every run until 2026-09-13 died
+// earlier, on the model call, so nobody reached the line that would have
+// said so.
+//
+// So the reply is read from where it actually is: written, with a
+// deliver_at in the future. Reading it here is peeking at something the
+// app will not show yet, which is the right thing for a smoke test and the
+// wrong thing for anything else -- hence the plain sentence below saying
+// so, rather than printing it as though a student would have seen it.
+const pending = await pool.query(
+  `SELECT content, deliver_at, kind,
+          greatest(0, extract(epoch FROM (deliver_at - now())))::int AS waits_sec
+     FROM broker_messages
+    WHERE conversation_id = $1 AND role = 'broker'
+    ORDER BY created_at DESC
+    LIMIT 1`,
+  [opened.conversation.id],
+)
+
+if (pending.rowCount === 0) {
+  console.error('Broker javobi yozilmadi. Model chaqiruvi o\'tdi, lekin qator yo\'q.')
+  await pool.end()
+  process.exit(1)
+}
+
+const { content, waits_sec: waits } = pending.rows[0]
+
+console.log(`${p.contact_name} > ${content}\n`)
+console.log(`(model ${elapsedMs} ms, javob ${content.length} belgi)`)
+console.log(`(ilova buni ${waits} soniyadan keyin ko'rsatadi — ${p.credit_rating} reytingli broker shuncha kutdiradi)`)
+
+// What the reply is checked against before it is stored. Printed because a
+// reply that passed is not the same as a reply that passed comfortably: a
+// model sitting just under the length limit on a one-line question will go
+// over it on a harder one.
+const limitPct = Math.round((content.length / CHAT_REPLY_MAX_CHARS) * 100)
+console.log(`(uzunlik chegarasining ${limitPct}% i ishlatildi)`)
+if (content === FALLBACK_REPLY) {
+  console.log('\nDIQQAT: bu zaxira javob. Model ikki marta yaroqsiz javob berdi.')
+  console.log('Sabab yuqoridagi [brokerChat] retrying qatorida.')
+}
 
 await pool.end()
