@@ -121,3 +121,13 @@ export async function unack({ userId, alertKey }) {
   )
   return result.rows[0] ?? null
 }
+
+// Road events waiting on a decision.
+//
+// Asked through the loadEvents repository rather than re-querying
+// load_events here: one owner per table, and OPEN_EVENTS_SQL is already
+// parsed by sql:check as part of that module.
+export async function openRoadEvents() {
+  const { openEvents } = await import('../loadEvents/loadEvents.repository.js')
+  return openEvents()
+}

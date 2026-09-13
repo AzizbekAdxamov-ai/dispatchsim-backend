@@ -25,7 +25,6 @@
 // only if `loads` grows by an order of magnitude.
 
 import { query } from '../../db/pool.js'
-import { LATE_REVEAL_FRACTION } from '../../constants/simClock.js'
 
 const LOAD_COLUMNS = `
   l.id, l.origin_city AS "originCity", l.origin_state AS "originState",
@@ -354,6 +353,15 @@ export async function claimArrivedLoads(client, limit = 1) {
        LEFT JOIN drivers d ON d.id = l.driver_id
       WHERE l.delivered_at IS NULL AND l.eta_at IS NOT NULL AND l.eta_at <= now()
         AND l.status <> 'done'
+        -- A truck sitting on the shoulder waiting for a decision does not
+        -- arrive. Without this an unresolved road event would cost nothing
+        -- -- the load would deliver on time while the driver was still
+        -- reporting a breakdown, and ignoring events would be the winning
+        -- strategy.
+        AND NOT EXISTS (
+              SELECT 1 FROM load_events e
+               WHERE e.load_id = l.id AND e.resolved_at IS NULL
+            )
       ORDER BY l.eta_at
       LIMIT $1
       -- OF l, not a bare FOR UPDATE: PostgreSQL refuses to lock the
@@ -455,19 +463,22 @@ export async function setDriverDriving(client, { driverId }) {
 // Two different facts, two different statuses:
 //
 //   'crit'  the promised delivery time has passed and the load is still
-//           not delivered. This is not a prediction -- it has happened.
+//           not delivered. This has happened; it is not a forecast.
 //
-//   'warn'  the run is going to overshoot the promise, AND the truck is
-//           far enough along that a driver would have called it in.
+//   'warn'  the ETA now runs past the promise. Also not a forecast: since
+//           migration 027 an ETA only moves when a road event is resolved,
+//           so by the time this is true the driver has already called it
+//           in and the dispatcher has already chosen what to do about it.
 //
-// The reveal fraction is the reason for that second clause. eta_at is
-// decided at dispatch, so without it every load that will run late is
-// flagged 'warn' on the first tick after dispatch -- the board would be
-// telling the student the outcome before the road produced it. That is a
-// forecast wearing a fact's clothes, and this project does not ship
-// those. At 0.6 the delay surfaces roughly where a real one does: past
-// the halfway point, with time left to call the broker.
-export async function markLate(client, revealFraction = LATE_REVEAL_FRACTION) {
+// The reveal fraction is gone with delayFactor. It existed because eta_at
+// used to be decided at dispatch, which meant the simulator knew at second
+// zero which loads would run late; publishing that immediately would have
+// put a forecast on the board dressed as a fact, so the flag was held back
+// until 60% of the run. There is nothing to hold back now. Keeping it
+// would have done the opposite harm -- the chat saying "I am stuck in the
+// snow outside Denver" while the board still read on time, two screens
+// disagreeing about the same truck.
+export async function markLate(client) {
   const result = await client.query(
     `UPDATE loads
         SET status = CASE
@@ -478,20 +489,12 @@ export async function markLate(client, revealFraction = LATE_REVEAL_FRACTION) {
         AND promised_eta_at IS NOT NULL
         AND dispatched_at IS NOT NULL
         AND status IN ('ontime', 'warn')
-        AND (
-              now() > promised_eta_at
-              OR (
-                eta_at > promised_eta_at
-                AND now() >= dispatched_at
-                            + (promised_eta_at - dispatched_at) * $1::float8
-              )
-            )
+        AND (now() > promised_eta_at OR eta_at > promised_eta_at)
         AND status <> CASE
               WHEN now() > promised_eta_at THEN 'crit'
               ELSE 'warn'
             END
       RETURNING id, status`,
-    [revealFraction],
   )
   return result.rows
 }

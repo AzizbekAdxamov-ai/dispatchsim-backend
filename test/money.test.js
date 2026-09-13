@@ -9,6 +9,12 @@ import {
   CREDIT_APR,
   msToSimDays,
   REAL_MS_PER_SIM_DAY,
+  billableSimDays,
+  MAX_CATCHUP_REAL_MS,
+  interestForPeriodExactTiered,
+  CREDIT_LIMIT_USD,
+  OVER_LIMIT_APR,
+  DEFAULT_MARGIN,
 } from '../src/constants/simClock.js'
 import { settlementFor, MILES_PER_SETTLEMENT_WEEK } from '../src/constants/driverPay.js'
 
@@ -107,4 +113,86 @@ test('a settlement is never negative and never paid on nothing', () => {
     rateUsd: 100, distanceMi: 25, payModel: 'percent', payPercentBp: 100,
   })
   if (tiny) assert.ok(tiny.net >= 0)
+})
+
+test('a closed laptop does not bankrupt the company', () => {
+  // The defect this guards, observed live on 2026-09-10: interest and
+  // insurance were billed from wall-clock elapsed time while every other
+  // part of the simulator is event-driven and simply catches up once. A
+  // gap of eight real hours is 240 simulated days, so the next tick billed
+  // eight months of interest against a company that had hauled nothing,
+  // collected nothing and delivered nothing during those hours -- because
+  // the tick that does all of that was not running either.
+  //
+  // The log read -$168,584, then -$171,494, then -$171,588, climbing every
+  // tick from a $200,000 opening balance, and no decision the student made
+  // had put it there.
+  const balance = -168584
+  const bill = (ms) => interestForPeriodExact(balance, billableSimDays(ms))
+
+  // A normal tick is unaffected -- the cap must not change ordinary play.
+  const oneTick = bill(30000)
+  assert.ok(Math.abs(oneTick - 20.8) < 1, `bir tick: ${oneTick}`)
+  // Vercel's 60-second cron floor: still exact, still uncapped.
+  assert.ok(Math.abs(bill(60000) - oneTick * 2) < 0.01)
+
+  // Past the line, everything bills the same as the line. Not deferred --
+  // dropped.
+  const atCap = bill(MAX_CATCHUP_REAL_MS)
+  assert.equal(bill(21 * 60000), atCap)
+  assert.equal(bill(8 * 3600000), atCap)
+  assert.equal(bill(30 * 24 * 3600000), atCap)
+
+  // And the cap is small enough to matter: an eight-hour gap used to cost
+  // nearly a hundred times what it now does.
+  const uncappedEightHours = interestForPeriodExact(balance, (8 * 3600000) / 120000)
+  assert.ok(uncappedEightHours / atCap > 90, `nisbat ${uncappedEightHours / atCap}`)
+})
+
+test('billableSimDays refuses a negative or absent gap', () => {
+  // state.lastAt in the future (a clock adjustment, a restored backup)
+  // must not produce a negative charge that pays the company interest.
+  for (const ms of [0, -1, -99999, Number.NaN, null, undefined]) {
+    assert.equal(billableSimDays(ms), 0, `${ms}`)
+  }
+})
+
+// --- the credit line has a limit, and past it the deal changes ---------
+
+test('the first $50,000 is the line; past it carries the default margin', () => {
+  // The balance kept going past the limit and nothing about the deal
+  // changed -- one session sat at -$180,899 accruing at the same contract
+  // rate on a facility exhausted three times over. Two tiers now, which is
+  // how a real facility is written.
+  const day = 1
+
+  // Inside the line: identical to the old single-rate figure.
+  for (const owed of [1, 10000, CREDIT_LIMIT_USD]) {
+    assert.ok(
+      Math.abs(interestForPeriodExactTiered(-owed, day) - interestForPeriodExact(-owed, day)) < 1e-9,
+      `${owed}`,
+    )
+  }
+
+  // Past it: the excess, and only the excess, carries the margin.
+  const over = CREDIT_LIMIT_USD + 30000
+  const expected =
+    (CREDIT_LIMIT_USD * CREDIT_APR + 30000 * OVER_LIMIT_APR) * day / 365
+  assert.ok(Math.abs(interestForPeriodExactTiered(-over, day) - expected) < 1e-9)
+
+  // And it is strictly more than the flat rate would have been.
+  assert.ok(interestForPeriodExactTiered(-over, day) > interestForPeriodExact(-over, day))
+})
+
+test('a company in the black is still charged nothing, tiered or not', () => {
+  for (const bal of [0, 1, 250000]) {
+    assert.equal(interestForPeriodExactTiered(bal, 30), 0)
+  }
+  assert.equal(interestForPeriodExactTiered(-10000, 0), 0)
+  assert.equal(interestForPeriodExactTiered(-10000, -5), 0)
+})
+
+test('the default margin is a term, not a multiplier nobody can find', () => {
+  assert.equal(OVER_LIMIT_APR, CREDIT_APR + DEFAULT_MARGIN)
+  assert.ok(DEFAULT_MARGIN > 0 && DEFAULT_MARGIN < CREDIT_APR)
 })

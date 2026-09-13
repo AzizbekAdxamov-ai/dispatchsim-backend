@@ -9,6 +9,8 @@ import * as cashRepo from '../cash/cash.repository.js'
 import { FAMILIES, isLeavingSoon } from './alerts.catalog.js'
 import { simAgo, realAgo, place } from './alerts.format.js'
 import { CREDIT_LIMIT_USD } from '../../constants/simClock.js'
+import { EVENT_TYPES } from '../../constants/loadEvents.js'
+import * as solvencyService from '../cash/solvency.service.js'
 
 // Build one alert from a catalog family and the row behind it. Anything the
 // family's own functions need has already been shaped by the caller.
@@ -23,6 +25,10 @@ function build(family, entityId, args) {
     fingerprint: String(def.fingerprint(args)),
     href: def.href(args),
     stakeUsd: def.stakeUsd(args),
+    // Whether the load literally cannot proceed until this is answered.
+    // A fact about the work, not a severity: an open road event stops
+    // claimArrivedLoads from ever selecting that load.
+    blocking: Boolean(def.blocking),
   }
 }
 
@@ -43,9 +49,10 @@ async function collect(label, fn, degraded) {
 export async function listAlerts({ userId, now = new Date() }) {
   const degraded = []
 
-  const [loads, unassigned, invoices, drivers, replies, rateCons, applicants, listings, balanceUsd, acks] =
+  const [loads, roadEvents, unassigned, invoices, drivers, replies, rateCons, applicants, listings, balanceUsd, standing, acks] =
     await Promise.all([
       collect('lateLoads', () => repo.lateLoads(), degraded),
+      collect('openRoadEvents', () => repo.openRoadEvents(), degraded),
       collect('unassignedLoads', () => repo.unassignedLoads(), degraded),
       collect('overdueInvoices', () => repo.overdueInvoices(), degraded),
       collect('idleDrivers', () => repo.idleDrivers(), degraded),
@@ -54,6 +61,7 @@ export async function listAlerts({ userId, now = new Date() }) {
       collect('expiringApplicants', () => repo.expiringApplicants(), degraded),
       collect('expiringListings', () => repo.expiringListings(), degraded),
       collect('balance', () => cashRepo.getBalance(), degraded).then((v) => (Array.isArray(v) ? 0 : v)),
+      collect('solvency', () => solvencyService.solvency(), degraded).then((v) => (Array.isArray(v) ? null : v)),
       collect('acks', () => repo.listAcks({ userId }), degraded),
     ])
 
@@ -70,6 +78,14 @@ export async function listAlerts({ userId, now = new Date() }) {
     alerts.push(build(l.status === 'crit' ? 'load.late' : 'load.running-behind', l.loadId, args))
   }
 
+  for (const e of roadEvents) {
+    alerts.push(build('load.event-open', e.loadId, {
+      eventId: e.id, loadId: e.loadId, place: e.place,
+      driverName: e.driverName, rateUsd: e.rateUsd,
+      summary: EVENT_TYPES[e.eventType]?.summary ?? e.eventType,
+    }))
+  }
+
   for (const l of unassigned) {
     alerts.push(build('load.unassigned', l.loadId, {
       loadId: l.loadId, rateUsd: l.rateUsd,
@@ -83,12 +99,16 @@ export async function listAlerts({ userId, now = new Date() }) {
     alerts.push(build('invoice.overdue', i.loadId, i))
   }
 
-  // Cash is one account, so these two never both appear: past the line is
-  // a different fact from simply being under water, not a louder version
-  // of it.
-  if (balanceUsd < 0) {
-    const family = balanceUsd <= -CREDIT_LIMIT_USD ? 'cash.limit-reached' : 'cash.negative'
-    alerts.push(build(family, null, { balanceUsd }))
+  // One account, one alert. The three states are different facts, not
+  // louder versions of each other: under water, past the line, and
+  // insolvent are answered by different numbers and call for different
+  // things.
+  if (standing && standing.state === 'insolvent') {
+    alerts.push(build('cash.insolvent', null, standing))
+  } else if (standing && standing.state === 'over_limit') {
+    alerts.push(build('cash.limit-reached', null, standing))
+  } else if (balanceUsd < 0) {
+    alerts.push(build('cash.negative', null, { balanceUsd }))
   }
 
   for (const d of drivers) {
@@ -134,11 +154,18 @@ export async function listAlerts({ userId, now = new Date() }) {
   const ackByKey = new Map(acks.map((a) => [a.alertKey, a.fingerprint]))
   const visible = alerts.filter((a) => ackByKey.get(a.key) !== a.fingerprint)
 
-  // Ordered by what is at stake in dollars, then oldest first. This is a
-  // fact about each alert, not a severity somebody assigned: the student
-  // can see why a row is where it is, and two people reading the same
-  // board get the same order.
-  visible.sort((a, b) => b.stakeUsd - a.stakeUsd || a.key.localeCompare(b.key))
+  // Blocking first, then by what is at stake in dollars, then by key so
+  // the order is stable.
+  //
+  // Both keys are facts, not severities. "Blocking" means the run cannot
+  // continue until it is answered -- a stopped truck does not arrive, at
+  // any rate -- and the dollar figure is printed on the row, so the
+  // student can see why each one sits where it does and two people reading
+  // the same board get the same order.
+  visible.sort((a, b) =>
+    Number(b.blocking) - Number(a.blocking)
+    || b.stakeUsd - a.stakeUsd
+    || a.key.localeCompare(b.key))
 
   return {
     alerts: visible,

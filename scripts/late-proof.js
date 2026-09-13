@@ -20,7 +20,6 @@
 import 'dotenv/config'
 import { pool } from '../src/db/pool.js'
 import { markLate, DASHBOARD_COUNTS_SQL } from '../src/modules/loads/loads.repository.js'
-import { LATE_REVEAL_FRACTION } from '../src/constants/simClock.js'
 
 // Six ids well outside anything the generator produces.
 const IDS = ['990001', '990002', '990003', '990004', '990005', '990006']
@@ -38,19 +37,19 @@ const CASES = [
   },
   {
     id: '990002',
-    name: 'kechikadi, yoʻlning 66% ida (fosh boʻlgan)',
+    name: 'hodisa ETA ni vaʼdadan nariga surdi',
     dispatchedSec: -200, promisedSec: +100, etaSec: +160,
     delivered: null,
     expect: 'warn',
-    why: `${Math.round(LATE_REVEAL_FRACTION * 100)}% chegarasidan oʻtgan — haydovchi xabar bergan boʻlardi`,
+    why: 'eta vaʼdadan keyin — hodisa hal qilingan, haydovchi allaqachon xabar bergan',
   },
   {
     id: '990003',
-    name: 'kechikadi, lekin endi yoʻlga chiqdi (10%)',
-    dispatchedSec: -30, promisedSec: +270, etaSec: +330,
+    name: 'hodisa yoʻq, eta vaʼdaga teng',
+    dispatchedSec: -30, promisedSec: +270, etaSec: +270,
     delivered: null,
     expect: null,
-    why: 'hali fosh boʻlmagan — buni aytish bashorat boʻlardi, fakt emas',
+    why: 'hech narsa sodir boʻlmadi — kechikish uchun sabab yoʻq',
   },
   {
     id: '990004',

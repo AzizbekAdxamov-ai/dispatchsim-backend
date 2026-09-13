@@ -17,6 +17,8 @@ import brokerChatRoutes from './modules/brokerChat/brokerChat.routes.js'
 import brokerCheckRoutes from './modules/brokerCheck/brokerCheck.routes.js'
 import cashRoutes from './modules/cash/cash.routes.js'
 import alertsRoutes from './modules/alerts/alerts.routes.js'
+import payrollRoutes from './modules/payroll/payroll.routes.js'
+import driverChatRoutes from './modules/driverChat/driverChat.routes.js'
 import opsRoutes from './modules/ops/ops.routes.js'
 import hrRoutes from './modules/hr/hr.routes.js'
 import { notFound } from './middleware/notFound.js'
@@ -49,6 +51,8 @@ app.use('/stats', statsRoutes)
 app.use('/fleet', fleetRoutes)
 app.use('/finance', financeRoutes)
 app.use('/alerts', alertsRoutes)
+app.use('/payroll', payrollRoutes)
+app.use('/driver-chat', driverChatRoutes)
 app.use('/load-board', loadBoardRoutes)
 app.use('/broker-chat', brokerChatRoutes)
 app.use('/broker-check', brokerCheckRoutes)

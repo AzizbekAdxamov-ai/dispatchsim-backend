@@ -25,18 +25,39 @@ async function tick(reason) {
   if (running) return
   running = true
   try {
-    const { delivered, paid, interest } = await runTick()
+    const { delivered, paid, interest, insurance, events } = await runTick()
     if (delivered.length > 0) {
       for (const d of delivered) {
-        console.log(`[opsTick] delivered ${d.id} — fuel $${d.fuelUsd}, driver $${d.payUsd}, invoice due in ${d.dueIn} days`)
+        console.log(`[opsTick] delivered ${d.id} — fuel $${d.fuelUsd}, driver owed $${d.owedUsd}, invoice due in ${d.dueIn} days`)
       }
     }
     if (paid.length > 0) {
       const total = paid.reduce((sum, p) => sum + p.amountUsd, 0)
       console.log(`[opsTick] invoices paid: ${paid.map((p) => p.id).join(', ')} — $${total.toLocaleString()}`)
     }
-    if (interest) {
-      console.log(`[opsTick] interest charged $${interest.amountUsd} on a balance of $${interest.balance.toLocaleString()}`)
+    // One line, everything the tick took, and what it left behind.
+    //
+    // This used to print interest alone. A tick was charging $22 of
+    // interest and $47 of fleet insurance, and only the $22 reached the
+    // screen -- so the balance fell $69 while the log explained a third of
+    // it, and the obvious reading was that the arithmetic was broken. It
+    // was not: two thirds of the money was leaving silently. Every cost a
+    // tick applies is named here now.
+    const costs = []
+    if (interest) costs.push(`interest $${interest.amountUsd}`)
+    if (insurance) costs.push(`insurance $${insurance.amountUsd} (${insurance.trucks} truck${insurance.trucks === 1 ? '' : 's'})`)
+    if (costs.length > 0) {
+      const total = (interest?.amountUsd ?? 0) + (insurance?.amountUsd ?? 0)
+      const balance = insurance?.balance ?? interest?.balance
+      console.log(
+        `[opsTick] -$${total} — ${costs.join(', ')}` +
+        (balance != null ? ` — balance $${balance.toLocaleString()}` : ''),
+      )
+    }
+    if (events.length > 0) {
+      for (const e of events) {
+        console.log(`[opsTick] road event on ${e.loadId} — ${e.eventType} at ${e.place}, waiting on a decision`)
+      }
     }
   } catch (err) {
     // Never let a tick failure take the process down. The next one is

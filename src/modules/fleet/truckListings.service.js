@@ -64,6 +64,12 @@ export async function buyListing({ listingId, userId }) {
     // assertCanSpend inside this lets the balance go negative -- that is
     // the credit line, and the interest is the lesson -- and refuses only
     // past the limit, where a real lender would decline too.
+    // Can the company commit at all? assertCanSpend below asks whether
+    // THIS debit fits the line; this asks whether a company whose
+    // liabilities exceed its assets should be buying another truck. The
+    // lender declines, not the program.
+    await cash.assertCanCommit(client, 'buying a truck')
+
     await cash.spend(client, {
       kind: 'truck_purchase',
       amountUsd: listing.priceUsd,

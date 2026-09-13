@@ -49,6 +49,10 @@ export const ERROR_CODES = {
   BROKER_UNAVAILABLE:     { status: 409, message: 'This posting has no broker on file' },
   CHAT_DAILY_LIMIT:       { status: 429, message: 'Daily message limit reached, try again tomorrow' },
   CHAT_UNAVAILABLE:       { status: 503, message: 'The broker cannot be reached right now' },
+  // The same outage, said about the right person. Reusing the broker's
+  // wording in the driver chat would put a message on screen about someone
+  // the dispatcher is not talking to.
+  DRIVER_UNREACHABLE:     { status: 503, message: 'Cannot reach the driver right now' },
   RATE_OUT_OF_BAND:       { status: 400, message: 'That rate is outside the allowed range for this distance' },
   POSTING_TAKEN:     { status: 409, message: 'This posting has already been booked' },
   POSTING_EXPIRED:   { status: 410, message: 'This posting has expired' },
@@ -76,6 +80,25 @@ export const ERROR_CODES = {
   LOAD_NOT_DISPATCHABLE:  { status: 409, message: 'This load is not waiting to be dispatched' },
   DRIVER_UNAVAILABLE:     { status: 409, message: 'That driver is not available' },
   DRIVER_HAS_NO_TRUCK:    { status: 409, message: 'That driver has no truck assigned' },
+  // Not a validation failure and not a bug. The driver is owed money and
+  // has stopped accepting work. The dispatch button is deliberately NOT
+  // disabled -- this project's rule is consequence over blocking, and a
+  // greyed-out button would teach the student that the simulator will stop
+  // them from making the mistake. The real message is the driver's own,
+  // delivered in chat; this is what the API says while that happens.
+  DRIVER_REFUSED_WORK:    { status: 409, message: 'The driver is not accepting work right now' },
+  // The driver left. Irreversible, the way a resignation is.
+  DRIVER_QUIT:            { status: 409, message: 'That driver no longer works here' },
+  // The lender has stopped advancing. Not a validation failure and not
+  // the program protecting the student from a choice -- a fact about the
+  // facility they agreed to. Details ship in production (see
+  // CODES_WITH_PUBLIC_DETAILS) because "declined" without the numbers is
+  // a decision with its reason removed.
+  CREDIT_LINE_EXHAUSTED:  { status: 409, message: 'The credit line is used up' },
+  // Liabilities exceed assets. The balance-sheet test, not a threshold.
+  COMPANY_INSOLVENT:      { status: 409, message: 'The company is insolvent' },
+  EVENT_NOT_FOUND:        { status: 404, message: 'That road event is no longer open' },
+  EVENT_OPTION_INVALID:   { status: 400, message: 'That is not one of the options for this event' },
 }
 
 export class AppError extends Error {

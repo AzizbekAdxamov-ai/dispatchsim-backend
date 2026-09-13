@@ -76,6 +76,21 @@ export const FAMILIES = Object.freeze({
     stakeUsd: (a) => a.rateUsd,
   },
 
+  'load.event-open': {
+    // BLOCKING. The truck is stopped until this is answered:
+    // claimArrivedLoads skips loads with an open event, so the run does not
+    // continue while it sits here. That is a fact about the load, not a
+    // severity somebody assigned, and it is why these sort first -- see
+    // the sort in alerts.service.js. The comment used to claim this
+    // ordering while the sort did nothing of the kind.
+    blocking: true,
+    title: (a) => `${a.driverName || 'Driver'} is stopped — ${a.summary.toLowerCase()}`,
+    detail: (a) => `Load ${a.loadId} · ${a.place} · waiting on a decision`,
+    fingerprint: (a) => `e${a.eventId}`,
+    href: (a) => `/loads/${a.loadId}`,
+    stakeUsd: (a) => a.rateUsd,
+  },
+
   'load.unassigned': {
     // Booked and paid for, sitting still. The pickup window is NOT quoted
     // here: pickup_at and delivery_at come from the posting on the real
@@ -108,12 +123,30 @@ export const FAMILIES = Object.freeze({
 
   'cash.limit-reached': {
     // $50,000 is a contractual limit, not a threshold somebody chose, so
-    // it is stated as the number it is.
+    // it is stated as the number it is. Past it the company cannot book,
+    // hire or buy -- the lender has stopped advancing -- and the balance
+    // beyond the line carries the default rate.
+    blocking: true,
     title: (a) => `The $${CREDIT_LIMIT_USD.toLocaleString('en-US')} credit line is used up`,
-    detail: (a) => `Balance is -$${Math.abs(a.balanceUsd).toLocaleString('en-US')}`,
+    detail: (a) => `$${Math.abs(a.overLimitUsd).toLocaleString('en-US')} past the line at `
+      + `${(a.aprOverLine * 100).toFixed(0)}% · no new loads, hires or trucks until it is paid down`,
     fingerprint: (a) => cashFingerprint(a.balanceUsd),
     href: () => '/cash',
     stakeUsd: (a) => Math.abs(a.balanceUsd),
+  },
+
+  'cash.insolvent': {
+    // Liabilities exceed assets. The balance-sheet test an accountant
+    // would apply, stated with both sides of it so the student can check
+    // the arithmetic rather than take the program's word.
+    blocking: true,
+    title: () => 'The company is insolvent',
+    detail: (a) => `Owes $${a.liabilitiesUsd.toLocaleString('en-US')} against `
+      + `$${a.assetsUsd.toLocaleString('en-US')} of trucks and receivables`,
+    // One dollar of net worth either way is a different situation.
+    fingerprint: (a) => cashFingerprint(a.netWorthUsd),
+    href: () => '/cash',
+    stakeUsd: (a) => Math.abs(a.netWorthUsd),
   },
 
   'driver.idle': {

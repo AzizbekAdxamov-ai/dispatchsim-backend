@@ -112,6 +112,12 @@ export async function hireApplicant({ applicantId, userId }) {
       // pull, orientation. Small on its own; the point is that hiring
       // five drivers for a fleet with two trucks shows up in the ledger
       // instead of costing nothing.
+      // A driver is a recurring wage, not a one-off fee. Hiring one into
+      // a company that cannot pay the drivers it has is the decision this
+      // refuses -- and the driver who is already owed three weeks will
+      // tell you so in chat.
+      await cash.assertCanCommit(client, 'hiring a driver')
+
       await cash.spend(client, {
         kind: 'driver_onboarding',
         amountUsd: DRIVER_ONBOARDING_USD,

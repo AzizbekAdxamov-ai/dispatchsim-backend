@@ -26,6 +26,19 @@ function isEmailUniqueViolation(err) {
 }
 
 // eslint-disable-next-line no-unused-vars
+// Error codes whose `details` are contract, not debug. Keep this small:
+// anything added here is visible to every client in production.
+const CODES_WITH_PUBLIC_DETAILS = new Set([
+  'DRIVER_REFUSED_WORK',
+  'CREDIT_LINE_EXHAUSTED',
+  'COMPANY_INSOLVENT',
+  // "Daily message limit reached" is a fact with no arithmetic in it. The
+  // student cannot tell whether the whole account ran out or whether four
+  // classmates logged on and their share shrank -- and those call for
+  // different things. The numbers ship.
+  'CHAT_DAILY_LIMIT',
+])
+
 export function errorHandler(err, req, res, next) {
   console.error(err)
 
@@ -52,7 +65,13 @@ export function errorHandler(err, req, res, next) {
     },
   }
 
-  if (!config.isProd && appError.details) {
+  // Details are debug output for most errors and are withheld in
+  // production. For a few they are the answer itself: DRIVER_REFUSED_WORK
+  // carries how much the driver is owed and how long they have waited, and
+  // a dispatcher who only sees "not accepting work right now" has been
+  // told a person's decision without its reason. Those ship everywhere.
+  const detailsArePartOfTheAnswer = CODES_WITH_PUBLIC_DETAILS.has(appError.code)
+  if (appError.details && (detailsArePartOfTheAnswer || !config.isProd)) {
     body.error.details = appError.details
   }
 

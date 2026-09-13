@@ -1,0 +1,20 @@
+// Why a driver will not take a load.
+//
+// Its own file, with no imports, because both a pure module
+// (driverChat.refusal.js) and a database service (availability.service.js)
+// need it. Keeping the enum inside the service dragged db/pool.js -- and
+// therefore DATABASE_URL and JWT_SECRET -- into a file that only builds
+// sentences, and the refusal lines could not be exercised without a
+// running database.
+//
+// Order is the order they are checked. A driver who has quit is gone
+// whatever else is true; unpaid work outranks a rest break, because being
+// owed money is a decision the driver has made and a break is only time
+// passing.
+export const REASONS = Object.freeze({
+  QUIT: 'quit',
+  UNPAID: 'unpaid',
+  RESTING: 'resting',
+})
+
+export const REASON_KEYS = Object.freeze(Object.values(REASONS))

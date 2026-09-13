@@ -16,12 +16,18 @@ import * as cashRepo from '../cash/cash.repository.js'
 const MAX_PER_TICK = 25
 import {
   simDaysToSeconds,
-  msToSimDays,
-  interestForPeriodExact,
+  billableSimDays,
+  interestForPeriodExactTiered,
 } from '../../constants/simClock.js'
 import { TERM_DAYS } from '../../constants/paymentTerms.js'
 import { FUEL_PRICE_PER_GAL, AVG_MPG, MONTHLY_INSURANCE } from '../finance/finance.constants.js'
-import { settlementFor } from '../../constants/driverPay.js'
+import { settlementFor, SETTLEMENT_TERM_SIM_DAYS } from '../../constants/driverPay.js'
+import * as payrollRepo from '../payroll/payroll.repository.js'
+import * as availabilityService from '../availability/availability.service.js'
+import { REASONS } from '../../constants/availabilityReasons.js'
+import { postRefusal } from '../driverChat/driverChat.refusalPost.js'
+import { rollEvents } from '../loadEvents/loadEvents.service.js'
+import * as loadEventsRepo from '../loadEvents/loadEvents.repository.js'
 
 // How long the run takes, in simulated days, from the window the broker
 // promised. Floored at half a day so a short local run still has a
@@ -32,26 +38,20 @@ export function transitDaysFor({ pickupAt, deliveryAt }) {
   return Math.max(0.5, Number.isFinite(days) ? days : 1)
 }
 
-// How the road actually goes.
+// delayFactor is gone, and this note is why.
 //
-// eta_at used to be derived straight from the promised window, so a run
-// could not take longer than promised -- by construction, not by luck.
-// That is why no load in the history of this project has ever reached
-// 'warn' or 'crit': the Delayed tab, the at-risk tile and the on-time
-// percentage were all reading a number that could only ever be 100%.
+// It rolled a load's delay at DISPATCH: eta_at was promised * factor, the
+// number was decided before the truck moved, and nothing ever said what
+// caused it. That was an improvement on what came before it (a load could
+// not be late at all), but it left the student watching a load slide to
+// 'crit' with no cause to look at and nothing to do.
 //
-// Most runs go fine. Some hit weather, a shipper that loads slowly, a
-// scale queue. The distribution is deliberately gentle -- a simulator
-// where a fifth of loads run late teaches learned helplessness, not
-// dispatch.
-export const DELAY_ODDS = Object.freeze({ minor: 0.15, major: 0.05 })
-
-export function delayFactor(rng = Math.random) {
-  const roll = rng()
-  if (roll < DELAY_ODDS.major) return 1.25 + rng() * 0.35   // 25-60% over
-  if (roll < DELAY_ODDS.major + DELAY_ODDS.minor) return 1.05 + rng() * 0.15  // 5-20%
-  return 1
-}
+// Delay now comes from load_events -- weather, a breakdown, detention, a
+// closed road. The driver calls it in, the dispatcher chooses how to
+// handle it, and eta_at moves because of that choice. See
+// src/constants/loadEvents.js. About one load in five still meets
+// something, the same rate delayFactor produced; the difference is that
+// the fifth load now has a reason and a decision in it.
 
 export function fuelCostFor(distanceMi) {
   return Math.round((distanceMi / AVG_MPG) * FUEL_PRICE_PER_GAL)
@@ -73,6 +73,20 @@ export async function dispatchLoad({ loadId, driverId, userId }) {
     if (err.code === '23505' && err.constraint === 'loads_one_active_per_driver_idx') {
       throw new AppError('DRIVER_HAS_ACTIVE_LOAD')
     }
+
+    // A refusal is a thing a person said, so it goes in the conversation
+    // with that person rather than only into a red line under a dropdown.
+    //
+    // AFTER the transaction, not inside it: the dispatch transaction is
+    // rolling back regardless, and a chat write enlisted in it would roll
+    // back with it -- the driver would have refused and said nothing. It
+    // is also fire-and-forget: failing to post the line must not change
+    // what the dispatcher is told about the dispatch itself.
+    if (err instanceof AppError && (err.code === 'DRIVER_REFUSED_WORK' || err.code === 'DRIVER_QUIT')) {
+      await postRefusal({ userId, details: err.details, code: err.code })
+        .catch((e) => console.error('[dispatch] could not post refusal to chat:', e.message))
+    }
+
     throw err
   }
 }
@@ -91,11 +105,53 @@ async function dispatchLoadInner({ loadId, driverId, userId }) {
     if (!driver.truckId) throw new AppError('DRIVER_HAS_NO_TRUCK')
     if (driver.activeLoads > 0) throw new AppError('DRIVER_HAS_ACTIVE_LOAD')
 
+    // Will this person take the load?
+    //
+    // Asked inside the transaction so the answer cannot be stale -- a
+    // payroll run that landed a second ago has already changed it. Nothing
+    // about the driver's willingness is stored in a column: a stored
+    // answer would have to be recomputed on every payment and every tick,
+    // and a stale one would have somebody refusing work over money they
+    // had already been paid.
+    //
+    // The refusal is a fact about a person, not a rule the system is
+    // enforcing. The dispatcher was allowed to try, and the reason arrives
+    // in the driver's own words -- see the catch in dispatchLoad.
+    const availability = await availabilityService.driverAvailability(client, driverId)
+    // Details on this one too, or postRefusal has no driver id and the
+    // person who left says nothing at all in the thread.
+    if (availability.reason === REASONS.QUIT) {
+      throw new AppError('DRIVER_QUIT', {
+        driverId, driverName: driver.name, reason: REASONS.QUIT,
+        owedUsd: availability.standing.owedUsd,
+        daysOverdue: availability.standing.daysOverdue,
+      })
+    }
+    if (!availability.available) {
+      // The reason travels with the refusal. errorHandler ships details
+      // for this code in production too -- see CODES_WITH_PUBLIC_DETAILS
+      // -- because "not accepting work right now" without the numbers is a
+      // person's decision with its reason removed.
+      throw new AppError('DRIVER_REFUSED_WORK', {
+        driverId,
+        driverName: driver.name,
+        reason: availability.reason,
+        owedUsd: availability.standing.owedUsd,
+        daysOverdue: availability.standing.daysOverdue,
+        unpaidCount: availability.standing.unpaidCount,
+        restHoursLeft: availability.restHoursLeft ?? null,
+        requiredRestHours: availability.requiredRestHours ?? null,
+      })
+    }
+
     // The promise is what the broker was told; the ETA is what the road
     // is going to do. They are allowed to differ, and that difference is
     // the only reason a load can ever be late.
+    // The ETA starts equal to the promise. There is nothing to know yet:
+    // a run that meets nothing arrives when it said it would, and every
+    // hour it slips is an event the dispatcher watched happen.
     const promisedDays = transitDaysFor(load)
-    const actualDays = promisedDays * delayFactor()
+    const actualDays = promisedDays
     const dispatched = await loadsRepo.dispatchLoad(client, {
       loadId,
       driverId,
@@ -183,27 +239,47 @@ export async function deliverArrivedLoads() {
           })
         }
 
-        // The driver is paid on delivery, not on collection. A real
-        // carrier settles with the driver this week and waits thirty to
-        // sixty days for the broker; that gap is the squeeze. Paying out
-        // of the broker's money instead would quietly delete it.
+        // The driver EARNS here. They are not paid here.
         //
-        // Same reasoning as fuel: this is a cost that has already been
-        // incurred, so it goes through addEntry and cannot be refused.
+        // This used to write straight into cash_ledger: the money left the
+        // account at delivery, nobody chose to send it, and the dispatcher
+        // never saw it happen. Which meant a driver could never be owed
+        // anything, and a person who is never owed anything can never have
+        // a grievance -- so the single hardest thing about running a small
+        // carrier was quietly handled by the simulator on the student's
+        // behalf.
+        //
+        // What is still true, and is the reason the squeeze exists: the
+        // debt is incurred at DELIVERY, while the broker pays in thirty to
+        // sixty days. Earning here and paying on a payroll run keeps that
+        // gap and adds the decision that sits inside it.
+        //
+        // createSettlement is a no-op when this load already has one --
+        // settlement_one_per_load, not a remembered check -- so the tick
+        // retrying after a failure cannot pay a driver twice.
         const pay = settlementFor(load)
+        let earned = null
         if (pay) {
-          await cashRepo.addEntry(client, {
-            kind: 'settlement',
-            amountUsd: -pay.net,
-            description: `${load.driverName} — load ${load.id}` +
-              (pay.deductions > 0 ? ` (gross $${pay.gross}, deductions $${pay.deductions})` : ''),
-            refType: 'load',
-            refId: load.id,
+          earned = await payrollRepo.createSettlement(client, {
+            driverId: load.driverId,
+            loadId: load.id,
+            grossUsd: pay.gross,
+            deductionsUsd: pay.deductions,
+            netUsd: pay.net,
+            dueSeconds: simDaysToSeconds(SETTLEMENT_TERM_SIM_DAYS),
           })
         }
 
         await loadsRepo.releaseDriver(client, { driverId: load.driverId })
-        handled = { id: load.id, fuelUsd: fuel, payUsd: pay?.net ?? 0, dueIn: termDays }
+        // owedUsd, not payUsd: nothing was paid. The tick's own log line
+        // saying "paid $595" while the driver was still waiting would be
+        // the first place a student learned to distrust it.
+        handled = {
+          id: load.id,
+          fuelUsd: fuel,
+          owedUsd: earned ? pay.net : 0,
+          dueIn: termDays,
+        }
       })
     } catch (err) {
       // One load that cannot be delivered must not stop the ones behind
@@ -274,13 +350,22 @@ export async function chargeInterest() {
     if (!state) return
 
     const now = new Date()
-    const elapsedSimDays = msToSimDays(now.getTime() - state.lastAt.getTime())
+    // Capped. Interest used to be billed from wall-clock elapsed time
+    // while every other part of the simulator is event-driven and just
+    // catches up once -- so a laptop closed for eight hours came back to
+    // 240 simulated days of interest on a company that had hauled nothing
+    // and collected nothing meanwhile. See MAX_CATCHUP_REAL_MS.
+    const elapsedSimDays = billableSimDays(now.getTime() - state.lastAt.getTime())
     if (elapsedSimDays <= 0) return
 
     const balance = await cashRepo.getBalance(client)
     // interestForPeriod returns 0 for a balance at or above zero, so a
     // solvent company accrues nothing -- but the clock still moves.
-    const accrued = state.accruedUsd + interestForPeriodExact(balance, elapsedSimDays)
+    // Tiered. The first $50,000 is the committed line at the contract
+    // rate; anything past it is an unauthorised overdraft and carries the
+    // default margin. Charging one rate on a facility that had been
+    // exhausted three times over was the shape of a bug, not a deal.
+    const accrued = state.accruedUsd + interestForPeriodExactTiered(balance, elapsedSimDays)
     const whole = Math.floor(accrued)
 
     if (whole >= 1) {
@@ -319,7 +404,9 @@ export async function chargeInsurance() {
     if (!state) return
 
     const now = new Date()
-    const elapsedSimDays = msToSimDays(now.getTime() - state.lastAt.getTime())
+    // Capped for the same reason as interest: the fleet is not insured
+    // through a night the simulator spent switched off.
+    const elapsedSimDays = billableSimDays(now.getTime() - state.lastAt.getTime())
     if (elapsedSimDays <= 0) return
 
     const trucks = await cashRepo.countInsurableTrucks(client)
@@ -333,7 +420,9 @@ export async function chargeInsurance() {
         amountUsd: -whole,
         description: `Fleet insurance — ${trucks} truck${trucks === 1 ? '' : 's'}`,
       })
-      charged = { amountUsd: whole, trucks }
+      // The balance AFTER this charge, so the log can state where the
+      // account actually stands rather than where it stood a moment ago.
+      charged = { amountUsd: whole, trucks, balance: await cashRepo.getBalance(client) }
     }
 
     await cashRepo.writeInsuranceState(client, {
@@ -363,7 +452,19 @@ export async function cancelDispatch({ loadId }) {
       throw new AppError('LOAD_NOT_CANCELLABLE')
     }
     await loadsRepo.releaseDriver(client, { driverId })
-    return { load: cancelled }
+
+    // Close any open road event with the cancel, in the same transaction.
+    //
+    // The loads row survives a cancel, so ON DELETE CASCADE never fires and
+    // an open event was simply orphaned. claimArrivedLoads skips loads with
+    // one, so the load could be re-dispatched, would never arrive, would
+    // slide to 'crit', and nothing anywhere said why. Worse, the event was
+    // still resolvable: a $1,450 tow could be charged against a truck that
+    // was not on the road, which is precisely the thing the resolve path's
+    // own comment promises cannot happen.
+    const closed = await loadEventsRepo.closeEventsForLoad(client, loadId)
+
+    return { load: cancelled, eventsClosed: closed.length }
   })
 }
 
@@ -399,6 +500,13 @@ export async function runTick() {
   const paid = (await settle('invoices', payDueInvoices)) ?? []
   const interest = await settle('interest', chargeInterest)
   const insurance = await settle('insurance', chargeInsurance)
+  // Events are rolled AFTER delivery, not before. A load that has already
+  // arrived should not meet a blizzard on the tick that delivers it, and
+  // deliverArrivedLoads skips loads with an open event anyway -- rolling
+  // first would strand a truck that was standing in the receiver's yard.
+  const events = (await settle('events', () => rollEvents())) ?? []
+  // Last, so a load whose ETA just moved is classified on this tick
+  // rather than looking on time for another thirty seconds.
   const late = (await settle('lateness', markLateLoads)) ?? []
-  return { delivered, paid, interest, insurance, late }
+  return { delivered, paid, interest, insurance, events, late }
 }

@@ -217,35 +217,11 @@ export async function listProfitabilityRows() {
   return result.rows
 }
 
-// One row per driver with everything needed to build a settlement: their
-// pay plan, the miles their truck logged in [periodStart, periodEnd], and
-// the linehaul of loads picked up in that window.
-export async function listSettlementInputs({ periodStart, periodEnd }) {
-  const result = await query(
-    `SELECT
-       d.id, d.name, d.pay_model AS "payModel",
-       d.pay_percent_bp AS "payPercentBp", d.pay_per_mile_cents AS "payPerMileCents",
-       t.id AS "truckId",
-       coalesce(tdm.miles, 0)::int AS miles,
-       coalesce(ld.linehaul_usd, 0)::int AS "linehaulUsd",
-       coalesce(ld.load_ids, '{}') AS "loadIds"
-     FROM drivers d
-     LEFT JOIN trucks t ON t.driver_id = d.id
-     LEFT JOIN LATERAL (
-       SELECT sum(distance_mi)::int AS miles
-       FROM truck_daily_metrics
-       WHERE truck_id = t.id AND day BETWEEN $1 AND $2
-     ) tdm ON true
-     LEFT JOIN LATERAL (
-       SELECT sum(rate_usd)::int AS linehaul_usd, array_agg(id ORDER BY id) AS load_ids
-       FROM loads
-       WHERE driver_id = d.id AND pickup_at::date BETWEEN $1 AND $2
-     ) ld ON true
-     ORDER BY d.name ASC`,
-    [periodStart, periodEnd],
-  )
-  return result.rows
-}
+// listSettlementInputs is gone with it. It fed a formula that recomputed
+// driver pay from scratch on the real calendar while the money moved on
+// the compressed one; driver_settlements (migration 025) is the record
+// now, and payroll.sql.js asks it.
+
 
 // Fuel spend for the current calendar month, one row per truck that
 // fueled at all — mirrors maintenance.repository.js's getMaintenanceSummary

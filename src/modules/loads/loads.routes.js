@@ -23,4 +23,10 @@ router.get('/:id', loadsController.getLoad)
 router.post('/:id/dispatch', requireRole('dispatcher'), loadsController.dispatchLoad)
 router.post('/:id/cancel', requireRole('dispatcher'), loadsController.cancelDispatch)
 
+// Road events. Reading them is every role's business -- finance wants to
+// know why $1,450 left the account -- but choosing what to do about one is
+// the dispatcher's job, which is the whole reason the event exists.
+router.get('/:id/events', loadsController.listEvents)
+router.post('/:id/events/:eventId/resolve', requireRole('dispatcher'), loadsController.resolveEvent)
+
 export default router

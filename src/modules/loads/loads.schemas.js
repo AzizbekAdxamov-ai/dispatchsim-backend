@@ -29,3 +29,17 @@ export const listQuerySchema = z
 // migration 007 (4-6 digit reference number) so a malformed id fails as a
 // clean VALIDATION_ERROR instead of reaching the database.
 export const loadIdSchema = z.string().regex(/^[0-9]{4,6}$/)
+
+// The chosen option for a road event. Validated as a shape here; whether
+// the key is one of THIS event's options is decided in the service, which
+// is the only place that knows the event type.
+export const resolveEventSchema = z.object({
+  optionKey: z.string().trim().min(1).max(40),
+})
+
+// load_events.id is a bigserial. Unvalidated, 'abc' reached PostgreSQL and
+// came back as a 500 INTERNAL_ERROR where a 400 belongs -- an error the
+// student cannot act on, describing a mistake they can see.
+export const eventIdSchema = z.object({
+  eventId: z.string().trim().regex(/^[0-9]{1,19}$/, 'eventId must be a number'),
+})

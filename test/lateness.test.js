@@ -9,38 +9,105 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { delayFactor, DELAY_ODDS } from '../src/modules/loads/dispatch.service.js'
 import {
   simDaysToSeconds,
   REAL_SEC_PER_SIM_DAY,
-  LATE_REVEAL_FRACTION,
 } from '../src/constants/simClock.js'
+import {
+  EVENT_CHANCE_PER_LOAD, chanceForFraction, pickEventType,
+  EVENT_KEYS, optionsFor, resolveOption,
+} from '../src/constants/loadEvents.js'
 import { seeded } from './helpers/rng.js'
 
-test('delayFactor is never below 1 -- a run cannot beat its own promise', () => {
-  const rng = seeded(7)
-  for (let i = 0; i < 20000; i += 1) {
-    assert.ok(delayFactor(rng) >= 1)
+test('one load in five meets something, at ANY scheduler cadence', () => {
+  // This is the test that would have caught the shipped defect. The first
+  // version divided the run into ticks using a hardcoded 30-second
+  // cadence; Vercel's cron floor is 60 seconds, so production rolled half
+  // as often and about one load in TEN met something. The old test
+  // asserted the code against its own constant and passed the whole time.
+  //
+  // The rate is now taken from elapsed time, so the number of checks does
+  // not matter. Every count below has to land on the same total.
+  for (const checks of [1, 2, 4, 8, 16, 40, 137]) {
+    let survives = 1
+    for (let i = 0; i < checks; i += 1) survives *= 1 - chanceForFraction(1 / checks)
+    const total = 1 - survives
+    assert.ok(
+      Math.abs(total - EVENT_CHANCE_PER_LOAD) < 1e-9,
+      `${checks} ta tekshiruv: ${(total * 100).toFixed(4)}%`,
+    )
   }
 })
 
-test('delayFactor produces the stated 80/15/5 split', () => {
-  const rng = seeded(42)
-  const N = 100000
-  let onTime = 0
-  let minor = 0
-  let major = 0
-  for (let i = 0; i < N; i += 1) {
-    const f = delayFactor(rng)
-    if (f === 1) onTime += 1
-    else if (f < 1.25) minor += 1
-    else major += 1
+test('uneven checks still add up -- a missed hour does not change the rate', () => {
+  // A deploy, a cold start, a cron that skipped: the fractions between
+  // checks become uneven. They still sum to one run, so the total must not
+  // move.
+  const fractions = [0.05, 0.4, 0.02, 0.33, 0.2]
+  const sum = fractions.reduce((a, b) => a + b, 0)
+  assert.ok(Math.abs(sum - 1) < 1e-9, 'test setup')
+  let survives = 1
+  for (const f of fractions) survives *= 1 - chanceForFraction(f)
+  assert.ok(Math.abs(1 - survives - EVENT_CHANCE_PER_LOAD) < 1e-9)
+})
+
+test('a zero or negative stretch of road meets nothing', () => {
+  // sinceCheckFraction is NULL for a load with no transit window, and
+  // Number(null) is 0. A roll on that must be impossible, not certain.
+  for (const f of [0, -1, Number.NaN, null, undefined]) {
+    assert.equal(chanceForFraction(f), 0, `${f}`)
   }
-  const pct = (n) => (n * 100) / N
-  // 0.5 percentage points at N=100,000 is far outside sampling noise.
-  assert.ok(Math.abs(pct(major) - DELAY_ODDS.major * 100) < 0.5, `major ${pct(major)}%`)
-  assert.ok(Math.abs(pct(minor) - DELAY_ODDS.minor * 100) < 0.5, `minor ${pct(minor)}%`)
-  assert.ok(Math.abs(pct(onTime) - 80) < 0.5, `on time ${pct(onTime)}%`)
+  assert.ok(chanceForFraction(1) > 0 && chanceForFraction(1) < 1)
+  // Clamped: a fraction over 1 cannot exceed the per-load rate.
+  assert.equal(chanceForFraction(5), chanceForFraction(1))
+})
+
+test('every event type can be drawn, and every option is priced', () => {
+  const rng = seeded(4)
+  const seen = new Set()
+  for (let i = 0; i < 20000; i += 1) seen.add(pickEventType(rng))
+  // A type nobody can draw is dead weight that reads as content.
+  assert.equal(seen.size, EVENT_KEYS.length)
+
+  for (const type of EVENT_KEYS) {
+    const options = optionsFor(type)
+    assert.ok(options.length >= 2, `${type} uchun tanlov yo'q`)
+    for (const o of options) {
+      assert.ok(Number.isInteger(o.hours) && o.hours >= 0, `${type}/${o.key}`)
+      assert.ok(Number.isInteger(o.costUsd) && o.costUsd >= 0, `${type}/${o.key}`)
+    }
+  }
+})
+
+test('no option is free of both money and time', () => {
+  // An option with no downside would be the program telling the student
+  // which one to pick. Every choice has to cost hours, dollars, or both.
+  for (const type of EVENT_KEYS) {
+    for (const o of optionsFor(type)) {
+      assert.ok(o.hours > 0 || o.costUsd > 0, `${type}/${o.key} hech narsaga tushmaydi`)
+    }
+  }
+})
+
+test('the faster option is the expensive one, in every event', () => {
+  // Not a rule the code enforces -- a check that the catalogue actually
+  // presents a trade rather than a right answer and a wrong one.
+  for (const type of EVENT_KEYS) {
+    const options = optionsFor(type).filter((o) => !o.accessorialUsd)
+    if (options.length < 2) continue
+    const byHours = [...options].sort((a, b) => a.hours - b.hours)
+    assert.ok(
+      byHours[0].costUsd >= byHours[byHours.length - 1].costUsd,
+      `${type}: tezrog'i arzonroq — bu tanlov emas`,
+    )
+  }
+})
+
+test('an unknown event or option resolves to nothing rather than to zero', () => {
+  // Zero would charge nothing and add no hours while still marking the
+  // event resolved -- a free pass that looks like a working feature.
+  assert.equal(resolveOption('blizzard-of-the-century', 'wait'), null)
+  assert.equal(resolveOption('weather', 'teleport'), null)
 })
 
 // THE test. Not "is the distribution right" -- "can a load be late at all".
@@ -81,13 +148,41 @@ test('simDaysToSeconds returns whole seconds and never zero', () => {
   }
 })
 
-test('the reveal fraction leaves room to act before the promise passes', () => {
-  // A delay revealed at the promise itself is not a warning, it is an
-  // obituary. On the shortest run the sim produces, the student must still
-  // get a usable gap between 'warn' and 'crit'.
-  const shortestWindowSec = simDaysToSeconds(0.5)
-  const revealAt = shortestWindowSec * LATE_REVEAL_FRACTION
-  const roomSec = shortestWindowSec - revealAt
-  assert.ok(roomSec >= 20, `eng qisqa yukda faqat ${roomSec}s qoladi`)
-  assert.ok(LATE_REVEAL_FRACTION > 0 && LATE_REVEAL_FRACTION < 1)
+
+test('the ledger has a word for a tow, and it is not fuel', async () => {
+  // A $1,450 tow booked as 'fuel' would put it in the fuel line of every
+  // expense report and make cost-per-mile quietly wrong -- the same class
+  // of defect as two settlement systems disagreeing: the number is right
+  // and what it is called is not. Migration 027 adds 'road_event'.
+  const { readFile } = await import('node:fs/promises')
+  const sql = await readFile(
+    new URL('../src/db/migrations/027_load_events.sql', import.meta.url), 'utf8',
+  )
+  assert.match(sql, /'road_event'/)
+  // And it has to be in the once-per-reference index, or resolving an
+  // event twice could charge twice even though load_events refuses it.
+  const idx = sql.slice(sql.indexOf('cash_ledger_once_per_ref'))
+  assert.match(idx, /road_event/)
+})
+
+test('a load with an open event does not arrive', async () => {
+  // The mechanic that makes an event a decision rather than a
+  // notification: ignoring one has to cost something. If claimArrivedLoads
+  // still picked up a stopped truck, the load would deliver on time while
+  // the driver was reporting a breakdown, and ignoring events would be the
+  // winning strategy.
+  const { readFile } = await import('node:fs/promises')
+  const src = await readFile(
+    new URL('../src/modules/loads/loads.repository.js', import.meta.url), 'utf8',
+  )
+  // Anchored on the function DECLARATIONS. Slicing between the bare words
+  // took the first mention of markDelivered, which is inside a comment 160
+  // lines earlier -- a backwards slice, an empty string, and a test that
+  // failed for a reason that had nothing to do with the code it checks.
+  const start = src.indexOf('export async function claimArrivedLoads')
+  const end = src.indexOf('export async function markDelivered')
+  assert.ok(start > 0 && end > start, 'funksiyalar topilmadi')
+  const claim = src.slice(start, end)
+  assert.match(claim, /load_events/)
+  assert.match(claim, /resolved_at IS NULL/)
 })

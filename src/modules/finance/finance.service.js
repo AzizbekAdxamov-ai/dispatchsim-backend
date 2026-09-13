@@ -3,6 +3,7 @@
 // repository only returns whole-dollar/integer ingredients.
 
 import * as financeRepo from './finance.repository.js'
+import * as payrollService from '../payroll/payroll.service.js'
 import * as loadsRepo from '../loads/loads.repository.js'
 import { AppError } from '../../lib/errors.js'
 import { money } from '../../lib/money.js'
@@ -12,11 +13,6 @@ import {
   FIXED_COST_PER_MILE,
   FACTORING_RATE,
   MONTHLY_INSURANCE,
-  FUEL_ADVANCE_RATE,
-  FUEL_ADVANCE_CAP_USD,
-  ESCROW_USD,
-  OCCUPATIONAL_INSURANCE_USD,
-  FUEL_CARD_FEE_USD,
   getAssumptions,
 } from './finance.constants.js'
 
@@ -174,73 +170,25 @@ export async function getOverview() {
   }
 }
 
-// Current settlement period: the most recently fully-completed Mon-Sun
-// week. Deliberately not "the last 7 days ending today" — a period must be
-// OVER before it can be settled.
-function currentSettlementPeriod() {
-  const now = new Date()
-  const dayOfWeek = now.getUTCDay() // 0 = Sunday
-  const daysSinceLastSunday = dayOfWeek === 0 ? 7 : dayOfWeek
-  const periodEnd = new Date(now)
-  periodEnd.setUTCHours(0, 0, 0, 0)
-  periodEnd.setUTCDate(periodEnd.getUTCDate() - daysSinceLastSunday)
-  const periodStart = new Date(periodEnd)
-  periodStart.setUTCDate(periodStart.getUTCDate() - 6)
-  return { periodStart, periodEnd }
-}
-
-function buildSettlement(row, { periodStart, periodEnd }) {
-  const linehaulUsd = row.linehaulUsd
-  const gross =
-    row.payModel === 'percent'
-      ? money((linehaulUsd > 0 ? linehaulUsd : row.miles * 0.55) * (row.payPercentBp / 10000))
-      : row.payPerMileCents != null
-        ? money(row.miles * (row.payPerMileCents / 100))
-        : 0
-
-  const deductions = [
-    { label: 'Fuel advance', amountUsd: money(Math.min(gross * FUEL_ADVANCE_RATE, FUEL_ADVANCE_CAP_USD)) },
-    { label: 'Escrow', amountUsd: ESCROW_USD },
-    { label: 'Occupational insurance', amountUsd: OCCUPATIONAL_INSURANCE_USD },
-    { label: 'Fuel card fee', amountUsd: FUEL_CARD_FEE_USD },
-  ]
-  const deductionTotalUsd = money(deductions.reduce((sum, d) => sum + d.amountUsd, 0))
-
-  // See the plan's Finance table: a settlement is `paid` once its period
-  // is more than a week old, `pending` otherwise. For the DEFAULT
-  // (current) period this is always `pending` by construction — the
-  // branch only fires for a period requested further in the past.
-  const oneWeekAgo = new Date()
-  oneWeekAgo.setUTCDate(oneWeekAgo.getUTCDate() - 7)
-  const status = periodEnd < oneWeekAgo ? 'paid' : 'pending'
-
-  return {
-    driverId: row.id,
-    driver: row.name,
-    truckId: row.truckId,
-    payModel: row.payModel,
-    miles: row.miles,
-    grossUsd: gross,
-    deductions,
-    deductionTotalUsd,
-    netPayUsd: money(gross - deductionTotalUsd),
-    status,
-    loadIds: row.loadIds,
-  }
-}
-
+// Settlements moved to the payroll module.
+//
+// What used to live here was a second, incompatible pay system. It
+// recomputed gross with a formula the ledger never used (falling back to
+// `miles * 0.55`), applied a Fuel advance deduction that no payment ever
+// charged, ran on real calendar weeks while the money moved on the
+// compressed one, and derived status as `periodEnd < oneWeekAgo` -- which
+// for the current period is false by construction, so every settlement the
+// student could see read 'pending' and could never read anything else.
+//
+// Meanwhile the actual money left the account through settlementFor() at
+// delivery. Two numbers described one payment and the visible one was the
+// invented one. driver_settlements (migration 025) is now the single
+// record: what was earned, what is owed, what was paid, and when.
+//
+// This function stays so /finance/settlements keeps working; it is a
+// forward, not a second implementation.
 export async function listSettlements() {
-  const { periodStart, periodEnd } = currentSettlementPeriod()
-  const rows = await financeRepo.listSettlementInputs({
-    periodStart: periodStart.toISOString().slice(0, 10),
-    periodEnd: periodEnd.toISOString().slice(0, 10),
-  })
-
-  return {
-    settlements: rows.map((row) => buildSettlement(row, { periodStart, periodEnd })),
-    periodStart: periodStart.toISOString().slice(0, 10),
-    periodEnd: periodEnd.toISOString().slice(0, 10),
-  }
+  return payrollService.listSettlements()
 }
 
 export async function listExpenses() {

@@ -34,18 +34,50 @@ export function msToSimDays(ms) {
   return ms / REAL_MS_PER_SIM_DAY
 }
 
-// How far into a run a delay becomes visible.
+// LATE_REVEAL_FRACTION lived here and is gone with delayFactor.
 //
-// eta_at is decided at dispatch, so the simulator knows at second zero
-// which loads will overshoot. Publishing that immediately would put a
-// forecast on the board dressed as a fact -- the student would see
-// 'warn' before the truck had moved. A driver notices the scale queue
-// and the weather somewhere past the middle of the run, and calls it in
-// then. 0.6 of the promised window is that point.
+// It held a lateness flag back until 60% of a run, because eta_at used to
+// be decided at dispatch and the simulator therefore knew at second zero
+// which loads would run late. Publishing that immediately would have put a
+// forecast on the board dressed as a fact.
 //
-// It does not affect 'crit': a promise that has already passed is an
-// observed fact and needs no delay before it is stated.
-export const LATE_REVEAL_FRACTION = 0.6
+// Since migration 027 an ETA only moves when a road event is resolved, so
+// by the time a load is running late the driver has already called it in.
+// There is nothing left to hold back, and holding it back would now do the
+// opposite harm: the chat saying "I am stuck in the snow" while the board
+// still read on time.
+
+// How much simulated time one tick is allowed to bill for.
+//
+// The bug this exists to stop: interest and insurance were charged from
+// WALL-CLOCK elapsed time, while everything else in the simulator is
+// event-driven and simply catches up once. Close the laptop for eight real
+// hours and the next tick bills 240 simulated days of interest and eight
+// months of fleet insurance -- against a company that hauled nothing,
+// collected nothing, and delivered nothing during those eight hours,
+// because the tick that does all of that was not running either.
+//
+// One session's log: -$168,584, then -$171,494, then -$171,588, climbing
+// every tick from an opening balance of $200,000. The credit line is
+// $50,000; the company was three and a half times past it and no decision
+// the student made had put it there.
+//
+// Five real minutes is the line. The tick is meant to run every 30 real
+// seconds locally and every 60 on Vercel, whose cron floor that is; even a
+// slow cold start does not take five minutes. A longer gap means the
+// simulator was not running, so nothing in this world happened, and the
+// company should not be billed for it. The skipped time is DROPPED, not
+// deferred -- lastAt moves to now either way.
+export const MAX_CATCHUP_REAL_MS = 5 * 60 * 1000
+export const MAX_CATCHUP_SIM_DAYS = MAX_CATCHUP_REAL_MS / REAL_MS_PER_SIM_DAY
+
+// Simulated days to bill for, given how long since the last charge.
+// Returns the elapsed time, or the cap when the gap says the simulator was
+// asleep.
+export function billableSimDays(elapsedMs) {
+  if (!(elapsedMs > 0)) return 0
+  return Math.min(elapsedMs, MAX_CATCHUP_REAL_MS) / REAL_MS_PER_SIM_DAY
+}
 
 // ---------------------------------------------------------------------
 // Money
@@ -62,6 +94,34 @@ export const OPENING_BALANCE_USD = 200000
 // small carriers, and it cannot be taught by a disabled button.
 export const CREDIT_LIMIT_USD = 50000
 export const CREDIT_APR = 0.18
+
+// What the money costs once the line is used up.
+//
+// The balance kept going past -$50,000 and nothing about the deal changed.
+// Interest accrued at the same 18% on a facility that had been exhausted
+// three times over, compounding against a company with no revenue -- one
+// observed session sat at -$180,899 and fell $69 every thirty seconds with
+// nothing in transit. A real lender does not watch that happen at the
+// contract rate.
+//
+// Two tiers, which is how a real facility is actually written: the first
+// $50,000 is the committed line and carries the contract rate. Anything
+// beyond it is an unauthorised overdraft and carries the contract rate
+// plus a default margin. Six points is the usual shape of a default clause
+// in a US commercial credit agreement -- it is stated here as a term of
+// THIS facility rather than as a universal figure.
+export const DEFAULT_MARGIN = 0.06
+export const OVER_LIMIT_APR = CREDIT_APR + DEFAULT_MARGIN
+
+// Interest for `simDays`, split across the two tiers. Unrounded; the tick
+// carries the fraction forward in sim_state.
+export function interestForPeriodExactTiered(balanceUsd, simDays) {
+  if (balanceUsd >= 0 || simDays <= 0) return 0
+  const owed = Math.abs(balanceUsd)
+  const withinLine = Math.min(owed, CREDIT_LIMIT_USD)
+  const overLine = Math.max(0, owed - CREDIT_LIMIT_USD)
+  return ((withinLine * CREDIT_APR) + (overLine * OVER_LIMIT_APR)) * simDays / 365
+}
 
 // Interest owed for `simDays` spent at `balanceUsd` below zero, in whole
 // dollars. 0 when the account is in the black.
