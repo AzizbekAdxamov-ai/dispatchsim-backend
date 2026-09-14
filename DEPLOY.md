@@ -34,6 +34,17 @@ NODE_ENV=production
 OPS_TICK_SECRET=<uzun tasodifiy satr — tick va refresh uchun>
 CRON_SECRET=<OPS_TICK_SECRET bilan BIR XIL>
 
+# Ro'yxatdan o'tgan yangi foydalanuvchi qaysi rolni oladi.
+#
+# Qo'yilmasa — HECH QANDAY rol olmaydi va Pending sahifasida qoladi.
+# Bu xato emas, shunday mo'ljallangan: yopiq kurs uchun invite kod
+# ishlatiladi. Lekin ochiq test uchun bu degani — birinchi testchi
+# ro'yxatdan o'tadi va hech narsa qila olmaydi, chunki rol beradigan
+# admin hali yo'q.
+#
+# Ruxsat etilgan qiymatlar: dispatcher, hr, finance, fleet-manager
+DEFAULT_ROLE=dispatcher
+
 AI_BASE_URL=https://api.groq.com/openai/v1
 AI_API_KEY=<groq kaliti>
 AI_MODEL=qwen/qwen3.8-27b
@@ -42,6 +53,32 @@ CHAT_BASE_URL=https://openrouter.ai/api/v1
 CHAT_API_KEY=<openrouter kaliti>
 CHAT_MODEL=<chat:diag topgan model>
 ```
+
+## 1a. Frontend uchun ham bitta o'zgaruvchi
+
+Frontend backend manzilini `VITE_API_URL` dan oladi, standarti
+`http://localhost:4000`. Vercel'da qo'yilmasa, deploy qilingan frontend
+ishlab chiquvchining kompyuteridagi backendga urinadi — va foydalanuvchi
+uchun bu "hech narsa yuklanmayapti" bo'lib ko'rinadi, hech qanday xatosiz.
+
+Frontend loyihasining Environment Variables bo'limida:
+
+```
+VITE_API_URL=https://<backend>.vercel.app
+```
+
+⚠️ `VITE_*` o'zgaruvchilari **qurilish vaqtida** bog'lanadi, ishlash
+vaqtida emas. Ya'ni o'zgartirgandan keyin **qayta deploy** qilish shart —
+o'zgaruvchini qo'yib qo'yishning o'zi yetarli emas.
+
+Ikkala manzil bir-biriga kerak (backend'ga `CORS_ORIGIN`, frontend'ga
+`VITE_API_URL`), shuning uchun tartib shunday:
+
+1. Ikkalasini ham deploy qiling (manzillar ma'lum bo'ladi)
+2. O'zgaruvchilarni qo'ying
+3. Ikkalasini ham qayta deploy qiling
+
+---
 
 `CRON_SECRET` — Vercel cron `Authorization: Bearer <CRON_SECRET>` yuboradi.
 `OPS_TICK_SECRET` — tashqi rejalashtiruvchi `x-ops-secret` yuboradi. Marshrut ikkalasini
@@ -78,6 +115,23 @@ npm run prod -- refresh:postings
 
 Busiz birinchi foydalanuvchi bo'sh board ko'radi. `/ops/refresh` keyin o'zi davom
 ettiradi.
+
+## 3a. Birinchi admin (ixtiyoriy, lekin tavsiya etiladi)
+
+`DEFAULT_ROLE=dispatcher` bilan har kim dispecher bo'ladi. Lekin kimgadir
+HR yoki Moliyachi rolini qo'shish, yoki foydalanuvchilarni ko'rish uchun
+admin kerak.
+
+Avval ilovada ro'yxatdan o'ting, keyin:
+
+```
+npm run prod -- grant:admin sizning@email.com
+```
+
+Bu bir marta qilinadi. Keyingi adminlarni admin panelidan tayinlash
+mumkin.
+
+---
 
 ## 4. Tashqi rejalashtiruvchi (tick)
 
