@@ -53,17 +53,27 @@ bermaydi.
 
 ## 2. Migratsiyalar
 
-Lokal baza emas, **production bazasiga** qarshi:
+Lokal baza emas, **production bazasiga** qarshi. Parolni qo'lda yozish
+kerak emas — `.env` ichidagi `DATABASE_URL_PROD` ishlatiladi:
 
 ```
-DATABASE_URL=<production url> npm run migrate
-DATABASE_URL=<production url> npm run sql:check
+npm run prod -- mig:status      # avval: nima qo'llangan, nima yo'q
+npm run prod -- migrate
+npm run prod -- sql:check       # 89
 ```
+
+`npm run prod` bitta buyruqni production bazasiga qarshi ishga tushiradi
+va qaysi hostga borayotganini boshida aytadi. `DATABASE_URL` ning o'zi
+hech qachon o'zgarmaydi — u lokal baza bo'lib qoladi.
+
+Ma'lumot o'chiradigan buyruqlar (`reset:company`, `clear:fleet`, `seed`,
+`cleanup:legacy`) bu yo'l bilan **umuman ishlamaydi**. Bu ataylab: eng
+qimmat xato — noto'g'ri bazaga yuborilgan reset.
 
 ## 3. Board'ni birinchi marta to'ldirish
 
 ```
-DATABASE_URL=<production url> npm run refresh:postings
+npm run prod -- refresh:postings
 ```
 
 Busiz birinchi foydalanuvchi bo'sh board ko'radi. `/ops/refresh` keyin o'zi davom

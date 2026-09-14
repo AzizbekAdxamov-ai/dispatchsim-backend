@@ -28,7 +28,8 @@
     "chat:usage": "node scripts/chat-usage.js",
     "late:proof": "node scripts/late-proof.js",
     "test": "node --test \"test/**/*.test.js\"",
-    "mig:status": "node scripts/mig-status.js"
+    "mig:status": "node scripts/mig-status.js",
+    "prod": "node scripts/prod.js"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",
