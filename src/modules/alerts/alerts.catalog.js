@@ -11,14 +11,14 @@
 //    does not belong in this file.
 //
 // 2. THE DATA MUST BE ALIVE. Before adding an alert, check that something
-//    WRITES the column it reads. trucks.fuel_pct is set once at purchase
-//    and never again; drivers.hos_remaining_min is only ever set to 660;
-//    maintenance_records and truck_daily_metrics have no runtime writer at
-//    all. A low-fuel warning or an HOS countdown built on those would be
-//    a permanent lie -- either always silent or always shouting -- and
-//    would look exactly as correct as the lateness check that could never
-//    fire. Those alerts are deliberately absent. When a writer exists,
-//    they can be added here in one place.
+//    WRITES the column it reads. drivers.hos_remaining_min is only ever set
+//    to 660; nothing writes drivers' hours, so an HOS countdown is still a
+//    permanent lie. trucks.fuel_pct, tire wear and truck_daily_metrics now
+//    DO have a runtime writer -- dispatch.service.js's applyRunToTruck,
+//    since the truck-wear work (migration 032) -- so low-fuel and tire
+//    alerts are now POSSIBLE; they are still not added here until a session
+//    shows the numbers moving enough to be worth a family. An alert on data
+//    that moves once a week reads as either silence or spam.
 //
 // The fingerprint decides when an acknowledgement stops applying. Each
 // family answers one question: what would have to change for this to be a

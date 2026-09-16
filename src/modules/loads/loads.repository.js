@@ -348,7 +348,19 @@ export async function claimArrivedLoads(client, limit = 1) {
             -- paid in a second pass could be paid twice, or not at all.
             d.name AS "driverName", d.pay_model AS "payModel",
             d.pay_percent_bp AS "payPercentBp",
-            d.pay_per_mile_cents AS "payPerMileCents"
+            d.pay_per_mile_cents AS "payPerMileCents",
+            -- The truck the run wore down, and the window the run spanned.
+            -- dispatched_at/pickup_at/delivery_at feed the sim-day spread;
+            -- truck_id can be NULL on a load dispatched before trucks were
+            -- linked, and the caller checks for that rather than catching.
+            l.truck_id AS "truckId", l.dispatched_at AS "dispatchedAt",
+            l.pickup_at AS "pickupAt", l.delivery_at AS "deliveryAt",
+            -- Detour miles a resolved event added. They burn fuel, wear
+            -- tires and land on the odometer -- but are NOT in
+            -- distance_mi, which stays the contracted lane. See
+            -- loadEvents.service.js resolve().
+            (SELECT coalesce(sum(e.extra_miles), 0)::int FROM load_events e
+              WHERE e.load_id = l.id) AS "extraMiles"
        FROM loads l
        LEFT JOIN drivers d ON d.id = l.driver_id
       WHERE l.delivered_at IS NULL AND l.eta_at IS NOT NULL AND l.eta_at <= now()

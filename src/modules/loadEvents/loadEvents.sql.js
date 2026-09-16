@@ -4,11 +4,26 @@
 // already stopped by an unresolved event. Elapsed fraction comes back with
 // them so the caller can say where the driver is without inventing a
 // position -- drivers.current_location has no runtime writer.
+//
+// serviceOverdue: the truck pulling this load has crossed a service interval
+// nobody has completed (status <> 'done', odometer at or past the due
+// mileage). A truck in that state is taken out of the normal event mix and
+// always meets a breakdown -- see rollEvents. NOT EXISTS so one overdue
+// record is read once per load, not once per row of the join.
 export const IN_TRANSIT_LOADS_SQL = `
   SELECT l.id, l.driver_id AS "driverId", l.distance_mi AS "distanceMi",
          l.origin_city AS "originCity", l.origin_state AS "originState",
          l.destination_city AS "destinationCity", l.destination_state AS "destinationState",
          l.dispatched_at AS "dispatchedAt", l.promised_eta_at AS "promisedEtaAt",
+         EXISTS (
+           SELECT 1
+             FROM trucks t
+             JOIN maintenance_records m ON m.truck_id = t.id
+            WHERE t.id = l.truck_id
+              AND m.status <> 'done'
+              AND m.due_mileage IS NOT NULL
+              AND t.odometer_mi >= m.due_mileage
+         ) AS "serviceOverdue",
          EXTRACT(EPOCH FROM (now() - l.dispatched_at))
            / NULLIF(EXTRACT(EPOCH FROM (l.eta_at - l.dispatched_at)), 0) AS "elapsedFraction",
          -- How much of the run has passed SINCE THIS LOAD WAS LAST ROLLED.

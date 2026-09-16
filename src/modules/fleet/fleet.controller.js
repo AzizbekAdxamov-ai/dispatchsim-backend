@@ -3,7 +3,10 @@
 // route is already behind requireAuth + requireRole('fleet-manager') (see
 // fleet.routes.js).
 
-import { truckIdSchema, trucksQuerySchema, maintenanceQuerySchema } from './fleet.schemas.js'
+import {
+  truckIdSchema, trucksQuerySchema, maintenanceQuerySchema,
+  refuelSchema, serviceIdSchema,
+} from './fleet.schemas.js'
 import * as fleetService from './fleet.service.js'
 
 export async function listTrucks(req, res) {
@@ -21,5 +24,18 @@ export async function getTruck(req, res) {
 export async function listMaintenance(req, res) {
   const input = maintenanceQuerySchema.parse(req.query)
   const result = await fleetService.listMaintenance(input)
+  res.status(200).json(result)
+}
+
+export async function refuel(req, res) {
+  const id = truckIdSchema.parse(req.params.id)
+  const { toPct } = refuelSchema.parse(req.body ?? {})
+  const result = await fleetService.refuel({ truckId: id, toPct, userId: req.auth.userId })
+  res.status(200).json(result)
+}
+
+export async function completeService(req, res) {
+  const id = serviceIdSchema.parse(req.params.id)
+  const result = await fleetService.performService({ recordId: id, userId: req.auth.userId })
   res.status(200).json(result)
 }

@@ -99,6 +99,11 @@ export const ERROR_CODES = {
   COMPANY_INSOLVENT:      { status: 409, message: 'The company is insolvent' },
   EVENT_NOT_FOUND:        { status: 404, message: 'That road event is no longer open' },
   EVENT_OPTION_INVALID:   { status: 400, message: 'That is not one of the options for this event' },
+  // POST /fleet/maintenance/:id/complete targeted an id that doesn't exist.
+  SERVICE_NOT_FOUND:      { status: 404, message: 'Service record not found' },
+  // ...or one that is already 'done'. 409, not 404: the record exists and
+  // the conflict is with a decision already made -- and billed.
+  SERVICE_ALREADY_DONE:   { status: 409, message: 'This service is already completed' },
 }
 
 export class AppError extends Error {

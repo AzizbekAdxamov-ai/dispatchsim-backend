@@ -18,6 +18,12 @@ router.get('/trucks', fleetController.listTrucks)
 router.get('/trucks/:id', fleetController.getTruck)
 router.get('/maintenance', fleetController.listMaintenance)
 
+// The two decisions that keep a fleet on the road. Both cost money and both
+// are the fleet manager's call -- consequences, not blocks: a low tank and
+// an open service record never disable anything, they just cost.
+router.post('/trucks/:id/refuel', fleetController.refuel)
+router.post('/maintenance/:id/complete', fleetController.completeService)
+
 // Truck listings (market)
 router.get('/truck-listings', truckListingsController.listOpenListings)
 router.get('/truck-listings/:id', truckListingsController.getListing)

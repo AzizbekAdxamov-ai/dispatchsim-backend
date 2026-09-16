@@ -223,17 +223,17 @@ export async function listProfitabilityRows() {
 // now, and payroll.sql.js asks it.
 
 
-// Fuel spend for the current calendar month, one row per truck that
-// fueled at all — mirrors maintenance.repository.js's getMaintenanceSummary
-// "current month" window so fuel and maintenance expenses line up on the
-// same period.
+// Fuel spend for the current SIMULATED calendar month, one row per truck
+// that fueled at all — mirrors maintenance.repository.js's
+// getMaintenanceSummary "current month" window so fuel and maintenance
+// expenses line up on the same period. Both sides sim days (032).
 export async function listFuelExpenseRows() {
   const result = await query(
     `SELECT t.id AS "truckId", t.current_location AS "location",
             sum(m.fuel_gallons)::int AS "fuelGallons"
      FROM truck_daily_metrics m
      JOIN trucks t ON t.id = m.truck_id
-     WHERE date_trunc('month', m.day) = date_trunc('month', current_date)
+     WHERE date_trunc('month', m.day) = date_trunc('month', sim_today())
      GROUP BY t.id, t.current_location
      HAVING sum(m.fuel_gallons) > 0
      ORDER BY t.id ASC`,
@@ -241,14 +241,14 @@ export async function listFuelExpenseRows() {
   return result.rows
 }
 
-// Completed maintenance jobs billed in the current calendar month — same
-// window maintenance.repository.js's monthCostUsd uses.
+// Completed maintenance jobs billed in the current SIMULATED calendar
+// month — same window maintenance.repository.js's monthCostUsd uses.
 export async function listMaintenanceExpenseRows() {
   const result = await query(
     `SELECT id, truck_id AS "truckId", service, last_service_date AS "lastServiceDate", cost_usd AS "costUsd"
      FROM maintenance_records
      WHERE status = 'done' AND cost_usd IS NOT NULL
-       AND date_trunc('month', last_service_date) = date_trunc('month', current_date)
+       AND date_trunc('month', sim_day(last_service_date)) = date_trunc('month', sim_today())
      ORDER BY last_service_date DESC`,
   )
   return result.rows
@@ -272,12 +272,12 @@ export async function getWeeklyRevenue(weeks) {
 }
 
 // Weekly fuel gallons (all trucks), same trailing window, for the expense
-// half of cashFlowTrend[].
+// half of cashFlowTrend[]. Sim days — the rows are sim days.
 export async function getWeeklyFuelGallons(weeks) {
   const result = await query(
     `SELECT date_trunc('week', day)::date AS week, sum(fuel_gallons)::int AS "fuelGallons"
      FROM truck_daily_metrics
-     WHERE day >= current_date - ($1 * 7)
+     WHERE day >= sim_today() - ($1 * 7)
      GROUP BY 1
      ORDER BY 1`,
     [weeks],
@@ -285,12 +285,14 @@ export async function getWeeklyFuelGallons(weeks) {
   return result.rows
 }
 
-// Weekly completed-maintenance cost, same trailing window.
+// Weekly completed-maintenance cost, same trailing window. The cost's own
+// date goes through sim_day() so both sides of the comparison sit on the
+// same clock.
 export async function getWeeklyMaintenanceCost(weeks) {
   const result = await query(
-    `SELECT date_trunc('week', last_service_date)::date AS week, sum(cost_usd)::int AS "costUsd"
+    `SELECT date_trunc('week', sim_day(last_service_date))::date AS week, sum(cost_usd)::int AS "costUsd"
      FROM maintenance_records
-     WHERE status = 'done' AND last_service_date >= current_date - ($1 * 7)
+     WHERE status = 'done' AND sim_day(last_service_date) >= sim_today() - ($1 * 7)
      GROUP BY 1
      ORDER BY 1`,
     [weeks],

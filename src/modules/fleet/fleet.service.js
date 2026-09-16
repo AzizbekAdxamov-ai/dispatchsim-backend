@@ -1,4 +1,4 @@
-// Business logic for the /fleet/* read endpoints. Combines
+// Business logic for the /fleet/* endpoints. Combines
 // trucks.repository.js, maintenance.repository.js and metrics.repository.js
 // — no SQL lives here, only shaping and the delta/cost-breakdown math.
 
@@ -8,6 +8,82 @@ import * as metricsRepo from './metrics.repository.js'
 import { AppError } from '../../lib/errors.js'
 import { withDelta } from '../../lib/delta.js'
 import { FUEL_PRICE_PER_GAL, FIXED_COST_PER_MILE } from '../finance/finance.constants.js'
+import { withTransaction } from '../../db/pool.js'
+import * as cash from '../cash/cash.service.js'
+import { OIL_SERVICE_COST_USD } from '../../constants/truckWear.js'
+
+// Fill the tank toward `toPct` and bill ONLY what went in.
+//
+// Diesel bought at the pump is the money event, and it is the mirror of
+// delivery: there the ledger paid for the burn the tank did not cover, here
+// the ledger pays for the gallons the pump adds. One dollar, one place.
+//
+// Nothing is charged when the tank is already at or past the requested
+// level: returning a row saying "gallonsAdded: 0, charged $0" states the
+// fact without inventing a sale.
+export async function refuel({ truckId, toPct, userId }) {
+  return withTransaction(async (client) => {
+    const truck = await trucksRepo.lockTruckForRun(client, truckId)
+    if (!truck) throw new AppError('TRUCK_NOT_FOUND')
+
+    const toGallons = Math.round((truck.fuelCapacityGal * toPct) / 100)
+    const updated = await trucksRepo.refuelTruck(client, { truckId, toGallons })
+    if (!updated) throw new AppError('TRUCK_NOT_FOUND')
+
+    // fromTank was read under the same lock the UPDATE ran under, so
+    // gallonsAdded cannot race with a concurrent delivery's burn.
+    const gallonsAdded = Math.max(0, updated.gallonsAfter - truck.fuelGallons)
+    let chargedUsd = 0
+    if (gallonsAdded > 0) {
+      chargedUsd = Math.round(gallonsAdded * FUEL_PRICE_PER_GAL)
+      await cash.spend(client, {
+        kind: 'fuel',
+        amountUsd: chargedUsd,
+        description: `Fuel — ${gallonsAdded} gal into ${truckId}`,
+        refType: 'truck',
+        refId: truckId,
+        userId,
+      })
+    }
+
+    return {
+      truckId,
+      fuelPct: toPct,
+      gallonsAdded,
+      chargedUsd,
+    }
+  })
+}
+
+// Complete an open service record: the work is done, the money leaves.
+// Refuses silently-done work with SERVICE_ALREADY_DONE rather than
+// returning quietly -- a row that reports success for work that was already
+// billed teaches the student that the second click was free.
+export async function performService({ recordId, userId }) {
+  return withTransaction(async (client) => {
+    const record = await maintenanceRepo.completeService(client, {
+      recordId,
+      costUsd: OIL_SERVICE_COST_USD,
+    })
+    if (!record) {
+      // Distinguish "never existed" from "already done" -- a 404 and a 409
+      // are different facts about what the caller just did.
+      const exists = await maintenanceRepo.getById(recordId)
+      if (!exists) throw new AppError('SERVICE_NOT_FOUND')
+      throw new AppError('SERVICE_ALREADY_DONE')
+    }
+
+    await cash.spend(client, {
+      kind: 'maintenance',
+      amountUsd: OIL_SERVICE_COST_USD,
+      description: `${record.service} — ${record.truckId}`,
+      refType: 'maintenance_record',
+      refId: String(record.id),
+      userId,
+    })
+    return { id: record.id, truckId: record.truckId, service: record.service, costUsd: OIL_SERVICE_COST_USD }
+  })
+}
 
 export async function listTrucks({ limit }) {
   const [trucks, summary] = await Promise.all([
@@ -89,3 +165,4 @@ export async function listMaintenance({ limit }) {
   const { monthCostUsd, ...counts } = summary
   return { records, meta: { counts, monthCostUsd } }
 }
+

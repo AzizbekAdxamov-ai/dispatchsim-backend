@@ -17,3 +17,15 @@ export const assignDriverSchema = z
     driverId: z.string().min(1).max(32),
   })
   .strict()
+
+// POST /fleet/trucks/:id/refuel. `toPct` is the target gauge reading; the
+// default fills the tank. Accepted rather than judged: 40% is as valid a
+// choice as 100%.
+export const refuelSchema = z.object({
+  toPct: z.coerce.number().int().min(0).max(100).default(100),
+}).strict()
+
+// POST /fleet/maintenance/:id/complete — no body. The id is in the path and
+// the cost is the sourced constant; a body would be an invitation to price
+// the work by hand.
+export const serviceIdSchema = z.string().uuid()

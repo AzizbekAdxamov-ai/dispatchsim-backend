@@ -6,6 +6,15 @@
 
 import { query } from '../../db/pool.js'
 
+import { DAILY_DISTANCE_CAP_MI, DAILY_GALLONS_CAP, TIRE_LIFE_FRONT_MI, TIRE_LIFE_REAR_MI } from '../../constants/truckWear.js'
+import {
+  LOCK_TRUCK_FOR_RUN_SQL, APPLY_RUN_TO_TRUCK_SQL, REFUEL_TRUCK_SQL,
+} from './fleet.sql.js'
+
+// The CHECK bounds these constants must agree with live in migrations 006
+// and 009; test/truckWear.test.js reads those files and fails if the numbers
+// here ever drift from them.
+
 const TRUCK_COLUMNS = `
   t.id, t.make, t.model, t.year, t.odometer_mi AS "odometerMi", t.status,
   t.driver_id AS "driverId", t.current_location AS "currentLocation",
@@ -68,3 +77,47 @@ export async function getTruckSummary() {
   )
   return result.rows[0]
 }
+
+// ---------------------------------------------------------------------
+// What a run does to the truck (migration era 032+)
+// ---------------------------------------------------------------------
+// Every function here takes the transaction's client. A truck updated
+// outside the delivery transaction is a truck updated for a load the tick
+// may retry -- the odometer would climb twice while the ledger shows one
+// delivery.
+
+// Row-level lock, held to the end of the caller's transaction. Two ticks
+// overlapping on two loads for the same truck serialize here; the second
+// sees the odometer the first already wrote.
+export async function lockTruckForRun(client, truckId) {
+  const result = await client.query(LOCK_TRUCK_FOR_RUN_SQL, [truckId])
+  return result.rows[0] ?? null
+}
+
+// One UPDATE per delivery, not four. fuel_pct is recomputed in the same
+// statement from the same gallons that are being written -- two columns,
+// one fact, and no window where the gauge and the tank disagree. The
+// odometer cap mirrors trucks_odometer's 2,000,000 bound: a truck that
+// reaches it is a fleet that has run this simulator far past any lesson,
+// and the cap keeps a long-lived company from wedging every future
+// delivery on a CHECK violation.
+export async function applyRunToTruck(client, {
+  truckId, roadMiles, gallonsFromTank, frontTirePoints, rearTirePoints,
+}) {
+  const result = await client.query(APPLY_RUN_TO_TRUCK_SQL, [
+    truckId, roadMiles, gallonsFromTank, frontTirePoints, rearTirePoints,
+  ])
+  return result.rows[0] ?? null
+}
+
+// Fill the tank toward `toGallons`, never past the tank. Returns the tank
+// level AFTER the fill; the caller computes gallonsAdded against the level
+// it read under lock before calling (a RETURNING expression cannot mix the
+// old and new values of one column). Returns null when the truck does not
+// exist.
+export async function refuelTruck(client, { truckId, toGallons }) {
+  const result = await client.query(REFUEL_TRUCK_SQL, [truckId, toGallons])
+  return result.rows[0] ?? null
+}
+
+export { DAILY_DISTANCE_CAP_MI, DAILY_GALLONS_CAP, TIRE_LIFE_FRONT_MI, TIRE_LIFE_REAR_MI }

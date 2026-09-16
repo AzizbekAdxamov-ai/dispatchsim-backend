@@ -56,7 +56,13 @@ export async function rollEvents({ rng = Math.random, limit = 50 } = {}) {
     if (!(fraction > 0)) continue
     if (rng() >= chanceForFraction(fraction)) continue
 
-    const eventType = pickEventType(rng)
+    // A truck sent out past its service interval does not roll the dice on
+    // WHAT it meets -- only on WHEN. The chance above is unchanged (Q5 in
+    // the plan: no new probability, a changed outcome); the overdue truck's
+    // event is always a breakdown, the one failure mode an unserviced truck
+    // actually produces. No blocking, no disabled dispatch: the consequence
+    // is the shoulder.
+    const eventType = load.serviceOverdue ? 'breakdown' : pickEventType(rng)
     const place = placeFor(load, Number(load.elapsedFraction))
 
     try {

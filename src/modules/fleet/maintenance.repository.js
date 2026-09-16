@@ -3,6 +3,7 @@
 // `maintenance_records` directly.
 
 import { query } from '../../db/pool.js'
+import { OPEN_SERVICE_DUE_SQL, COMPLETE_SERVICE_SQL } from './fleet.sql.js'
 
 const MAINT_COLUMNS = `
   m.id, m.truck_id AS "truckId", m.service, m.status,
@@ -29,10 +30,16 @@ export async function listMaintenance({ limit = 200, offset = 0 } = {}) {
 }
 
 // meta.counts for GET /fleet/maintenance's tab strip, plus monthCostUsd:
-// completed work whose last_service_date falls in the current calendar
-// month, the same total FleetMaintenance.jsx's monthly-cost figure adds up
-// by hand from `cost` on `done` records (see maint_done_complete in
+// completed work whose last_service_date falls in the current SIMULATED
+// calendar month, the same total FleetMaintenance.jsx's monthly-cost figure
+// adds up by hand from `cost` on `done` records (see maint_done_complete in
 // migration 008 — `done` always has both a date and a cost).
+//
+// Both sides of the comparison are sim dates (032): date_trunc('month',
+// sim_today()) on one side and sim_day() on the other. With one side left
+// on the real calendar the window would only be open for the first few
+// minutes of every real month and "this month" would silently mean
+// "almost never".
 export async function getMaintenanceSummary() {
   const result = await query(
     `SELECT
@@ -42,7 +49,7 @@ export async function getMaintenanceSummary() {
        count(*) FILTER (WHERE status = 'scheduled')::int          AS scheduled,
        count(*) FILTER (WHERE status = 'done')::int                AS done,
        coalesce(sum(cost_usd) FILTER (
-         WHERE status = 'done' AND date_trunc('month', last_service_date) = date_trunc('month', now())
+         WHERE status = 'done' AND date_trunc('month', sim_day(last_service_date)) = date_trunc('month', sim_today())
        ), 0)::int AS "monthCostUsd"
      FROM maintenance_records`,
   )
@@ -58,14 +65,44 @@ export async function getWeeklyCostByTruckId(truckId) {
   const result = await query(
     `SELECT
        coalesce(sum(cost_usd) FILTER (
-         WHERE last_service_date >= (current_date - 7) AND last_service_date < current_date
+         WHERE sim_day(last_service_date) >= (sim_today() - 7) AND sim_day(last_service_date) < sim_today()
        ), 0)::int AS "currentUsd",
        coalesce(sum(cost_usd) FILTER (
-         WHERE last_service_date >= (current_date - 14) AND last_service_date < (current_date - 7)
+         WHERE sim_day(last_service_date) >= (sim_today() - 14) AND sim_day(last_service_date) < (sim_today() - 7)
        ), 0)::int AS "previousUsd"
      FROM maintenance_records
      WHERE truck_id = $1 AND status = 'done'`,
     [truckId],
   )
   return result.rows[0]
+}
+
+// ---------------------------------------------------------------------
+// Writes (migration 032 era) — the service decides, the tick only opens
+// ---------------------------------------------------------------------
+// One record by id, for distinguishing "no such record" from "already
+// done" in the service layer's error mapping.
+export async function getById(recordId) {
+  const result = await query(
+    `SELECT ${MAINT_COLUMNS} FROM maintenance_records m WHERE m.id = $1`,
+    [recordId],
+  )
+  return result.rows[0] ?? null
+}
+
+// Open the work the odometer just made due. ON CONFLICT against
+// maint_one_per_truck_service_mileage (032) is what makes the tick safe to
+// run twice: the second delivery crossing the same multiple inserts nothing.
+// Returns the row it opened, or null when one was already open.
+export async function openServiceDue(client, { truckId, service, dueMileage, dueDate }) {
+  const result = await client.query(OPEN_SERVICE_DUE_SQL, [truckId, service, dueDate, dueMileage])
+  return result.rows[0] ?? null
+}
+
+// Mark the work finished and billed. Conditional on an open status so a
+// second click (or a second tab) reads zero rows and the caller raises
+// SERVICE_ALREADY_DONE rather than billing twice.
+export async function completeService(client, { recordId, costUsd }) {
+  const result = await client.query(COMPLETE_SERVICE_SQL, [recordId, costUsd])
+  return result.rows[0] ?? null
 }
