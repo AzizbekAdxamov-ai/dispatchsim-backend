@@ -30,17 +30,21 @@ if (!script) {
   process.exit(1)
 }
 
-// Bularni production'da ishga tushirish deyarli har doim xato bo'ladi, va
-// ularning har biri ma'lumot yo'qotadi. Skript ro'yxatga tayanmaydi —
-// o'sha skriptlarning o'zida ham himoya bor (localhost bo'lmagan host
-// uchun --allow-remote talab qilinadi) — lekin bu yerda to'xtash
-// arzonroq: xato buyruq ishga tushishidan OLDIN.
-const REFUSED = new Set(['reset:company', 'clear:fleet', 'seed', 'cleanup:legacy'])
-if (REFUSED.has(script)) {
-  console.error(`"${script}" production'da ishga tushirilmaydi — u ma'lumot o'chiradi.`)
-  console.error('Rostdan kerak bo\'lsa, qo\'lda va ataylab qiling.')
-  process.exit(1)
-}
+// Ma'lumot o'chiradigan skriptlar. Ular production'da ham KERAK bo'ladi —
+// masalan test boshlanishidan oldin kompaniyani tozalash — lekin tasodifan
+// emas.
+//
+// Birinchi versiya ularni BUTUNLAY rad etardi. Bu noto'g'ri edi: hech
+// qachon bekor qilib bo'lmaydigan himoya odamni uni chetlab o'tishga
+// majbur qiladi — DATABASE_URL ni qo'lda qo'yib ishga tushirishga — va
+// o'shanda bu skriptdagi himoyaning HAMMASI yo'qoladi: host ham
+// ko'rsatilmaydi, ogohlantirish ham bo'lmaydi.
+//
+// Endi ular ishlaydi, lekin buyruqda host nomi AYNAN yozilishi kerak.
+// Ya'ni "reset qilaman" demak yetarli emas — qaysi bazani reset
+// qilayotganingizni yozib berishingiz kerak. Noto'g'ri bazaga yozilgan
+// buyruq shu yerda to'xtaydi, ichida emas.
+const DESTRUCTIVE = new Set(['reset:company', 'clear:fleet', 'seed', 'cleanup:legacy'])
 
 const host = (() => {
   try { return new URL(url).hostname } catch { return '(o\'qib bo\'lmadi)' }
@@ -70,6 +74,22 @@ if (!command) {
 // va process.execPath bilan ishga tushiramiz — ya'ni AYNAN shu node.
 const nodeScript = command.match(/^node\s+(?:--[\w-]+(?:=\S+)?\s+)*(\S+)(.*)$/)
 
+if (DESTRUCTIVE.has(script)) {
+  const confirmed = process.argv.includes(`--confirm-host=${host}`)
+  if (!confirmed) {
+    console.error(`\n"${script}" ma'lumot o'chiradi.\n`)
+    console.error(`  baza: ${host}`)
+    console.error('')
+    console.error('Davom etish uchun host nomini buyruqqa yozing:')
+    console.error(`  npm run prod -- ${script} --confirm-host=${host}`)
+    console.error('')
+    console.error('Bu ortiqcha yozuv emas: yagona himoya sifatida "ha" deb')
+    console.error('javob berish, noto\'g\'ri terminalda ham xuddi shunday oson.')
+    process.exit(1)
+  }
+  console.error(`\n  ${host} — MA'LUMOT O'CHIRILADI\n`)
+}
+
 console.log(`\n  baza  : ${host}`)
 console.log(`  buyruq: ${command}\n`)
 
@@ -83,7 +103,22 @@ if (nodeScript) {
       ...(flags ? flags.split(/\s+/) : []),
       nodeScript[1],
       ...(extra ? extra.split(/\s+/) : []),
-      ...process.argv.slice(3),
+      ...process.argv.slice(3).filter((a) => !a.startsWith('--confirm-host=')),
+      // --allow-remote HAR BIR skriptga beriladi.
+      //
+      // Skriptlarning o'z himoyasi ("localhost bo'lmasa --allow-remote
+      // talab qilaman") tasodifan production'ga tegib ketishdan saqlaydi.
+      // Bu skript esa ta'rifi bo'yicha tasodif emas: uning butun vazifasi
+      // production'ga murojaat qilish, va host ekranga chiqariladi.
+      //
+      // Avval u faqat DESTRUCTIVE ro'yxatidagilarga berilardi, va
+      // `refresh:postings` o'sha ro'yxatda emas edi -- natijada board'ni
+      // to'ldirish buyrug'i ishlamay qoldi, sababi esa foydalanuvchi hech
+      // qachon so'ramagan bayroq edi.
+      //
+      // Haqiqiy himoya --confirm-host: u ma'lumot o'chiradigan skriptlar
+      // uchun ALOHIDA ishlaydi va bu qatordan mustaqil.
+      '--allow-remote',
     ],
     { stdio: 'inherit', env: { ...process.env, DATABASE_URL: url } },
   )

@@ -29,6 +29,7 @@
     "late:proof": "node scripts/late-proof.js",
     "test": "node --test \"test/**/*.test.js\"",
     "mig:status": "node scripts/mig-status.js",
+    "db:state": "node scripts/db-state.js",
     "prod": "node scripts/prod.js"
   },
   "dependencies": {
