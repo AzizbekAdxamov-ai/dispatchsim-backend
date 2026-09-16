@@ -76,7 +76,6 @@ export const ERROR_CODES = {
   TICK_NOT_CONFIGURED:    { status: 503, message: 'OPS_TICK_SECRET is not set on this deployment' },
   LOAD_NOT_CANCELLABLE:   { status: 409, message: 'This load has already been delivered' },
   INSUFFICIENT_FUNDS:     { status: 409, message: 'Not enough cash, even on the credit line' },
-  LOAD_NOT_FOUND:         { status: 404, message: 'Load not found' },
   LOAD_NOT_DISPATCHABLE:  { status: 409, message: 'This load is not waiting to be dispatched' },
   DRIVER_UNAVAILABLE:     { status: 409, message: 'That driver is not available' },
   DRIVER_HAS_NO_TRUCK:    { status: 409, message: 'That driver has no truck assigned' },
@@ -104,6 +103,11 @@ export const ERROR_CODES = {
   // ...or one that is already 'done'. 409, not 404: the record exists and
   // the conflict is with a decision already made -- and billed.
   SERVICE_ALREADY_DONE:   { status: 409, message: 'This service is already completed' },
+  // GET /loads/:id/bol.pdf before dispatch: no driver, no truck, no
+  // paperwork. The document certifies an event that has not happened.
+  LOAD_NOT_DISPATCHED:    { status: 409, message: 'This load has not been dispatched yet' },
+  // GET /loads/:id/pod.pdf before delivery: there is nothing to prove yet.
+  LOAD_NOT_DELIVERED:     { status: 409, message: 'This load has not been delivered yet' },
 }
 
 export class AppError extends Error {

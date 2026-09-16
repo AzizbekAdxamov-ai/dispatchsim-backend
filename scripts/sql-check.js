@@ -27,6 +27,7 @@ import * as availabilitySql from '../src/modules/availability/availability.sql.j
 import * as loadEventsSql from '../src/modules/loadEvents/loadEvents.sql.js'
 import * as fleetSql from '../src/modules/fleet/fleet.sql.js'
 import * as trackingSql from '../src/modules/tracking/tracking.repository.js'
+import * as documentsSql from '../src/modules/documents/documents.sql.js'
 import * as solvencySql from '../src/modules/cash/solvency.sql.js'
 // reset-company.js cannot be imported -- it wipes on load -- so the query
 // it depends on lives in a module that can be.
@@ -388,7 +389,7 @@ const STATEMENTS = [
 // that does not name its statements by hand, and it exists because the
 // hand-written list is the part that rots: someone adds a query, forgets
 // this file, and the checker keeps reporting a clean run it never earned.
-for (const [label, mod] of [['alerts', alertSql], ['payroll', payrollSql], ['driverChat', driverChatSql], ['availability', availabilitySql], ['loadEvents', loadEventsSql], ['fleet', fleetSql], ['tracking', trackingSql], ['solvency', solvencySql], ['chatBudget', chatBudgetSql]]) {
+for (const [label, mod] of [['alerts', alertSql], ['payroll', payrollSql], ['driverChat', driverChatSql], ['availability', availabilitySql], ['loadEvents', loadEventsSql], ['fleet', fleetSql], ['tracking', trackingSql], ['documents', documentsSql], ['solvency', solvencySql], ['chatBudget', chatBudgetSql]]) {
   for (const [name, sql] of Object.entries(mod)) {
     if (typeof sql === 'string' && /^\s*(SELECT|INSERT|UPDATE|DELETE|WITH)/i.test(sql)) {
       STATEMENTS.push([`${label}: ${name}`, sql])

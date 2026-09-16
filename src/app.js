@@ -22,6 +22,7 @@ import driverChatRoutes from './modules/driverChat/driverChat.routes.js'
 import opsRoutes from './modules/ops/ops.routes.js'
 import hrRoutes from './modules/hr/hr.routes.js'
 import trackingRoutes from './modules/tracking/tracking.routes.js'
+import documentsRoutes from './modules/documents/documents.routes.js'
 import { notFound } from './middleware/notFound.js'
 import { errorHandler } from './middleware/errorHandler.js'
 
@@ -61,6 +62,7 @@ app.use('/cash', cashRoutes)
 app.use('/ops', opsRoutes)
 app.use('/hr', hrRoutes)
 app.use('/tracking', trackingRoutes)
+app.use('/documents', documentsRoutes)
 
 // Must stay last, in this order: notFound only catches requests that fell
 // through every real route above, and errorHandler must be the very last
