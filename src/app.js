@@ -21,6 +21,7 @@ import payrollRoutes from './modules/payroll/payroll.routes.js'
 import driverChatRoutes from './modules/driverChat/driverChat.routes.js'
 import opsRoutes from './modules/ops/ops.routes.js'
 import hrRoutes from './modules/hr/hr.routes.js'
+import trackingRoutes from './modules/tracking/tracking.routes.js'
 import { notFound } from './middleware/notFound.js'
 import { errorHandler } from './middleware/errorHandler.js'
 
@@ -59,6 +60,7 @@ app.use('/broker-check', brokerCheckRoutes)
 app.use('/cash', cashRoutes)
 app.use('/ops', opsRoutes)
 app.use('/hr', hrRoutes)
+app.use('/tracking', trackingRoutes)
 
 // Must stay last, in this order: notFound only catches requests that fell
 // through every real route above, and errorHandler must be the very last
