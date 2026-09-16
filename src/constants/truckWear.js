@@ -70,6 +70,29 @@ export function fuelCostForGallons(gallons) {
   return Math.round(gallons * FUEL_PRICE_PER_GAL)
 }
 
+// How a run's gallons split between the truck's own tank and the pump.
+//
+// fuel_gallons on trucks is an integer column, so the tank can only drop
+// by whole gallons -- fromTank has to be floored SOMEWHERE. The bug this
+// exists to stop: applyRunToTruck used to floor fromTank only when writing
+// it to the tank column, but computed ledgerGallons from the UNROUNDED
+// fromTank. With a full tank (the common case) floor(fromTank) < fromTank,
+// and the difference -- up to just under a gallon every single run --
+// left the tank and never reached the ledger. It was not charged to
+// anyone. Rounding once, here, and handing the ledger everything the tank
+// did not cover closes that gap: fromTank + ledgerGallons === laneGallons
+// always, by construction.
+//
+// An empty tank (truck.fuelGallons === 0) still returns fromTank: 0,
+// ledgerGallons: laneGallons -- the same split the code produced before
+// this existed, which is Q3's claim (see the comment above
+// fuelCostForGallons) and is pinned by test.
+export function splitTankAndPump(tankGallons, laneGallons) {
+  const fromTank = Math.min(tankGallons, Math.floor(laneGallons))
+  const ledgerGallons = laneGallons - fromTank
+  return { fromTank, ledgerGallons }
+}
+
 // ---------------------------------------------------------------------
 // Tires
 // ---------------------------------------------------------------------

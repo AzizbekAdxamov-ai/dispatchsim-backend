@@ -1,0 +1,24 @@
+# Every text file in this repo is LF in git, always.
+#
+# Why this file exists: on 2026-09-16 nineteen files came back from an
+# editing pass with CRLF line endings. The content was byte-identical
+# after stripping the CRs, but git saw nineteen fully rewritten files, so
+# the diff for that day's work was unreadable -- and one of them was
+# 031_opening_balance.sql, a migration that had already been applied to
+# production. src/db/migrate.js checksums each migration file's bytes
+# (checksumOf, sha256 of the file) and compares it with the checksum
+# recorded in schema_migrations, so flipping LF to CRLF makes an applied
+# migration look edited on every subsequent run. That warning would have
+# been correct and useless at the same time: nothing about the SQL had
+# changed.
+#
+# `text=auto eol=lf` means git normalises to LF on commit and checks out
+# LF on every platform, Windows included. Node, Postgres and every tool in
+# this repo read LF fine on Windows.
+* text=auto eol=lf
+
+# Binary: never touched, never normalised.
+*.png binary
+*.jpg binary
+*.webp binary
+*.ico binary
