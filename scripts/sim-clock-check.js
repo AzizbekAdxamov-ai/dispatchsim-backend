@@ -28,18 +28,31 @@ function fail(label, detail) {
 }
 
 try {
-  // 1. Sim kun ichida (120 soniyadan 1 soniya kam) sana o'zgarmaydi.
+  // 1. Sim kun ichida sana o'zgarmaydi.
+  //
+  // Nega 119 emas: bu fakt faqat KUN CHEGARASIDAN oldin to'g'ri. Skript
+  // kun o'rtasida (masalan 98-saniyada) ishga tushsa, +119s ikki kunga
+  // tegib o'tadi va to'g'ri funksiya ham farq qaytaradi. Shuning uchun
+  // so'rov now()'ning o'z kun pozitsiyasidan hisoblanadi: hozirgi pozitsiya
+  // (0..119) va chegara qolgan qismni topadi, farq shu qolgan qismning
+  // yarimchasida tekshiriladi.
   {
+    const { rows: [posRow] } = await pool.query(
+      `SELECT EXTRACT(EPOCH FROM (now() - sim_epoch()))::int % $1 AS pos`,
+      [SIM_DAY_SECONDS],
+    )
+    const pos = posRow.pos
+    const within = Math.max(1, Math.floor((SIM_DAY_SECONDS - pos) / 2))
     const { rows: [row] } = await pool.query(
       `SELECT sim_day(now()) = sim_day(now() + ($1 * interval '1 second')) AS same`,
-      [SIM_DAY_SECONDS - 1],
+      [within],
     )
     if (row.same === true) {
-      console.log(`OK   bitta sim kun ichida (${SIM_DAY_SECONDS - 1}s) sana o'zgarmadi`)
+      console.log(`OK   bitta sim kun ichida (+${within}s, kunning ${pos}-soniyasida) sana o'zgarmadi`)
     } else {
       fail(
         "bitta sim kun ichida sana o'zgarmasligi kerak",
-        `sim_day(now()) != sim_day(now() + ${SIM_DAY_SECONDS - 1}s)`,
+        `sim_day(now()) != sim_day(now() + ${within}s) (kunning ${pos}-soniyasida)`,
       )
     }
   }
