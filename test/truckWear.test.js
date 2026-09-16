@@ -19,7 +19,7 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
 import {
-  gallonsFor, fuelCostForGallons, tirePointsWorn, serviceDueMileage,
+  gallonsFor, fuelCostForGallons, splitTankAndPump, tirePointsWorn, serviceDueMileage,
   allocateRunDays, splitGallons, walkFuelPct,
   TIRE_LIFE_FRONT_MI, TIRE_LIFE_REAR_MI, OIL_SERVICE_INTERVAL_MI,
   DAILY_DISTANCE_CAP_MI, DAILY_GALLONS_CAP,
@@ -108,6 +108,57 @@ test('fuelCostForGallons(gallonsFor(d)) === fuelCostFor(d) for every lane length
 test('gallonsFor is exact division -- rounding happens at the point of use', () => {
   assert.equal(gallonsFor(650), 100)
   assert.equal(gallonsFor(100), 100 / AVG_MPG)
+})
+
+// ---------------------------------------------------------------------
+// splitTankAndPump: the fraction between floor(fromTank) and fromTank
+// must land on the ledger, never vanish.
+// ---------------------------------------------------------------------
+
+test('splitTankAndPump: full tank -- nothing between tank and ledger is lost', () => {
+  // THE MUTATION: reverting to Math.floor(laneGallons) -> laneGallons (the
+  // un-rounded figure) in the ledger side reproduces the original bug --
+  // fromTank + ledgerGallons stops equalling laneGallons whenever laneGallons
+  // is not a whole number.
+  const laneGallons = gallonsFor(500) // 500 mi, not a whole-gallon lane
+  const { fromTank, ledgerGallons } = splitTankAndPump(10000, laneGallons)
+  assert.equal(fromTank + ledgerGallons, laneGallons)
+})
+
+test('splitTankAndPump: fromTank is always a whole number', () => {
+  // fuel_gallons is an integer column -- a fractional fromTank would fail
+  // the INSERT, not just the arithmetic.
+  const laneGallons = gallonsFor(500)
+  const { fromTank } = splitTankAndPump(10000, laneGallons)
+  assert.equal(fromTank, Math.floor(fromTank))
+})
+
+test('splitTankAndPump: empty tank -- Q3 is unchanged', () => {
+  // Q3's claim: with an empty tank the ledger pays for the whole lane,
+  // exactly as fuelCostFor(distanceMi) always has.
+  const laneGallons = gallonsFor(500)
+  const { fromTank, ledgerGallons } = splitTankAndPump(0, laneGallons)
+  assert.equal(fromTank, 0)
+  assert.equal(ledgerGallons, laneGallons)
+})
+
+test('splitTankAndPump: tank short of the lane -- it empties, the rest goes to the ledger', () => {
+  const laneGallons = gallonsFor(500) // 76.923... gal
+  const { fromTank, ledgerGallons } = splitTankAndPump(50, laneGallons)
+  assert.equal(fromTank, 50)
+  assert.equal(ledgerGallons, laneGallons - 50)
+})
+
+test('splitTankAndPump: fromTank + ledgerGallons === laneGallons across many distances', () => {
+  // THE MUTATION this and the first test kill: rounding fromTank in one
+  // place (the tank write) but not the other (the ledger charge) drops the
+  // fraction between floor(fromTank) and fromTank -- it leaves the tank and
+  // never reaches the ledger. Swept from a short local run to a long haul.
+  for (let d = 25; d <= 3500; d += 25) {
+    const laneGallons = gallonsFor(d)
+    const { fromTank, ledgerGallons } = splitTankAndPump(10000, laneGallons)
+    assert.equal(fromTank + ledgerGallons, laneGallons, `distance ${d}`)
+  }
 })
 
 // ---------------------------------------------------------------------

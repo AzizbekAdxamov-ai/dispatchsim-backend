@@ -32,7 +32,7 @@ import { postRefusal } from '../driverChat/driverChat.refusalPost.js'
 import { rollEvents } from '../loadEvents/loadEvents.service.js'
 import * as loadEventsRepo from '../loadEvents/loadEvents.repository.js'
 import {
-  gallonsFor, fuelCostForGallons, tirePointsWorn, serviceDueMileage,
+  gallonsFor, fuelCostForGallons, splitTankAndPump, tirePointsWorn, serviceDueMileage,
   allocateRunDays, splitGallons, walkFuelPct,
   OIL_SERVICE_INTERVAL_MI, OIL_SERVICE_LABEL,
   TIRE_LIFE_FRONT_MI, TIRE_LIFE_REAR_MI, DAILY_DISTANCE_CAP_MI,
@@ -219,10 +219,12 @@ export async function applyRunToTruck(client, load) {
   const roadMiles = load.distanceMi + (load.extraMiles ?? 0)
   if (!(roadMiles > 0)) return null
 
-  // The tank can only cover what it holds.
+  // The tank can only cover what it holds. fuel_gallons is an integer
+  // column, so fromTank is rounded once, here, and the ledger pays for
+  // everything the tank did not cover -- see splitTankAndPump for the
+  // gallon that used to go missing between the two.
   const laneGallons = gallonsFor(roadMiles)
-  const fromTank = Math.min(truck.fuelGallons, laneGallons)
-  const ledgerGallons = laneGallons - fromTank
+  const { fromTank, ledgerGallons } = splitTankAndPump(truck.fuelGallons, laneGallons)
 
   // Rear tires wear faster under load -- the two lives differ and the
   // numbers below are the sourced midpoints, see truckWear.js.
@@ -234,7 +236,7 @@ export async function applyRunToTruck(client, load) {
   const run = await trucksRepo.applyRunToTruck(client, {
     truckId: load.truckId,
     roadMiles,
-    gallonsFromTank: Math.floor(fromTank),
+    gallonsFromTank: fromTank,
     frontTirePoints,
     rearTirePoints,
   })
