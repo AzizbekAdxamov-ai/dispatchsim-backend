@@ -18,7 +18,7 @@ import zlib from 'node:zlib'
 import { generateBol } from '../src/modules/documents/bol.js'
 import { generatePod } from '../src/modules/documents/pod.js'
 import { generateInvoicePdf } from '../src/modules/documents/invoice.js'
-import { getBol, getPod, getInvoicePdf } from '../src/modules/documents/documents.service.js'
+import { getBol, getPod, getInvoicePdf, carrierFromRow } from '../src/modules/documents/documents.service.js'
 import { documentsRepository as repo } from '../src/modules/documents/documents.repository.js'
 
 // Pull the readable text back out of a generated PDF. pdfkit compresses
@@ -35,6 +35,18 @@ function pdfText(buffer) {
   return [...content.matchAll(/<([0-9A-Fa-f]+)>/g)]
     .map((m) => Buffer.from(m[1], 'hex').toString('latin1'))
     .join('')
+}
+
+// startDocument() (pdfShared.js) prints the disclaimer once at the TOP of
+// every document unconditionally, before the generator's own code runs --
+// so a plain `text.includes('practice document')` can never fail: the
+// header copy survives even if a generator's own helpers.footer() call
+// (the bottom copy) is dropped. Counting occurrences is what actually
+// pins the footer call down; this is what the BOL test's simple
+// `.includes` missed, and what let POD and Invoice ship with no check on
+// their footer call at all.
+function disclaimerCount(text) {
+  return (text.match(/practice document/g) ?? []).length
 }
 
 const LOAD = {
@@ -68,8 +80,13 @@ test('BOL: one page, correct title, freight and parties on the page', async () =
   assert.ok(text.includes('Earl Simmons'), 'driver missing')
   assert.ok(text.includes('Adxamov Logistics'), 'carrier missing')
   assert.ok(text.includes('net30'), 'payment terms missing')
-  // The disclaimer rides on every practice document.
-  assert.ok(text.includes('practice document'), 'disclaimer missing')
+  // The disclaimer rides on every practice document -- once from
+  // startDocument()'s header, once from this generator's own
+  // helpers.footer() call. THE MUTATION: `.includes` alone can't tell the
+  // footer call apart from just the header, because the header's copy
+  // survives on its own; the count is what actually depends on
+  // helpers.footer() having run.
+  assert.equal(disclaimerCount(text), 2, 'disclaimer missing (expected header + footer)')
   // A real date, never 'Invalid Date'.
   assert.ok(!text.includes('Invalid Date'), 'an Invalid Date leaked onto the page')
 })
@@ -93,6 +110,12 @@ test('POD: delivered facts and a blank signature line', async () => {
   assert.ok(text.includes('X ___'), 'blank signature line missing -- a POD without a receiver signature block is forged paper')
   assert.ok(text.includes('Delivered by  Earl Simmons'), 'driver missing')
   assert.ok(!text.includes('Invalid Date'))
+  // THE MUTATION: dropping the helpers.footer() call in pod.js still
+  // produces a valid-looking PDF -- the BOL test's `.includes` check
+  // would have missed this too (see disclaimerCount's comment above), and
+  // nothing checked POD's own footer call at all. Counting catches it:
+  // one copy from the header is not the same as header + footer.
+  assert.equal(disclaimerCount(text), 2, 'disclaimer missing (expected header + footer)')
 })
 
 test('Invoice PDF: line items sum to the printed total', async () => {
@@ -121,6 +144,11 @@ test('Invoice PDF: line items sum to the printed total', async () => {
   assert.ok(text.includes('Detention 2h'), 'accessorial missing')
   assert.ok(text.includes('$1,550'), 'total not formatted with separators')
   assert.ok(!text.includes('Invalid Date'))
+  // THE MUTATION: same gap as the POD test above -- dropping
+  // helpers.footer() from invoice.js shipped unnoticed too, since nothing
+  // checked its footer call and a plain `.includes` can't tell the header
+  // copy from header + footer.
+  assert.equal(disclaimerCount(text), 2, 'disclaimer missing (expected header + footer)')
 })
 
 // --- Service guards ---
@@ -198,4 +226,43 @@ test('invoice PDF service: reuses finance.getInvoiceById, no second math', async
   } finally {
     hooks.getInvoiceById = original
   }
+})
+
+// --- carrierFor's pure fallback logic ---
+//
+// req.auth only ever carries { userId } (see requireAuth.js / lib/token.js --
+// the token deliberately never carries role or company). carrierFor() fetches
+// the user row by that id and hands it to carrierFromRow(), which is what's
+// tested here directly, without a database: company (schema default '' per
+// migration 001, not NULL) then name then the dash, same order the printed
+// paperwork has always fallen back through.
+
+test('carrierFromRow: a filled-in company wins', () => {
+  assert.deepEqual(
+    carrierFromRow({ company: 'Adxamov Logistics', name: 'Azizbek Adxamov' }),
+    { name: 'Adxamov Logistics' },
+  )
+})
+
+test('carrierFromRow: an empty company falls back to the user\'s name', () => {
+  // THE MUTATION: company defaults to '' (migration 001's `DEFAULT ''`),
+  // not NULL -- a check for `row.company == null` alone would print an
+  // empty carrier line for every fresh account instead of falling through
+  // to name.
+  assert.deepEqual(
+    carrierFromRow({ company: '', name: 'Azizbek Adxamov' }),
+    { name: 'Azizbek Adxamov' },
+  )
+  // Whitespace-only counts as empty too.
+  assert.deepEqual(
+    carrierFromRow({ company: '   ', name: 'Azizbek Adxamov' }),
+    { name: 'Azizbek Adxamov' },
+  )
+})
+
+test('carrierFromRow: no company and no row at all fall back to the dash', () => {
+  assert.deepEqual(carrierFromRow({ company: '', name: '' }), { name: '—' })
+  // No row -- no auth (an unauthenticated caller reached this point) or no
+  // matching user id.
+  assert.deepEqual(carrierFromRow(null), { name: '—' })
 })

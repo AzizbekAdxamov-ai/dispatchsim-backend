@@ -23,3 +23,12 @@ export const LOAD_FOR_DOCUMENT = `
     FROM loads l
     LEFT JOIN drivers d ON d.id = l.driver_id
    WHERE l.id = $1`
+
+// The carrier name printed on the paperwork -- the company the logged-in
+// user runs. Read by user id, not off the JWT: the token deliberately
+// carries only `sub` (see lib/token.js), so req.auth has no company or
+// name to read directly. `company` defaults to '' at the schema level
+// (migration 001), not NULL, so a fresh account with no company set falls
+// through to `name` in the service rather than printing an empty string.
+export const CARRIER_FOR_USER = `
+  SELECT company, name FROM users WHERE id = $1`

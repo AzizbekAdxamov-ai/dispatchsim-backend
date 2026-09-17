@@ -20,6 +20,10 @@ export async function podPdf(req, res) {
 }
 
 export async function invoicePdf(req, res) {
-  const pdf = await documentsService.getInvoicePdf({ invoiceId: req.params.invoiceId })
+  // auth carries the requester's user id, which the service needs to look
+  // up the carrier's company/name for the printed page (see
+  // documents.service.js's carrierFor) -- omitted before, so every invoice
+  // printed the '—' placeholder regardless of who was logged in.
+  const pdf = await documentsService.getInvoicePdf({ invoiceId: req.params.invoiceId, auth: req.auth })
   sendPdf(res, pdf, `invoice-${req.params.invoiceId}.pdf`)
 }

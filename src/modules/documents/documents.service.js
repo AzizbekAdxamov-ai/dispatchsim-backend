@@ -9,10 +9,12 @@
 // The guards are 409s, not 404s: the load exists, the conflict is with
 // paperwork that has no event behind it yet.
 //
-// The carrier name is the company the student runs. It reads the same
-// identity the auth token carries (req.auth.name/company) rather than a
-// settings row -- there is no company table yet, and inventing one here
-// would be a second copy of a fact that does not exist.
+// The carrier name is the company the student runs. It used to read
+// req.auth.name/company straight off the JWT -- but the token deliberately
+// carries only `sub` (see lib/token.js), so auth.company and auth.name
+// never existed and every document printed the '—' fallback. There is
+// still no company table, so this reads users.company (falling back to
+// users.name) by the request's own user id instead of inventing one.
 
 import { AppError } from '../../lib/errors.js'
 import { documentsRepository as repo } from './documents.repository.js'
@@ -20,8 +22,19 @@ import { generateBol } from './bol.js'
 import { generatePod } from './pod.js'
 import { generateInvoicePdf } from './invoice.js'
 
-function carrierFor(auth) {
-  return { name: auth?.company ?? auth?.name ?? '—' }
+// Pure: turns a users row (or null, for no auth / no matching user) into
+// the carrier block the PDF prints. Split out from carrierFor so the
+// company-then-name-then-dash fallback can be unit-tested without a
+// database -- carrierFor itself is just "fetch the row, hand it here".
+export function carrierFromRow(row) {
+  const company = row?.company?.trim()
+  const name = row?.name?.trim()
+  return { name: company || name || '—' }
+}
+
+async function carrierFor(auth) {
+  const row = auth?.userId ? await repo.getCarrier(auth.userId) : null
+  return carrierFromRow(row)
 }
 
 async function loadOr404(loadId) {
@@ -39,7 +52,7 @@ export async function getBol({ loadId, auth }) {
     driver: load.driverId
       ? { name: load.driverName, cdlNumber: load.driverCdlNumber, truckId: load.truckId }
       : null,
-    carrier: carrierFor(auth),
+    carrier: await carrierFor(auth),
   })
 }
 
@@ -64,11 +77,11 @@ export const hooks = {
   getInvoiceById: null,
 }
 
-export async function getInvoicePdf({ invoiceId }) {
+export async function getInvoicePdf({ invoiceId, auth }) {
   if (!hooks.getInvoiceById) {
     const { getInvoiceById } = await import('../finance/finance.service.js')
     hooks.getInvoiceById = getInvoiceById
   }
   const invoice = await hooks.getInvoiceById(invoiceId)
-  return generateInvoicePdf({ invoice, carrier: carrierFor(null) })
+  return generateInvoicePdf({ invoice, carrier: await carrierFor(auth) })
 }
