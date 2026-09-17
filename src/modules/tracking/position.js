@@ -89,8 +89,26 @@ export function positionFor(load, now = new Date()) {
   const etaMs = load.etaAt ? new Date(load.etaAt).getTime() : null
   if (!dispatchedMs || !etaMs || etaMs <= dispatchedMs) return null
 
+  // An open road event freezes the truck where it actually is. eta_at only
+  // moves when the dispatcher RESOLVES the event (loadEvents.service.js's
+  // resolve -> extendEta) -- while it sits open, eta_at is untouched, so
+  // feeding the real clock into `f` would keep sliding the marker (and
+  // distanceRemainingMi) toward the destination for a truck that is
+  // actually stopped on the shoulder. Clamping `now` to the moment the
+  // event opened pins `f` at whatever it was the instant the truck
+  // stopped, which is where the truck still is.
+  //
+  // `late` is deliberately NOT computed from this clamped instant: a truck
+  // stopped past its ETA is still late right now, every second it sits
+  // there, and the badge has to say so even though the marker itself does
+  // not move. Two different "now"s for two different questions -- one
+  // asks where the truck is, the other asks whether it's on time.
+  const effectiveNowMs = load.eventOpenedAt
+    ? Math.min(now.getTime(), new Date(load.eventOpenedAt).getTime())
+    : now.getTime()
+
   const totalMs = etaMs - dispatchedMs
-  const elapsedMs = now.getTime() - dispatchedMs
+  const elapsedMs = effectiveNowMs - dispatchedMs
   const f = Math.min(1, Math.max(0, elapsedMs / totalMs))
   const late = now.getTime() > etaMs
 

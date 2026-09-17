@@ -24,10 +24,15 @@ export const IN_TRANSIT_BOARD_SQL = `
             FROM drivers d WHERE d.id = l.driver_id) AS driver,
          (SELECT jsonb_build_object('id', t.id, 'make', t.make, 'model', t.model)
             FROM trucks t WHERE t.id = l.truck_id) AS truck,
-         EXISTS (
-           SELECT 1 FROM load_events e
-            WHERE e.load_id = l.id AND e.resolved_at IS NULL
-         ) AS "openEvent"
+         -- The moment the load's open event (if any) started, not just
+         -- whether one exists. position.js needs the timestamp to freeze
+         -- the marker where the truck actually stopped -- a plain boolean
+         -- told the page "stopped" while still sliding the dot forward.
+         -- A bare subselect (not EXISTS/an aggregate) is safe here: the
+         -- partial unique index load_events_one_open guarantees at most
+         -- one unresolved row per load.
+         (SELECT e.occurred_at FROM load_events e
+           WHERE e.load_id = l.id AND e.resolved_at IS NULL) AS "eventOpenedAt"
     FROM loads l
    WHERE l.delivered_at IS NULL
      AND l.dispatched_at IS NOT NULL

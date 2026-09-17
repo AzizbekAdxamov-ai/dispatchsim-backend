@@ -15,6 +15,7 @@ const router = Router()
 
 router.use(requireAuth, requireRole())
 
+router.get('/map', trackingController.map)
 router.get('/', trackingController.board)
 
 export default router

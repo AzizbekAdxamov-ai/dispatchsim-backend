@@ -13,6 +13,8 @@ import assert from 'node:assert/strict'
 import {
   laneEndpoints, interpolateGreatCircle, positionFor,
 } from '../src/modules/tracking/position.js'
+import { shapeBoard, mapReference } from '../src/modules/tracking/tracking.service.js'
+import { CITIES } from '../scripts/seed/cities.js'
 
 // Two cities far apart, on real coordinates -- Dallas and Chicago.
 const DALLAS = { lat: 32.7767, lon: -96.797 }
@@ -144,4 +146,161 @@ test('positionFor: null for rows the math cannot place', () => {
     dispatchedAt: new Date(now).toISOString(),
     etaAt: new Date(now).toISOString(),
   }, new Date(now)), null)
+})
+
+test('positionFor: an open road event freezes progress/miles at the moment it opened', () => {
+  // THE MUTATION: computing `f` from the real clock while an event sits
+  // open (resolved_at IS NULL) keeps sliding the marker toward the
+  // destination even though eta_at hasn't moved -- eta_at only moves when
+  // the dispatcher RESOLVES the event (loadEvents.service.js's
+  // resolve -> extendEta). A "Stopped" truck that keeps advancing on the
+  // map contradicts its own badge.
+  const now = Date.now()
+  const dispatchedAt = new Date(now - 2 * 60 * 60 * 1000).toISOString()
+  const etaAt = new Date(now + 2 * 60 * 60 * 1000).toISOString()
+  // The event opened at the halfway point (progress would be 0.5 there).
+  const eventOpenedAt = new Date(now - 1000).toISOString()
+
+  const load = {
+    originCity: 'Dallas', originState: 'TX',
+    destinationCity: 'Chicago', destinationState: 'IL',
+    distanceMi: 920,
+    dispatchedAt, etaAt, eventOpenedAt,
+  }
+
+  const atOpen = positionFor(load, new Date(now - 1000))
+  // 30 real minutes pass with the event still open -- the truck should not
+  // have moved an inch, because eventOpenedAt (not `now`) still clamps it.
+  const later = positionFor(load, new Date(now - 1000 + 30 * 60 * 1000))
+
+  assert.equal(later.progress, atOpen.progress)
+  assert.equal(later.distanceRemainingMi, atOpen.distanceRemainingMi)
+  assert.equal(later.lat, atOpen.lat)
+  assert.equal(later.lon, atOpen.lon)
+
+  // A load with NO open event (the common case) must keep moving normally
+  // -- eventOpenedAt only clamps when it is actually set.
+  const noEventLoad = { ...load, eventOpenedAt: null }
+  const start = positionFor(noEventLoad, new Date(now - 1000))
+  const moved = positionFor(noEventLoad, new Date(now - 1000 + 30 * 60 * 1000))
+  assert.notEqual(moved.progress, start.progress)
+  assert.notEqual(moved.distanceRemainingMi, start.distanceRemainingMi)
+})
+
+test('positionFor: `late` still tracks the real clock while frozen by an open event', () => {
+  // THE MUTATION: if `late` were computed from the same clamped instant as
+  // `f`, a truck stopped by an event past its ETA would read as on-time
+  // forever -- the one thing the page needs to keep saying honestly even
+  // while the marker itself holds still.
+  const now = Date.now()
+  const load = {
+    originCity: 'Dallas', originState: 'TX',
+    destinationCity: 'Chicago', destinationState: 'IL',
+    distanceMi: 920,
+    dispatchedAt: new Date(now - 3 * 60 * 60 * 1000).toISOString(),
+    etaAt: new Date(now - 60 * 60 * 1000).toISOString(),
+    // Event opened well before the ETA passed.
+    eventOpenedAt: new Date(now - 2 * 60 * 60 * 1000).toISOString(),
+  }
+  const pos = positionFor(load, new Date(now))
+  assert.equal(pos.late, true)
+  // Frozen at the event-open instant: 1 hour into a 2-hour window -> 0.5,
+  // not 1 (which the unclamped elapsed time past etaAt would otherwise give).
+  assert.ok(Math.abs(pos.progress - 0.5) < 1e-9, `progress ${pos.progress}`)
+})
+
+// --- shapeBoard: the service-level split between placed and excluded rows ---
+
+test('shapeBoard: an unmapped-city load is excluded, counted, and never in `loads`', () => {
+  // THE MUTATION: .filter(Boolean) used to drop a load positionFor()
+  // couldn't place with no trace anywhere -- not in the list, not in meta,
+  // not in a log. A load quietly vanishing from the board is the same
+  // "silently wrong instead of loudly wrong" failure loadBoard.repository.js's
+  // buildBaseCte guards against for the load board itself.
+  const now = new Date()
+  const rows = [
+    {
+      id: 'L1',
+      originCity: 'Dallas', originState: 'TX',
+      destinationCity: 'Chicago', destinationState: 'IL',
+      distanceMi: 920,
+      dispatchedAt: new Date(now.getTime() - 60 * 60 * 1000).toISOString(),
+      etaAt: new Date(now.getTime() + 60 * 60 * 1000).toISOString(),
+    },
+    {
+      // Unmapped destination -- cities.js never seeded this one.
+      id: 'L2',
+      originCity: 'Dallas', originState: 'TX',
+      destinationCity: 'Nowhere', destinationState: 'XX',
+      distanceMi: 500,
+      dispatchedAt: new Date(now.getTime() - 60 * 60 * 1000).toISOString(),
+      etaAt: new Date(now.getTime() + 60 * 60 * 1000).toISOString(),
+    },
+  ]
+
+  const { positioned, excluded } = shapeBoard(rows, now)
+
+  assert.equal(positioned.length, 1)
+  assert.equal(positioned[0].id, 'L1')
+  assert.ok(!positioned.some((l) => l.id === 'L2'), 'the unmapped-city load leaked into the placed list')
+
+  assert.equal(excluded.length, 1)
+  assert.equal(excluded[0].id, 'L2')
+  assert.equal(excluded[0].reason, 'unmapped-city')
+})
+
+test('shapeBoard: a bad-eta load (eta_at <= dispatched_at) is excluded with its own reason', () => {
+  const now = new Date()
+  const rows = [{
+    id: 'L3',
+    originCity: 'Dallas', originState: 'TX',
+    destinationCity: 'Chicago', destinationState: 'IL',
+    distanceMi: 920,
+    dispatchedAt: now.toISOString(),
+    etaAt: now.toISOString(), // not after dispatchedAt -- positionFor refuses this
+  }]
+
+  const { positioned, excluded } = shapeBoard(rows, now)
+
+  assert.equal(positioned.length, 0)
+  assert.equal(excluded.length, 1)
+  assert.equal(excluded[0].id, 'L3')
+  assert.equal(excluded[0].reason, 'bad-eta')
+})
+
+// --- The map's standing city layer -------------------------------------
+//
+// These dots are on screen whether or not a truck is moving, so a bad
+// coordinate here is visible all the time and correct-looking: a city
+// plotted in the wrong state is still a dot on land. The bounds below are
+// the continental US envelope -- roughly 24.5 N (Key West) to 49 N (the
+// 49th parallel), and -125 W (the Washington coast) to -66.9 W (West
+// Quoddy Head, Maine). Nothing in the seed's closed set is in Alaska or
+// Hawaii, so anything outside this box is a typo, not a place.
+const CONUS = { minLat: 24.0, maxLat: 49.5, minLon: -125.5, maxLon: -66.5 }
+
+test('mapReference ships every seed city, and only the four fields the map draws', () => {
+  const { cities } = mapReference()
+  assert.equal(cities.length, CITIES.length)
+  for (const c of cities) {
+    assert.deepEqual(Object.keys(c).sort(), ['city', 'lat', 'lon', 'state'])
+  }
+})
+
+test('every city on the map sits inside the continental US', () => {
+  // Kills the classic coordinate bug: a dropped minus sign on longitude
+  // puts Dallas in the Yellow Sea, and on a static layer nobody would
+  // read it as a bug -- just an odd-looking map.
+  for (const c of mapReference().cities) {
+    assert.ok(Number.isFinite(c.lat) && Number.isFinite(c.lon), `${c.city}, ${c.state} has a non-finite coordinate`)
+    assert.ok(c.lat >= CONUS.minLat && c.lat <= CONUS.maxLat, `${c.city}, ${c.state} latitude ${c.lat} is outside the continental US`)
+    assert.ok(c.lon >= CONUS.minLon && c.lon <= CONUS.maxLon, `${c.city}, ${c.state} longitude ${c.lon} is outside the continental US`)
+  }
+})
+
+test('no two seed cities share a (city, state) key', () => {
+  // laneEndpoints looks a lane up by `${city}, ${state}` -- a duplicate key
+  // would make one of them unreachable and its loads silently unmapped.
+  const keys = mapReference().cities.map((c) => `${c.city}, ${c.state}`)
+  assert.equal(new Set(keys).size, keys.length)
 })
