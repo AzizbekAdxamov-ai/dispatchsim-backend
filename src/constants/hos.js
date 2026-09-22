@@ -1,5 +1,12 @@
 // Hours of service, the one piece of it this simulator can honestly model.
 //
+// UPDATE (037): the full clock now exists -- src/constants/hosClock.js
+// (11h / 14h / 8h-break / 60-70h / 34h restart), duty_events as the ELD
+// log, and the tick's syncDriverHos writing hos_remaining_min,
+// hours_today_min and hours_week_min from it. The paragraphs below
+// describe how this file started and why REQUIRED_REST_HOURS lives here;
+// the "no runtime writer" statement in them is history, not current.
+//
 // A real HOS clock tracks driving minutes, on-duty minutes, the 14-hour
 // window and the 70-hour rolling limit. This project cannot model any of
 // that, and the reason is worth writing down: drivers.hours_today_min,
