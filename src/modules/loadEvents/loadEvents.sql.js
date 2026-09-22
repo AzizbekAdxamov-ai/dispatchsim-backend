@@ -92,6 +92,7 @@ export const RESOLVE_EVENT_SQL = `
          extra_miles = $4, cost_usd = $5, accessorial_usd = $6
    WHERE id = $1 AND resolved_at IS NULL
    RETURNING id, load_id AS "loadId", option_key AS "optionKey",
+             resolved_at AS "resolvedAt",
              hours_added AS "hoursAdded", cost_usd AS "costUsd",
              accessorial_usd AS "accessorialUsd"`
 

@@ -36,14 +36,15 @@ test('dutyStatusWhileOpen: stationary waits are off duty, attended trucks on dut
 const hasDb = Boolean(process.env.DATABASE_URL)
 
 test('logOpenEventWait: cuts the plan, writes one wait row, idempotent on re-run', { skip: !hasDb }, async (t) => {
-  const { withTransaction } = await import('../src/db/pool.js')
+  const { pool } = await import('../src/db/pool.js')
+  const { inRollback } = await import('./helpers/rollback.js')
   const dutyEventsRepo = await import('../src/modules/hos/dutyEvents.repository.js')
   const { logOpenEventWait } = await import('../src/modules/hos/replan.service.js')
   const loadsRepo = await import('../src/modules/loads/loads.repository.js')
 
   // A dispatched, undelivered load with a driver -- the fixture seeds one
   // when the audit scripts run; otherwise the newest dispatched load.
-  const client0 = await (await import('../src/db/pool.js')).pool.connect()
+  const client0 = await pool.connect()
   let loadId
   try {
     const r = await client0.query(`
@@ -61,8 +62,8 @@ test('logOpenEventWait: cuts the plan, writes one wait row, idempotent on re-run
 
   const occurredAt = new Date(Date.now() - 60_000).toISOString()
   let result
-  await withTransaction(async (client) => {
-    result = await logOpenEventWait({ loadId, eventType: 'breakdown', eventAt: occurredAt })
+  await inRollback(pool, async (client) => {
+    result = await logOpenEventWait({ loadId, eventType: 'breakdown', eventAt: occurredAt }, { client })
     // Inspect the effects inside the same transaction, then roll back:
     // the test leaves no rows behind.
     const events = await dutyEventsRepo.forLoad(client, loadId)
@@ -73,7 +74,7 @@ test('logOpenEventWait: cuts the plan, writes one wait row, idempotent on re-run
     assert.ok(events.every((e) => new Date(e.startedAt).getTime() < new Date(occurredAt).getTime() || e === wait[0]),
       'no plan row survives past the event')
     // Idempotent: a second run adds no second row (one-active-start guard).
-    const again = await logOpenEventWait({ loadId, eventType: 'breakdown', eventAt: occurredAt })
+    const again = await logOpenEventWait({ loadId, eventType: 'breakdown', eventAt: occurredAt }, { client })
     assert.ok(again.logged || again.logged === false, 'second run returns without throwing')
     const events2 = await dutyEventsRepo.forLoad(client, loadId)
     const wait2 = events2.filter((e) => e.startedAt.toISOString() === occurredAt)

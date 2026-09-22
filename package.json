@@ -21,6 +21,7 @@
     "refresh:vocabulary": "node scripts/refresh-vocabulary.js",
     "count:postings": "node scripts/count-postings.js",
     "sql:check": "node scripts/sql-check.js",
+    "check:test-leaks": "node scripts/check-test-leaks.js",
     "cleanup:legacy": "node scripts/cleanup-legacy.js",
     "chat:smoke": "node scripts/chat-smoke.js",
     "chat:diag": "node scripts/chat-diag.js",

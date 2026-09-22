@@ -43,6 +43,7 @@ import {
 } from '../facilities/stopPlan.js'
 import { fromHosDomain, HOS_LOOKBACK_HOURS } from '../../constants/hosClock.js'
 import { dutyStatusWhileOpen } from '../../constants/loadEvents.js'
+import { eventLogBlocks, openWaitEndMs } from './eventBlocks.js'
 import { simDaysToMs } from '../../constants/simClock.js'
 import { AVG_MPG } from '../finance/finance.constants.js'
 
@@ -50,7 +51,7 @@ function fact(code, detail, cfr = null) {
   return { code, cfr, detail }
 }
 
-export async function replanAfterEvent({ loadId, eventAt, delayHours, delayStatus, label }) {
+export async function replanAfterEvent({ loadId, eventAt, resolvedAt, eventType, delayHours, delayStatus, label }) {
   const facts = []
   const say = () => loadsRepo.appendStopPlanFacts(pool, { loadId, facts })
 
@@ -66,7 +67,9 @@ export async function replanAfterEvent({ loadId, eventAt, delayHours, delayStatu
   }
 
   const eventMs = new Date(eventAt).getTime()
-  const delayEndMs = eventMs + simDaysToMs(delayHours / 24)
+  const resolvedMs = resolvedAt ? new Date(resolvedAt).getTime() : eventMs
+  const waitStatus = dutyStatusWhileOpen(eventType)
+  const { blocks, delayEndMs } = eventLogBlocks({ eventMs, resolvedMs, waitStatus, delayStatus, delayHours })
   const runEvents = await dutyEventsRepo.forLoad(pool, loadId)
   const drivenMi = Math.min(load.distanceMi, Math.max(0, drivenMilesBefore(runEvents, eventMs)))
   const remainingMi = load.distanceMi - drivenMi
@@ -76,16 +79,16 @@ export async function replanAfterEvent({ loadId, eventAt, delayHours, delayStatu
   await withTransaction(async (client) => {
     await dutyEventsRepo.cutLoadAt(client, { loadId, at: new Date(eventMs) })
     await stopVisitsRepo.deleteUnsettledFrom(client, { loadId, at: new Date(eventMs) })
-    await dutyEventsRepo.insertMany(client, [{
+    await dutyEventsRepo.insertMany(client, blocks.map((b) => ({
       driverId: load.driverId,
       loadId,
       truckId: load.truckId,
-      status: delayStatus,
-      startedAt: new Date(eventMs),
-      endedAt: new Date(delayEndMs),
+      status: b.status,
+      startedAt: new Date(b.startedAt),
+      endedAt: new Date(b.endedAt),
       routeOffsetMi: Math.round(drivenMi),
       facilityId: null,
-    }])
+    })))
   })
   facts.push(fact('ROAD_EVENT_LOGGED', `${label}: ${delayHours}h logged as ${delayStatus} at mile ${Math.round(drivenMi)} of the run.`))
 
@@ -180,11 +183,11 @@ export async function replanAfterEvent({ loadId, eventAt, delayHours, delayStatu
 // This writes the wait as it happens:
 //   - the plan from occurred_at on is cut (the same cut resolve applies,
 //   - the wait is logged in the status the law gives that event while it
-//     is unresolved (dutyStatusDuring with a null option: attending a
-//     disabled truck is On Duty under 395.2 no matter how it ends up
-//     being fixed; sitting out weather/closure is Off Duty),
-//   - the wait event's ended_at is NULL-ended by convention: it runs to
-//     "now" until something else is written after it.
+//     is unresolved (dutyStatusWhileOpen: attending a disabled truck is On
+//     Duty under 395.2 no matter how it ends up being fixed; sitting out
+//     weather/closure is Off Duty),
+//   - the wait row is open-ended (eventBlocks.js's openWaitEndMs); resolve
+//     re-cuts from occurred_at and writes wait -> decision -> delay.
 //
 // Idempotent the way rule 7 demands: the cut is idempotent, and the wait
 // row rides duty_events_one_active_start's ON CONFLICT DO NOTHING on
@@ -195,11 +198,17 @@ export async function replanAfterEvent({ loadId, eventAt, delayHours, delayStatu
 // start, written by END_AT inside cutLoadAt).
 //
 // What it did is stated on the load, never only logged.
-export async function logOpenEventWait({ loadId, eventType, eventAt }) {
+// `client` (optional): run every read and write on that one connection,
+// inside whatever transaction its owner opened, instead of this function
+// opening its own -- the schema-backed test passes a client it always
+// rolls back (test/helpers/rollback.js).
+export async function logOpenEventWait({ loadId, eventType, eventAt }, { client = null } = {}) {
+  const db = client ?? pool
+  const inTx = (fn) => (client ? fn(client) : withTransaction(fn))
   const facts = []
-  const say = () => loadsRepo.appendStopPlanFacts(pool, { loadId, facts })
+  const say = () => loadsRepo.appendStopPlanFacts(db, { loadId, facts })
 
-  const load = await loadsRepo.getLoadById(loadId)
+  const load = await loadsRepo.getLoadById(loadId, client)
   if (!load || load.deliveredAt || !load.dispatchedAt || !load.driverId) {
     return { logged: false }
   }
@@ -213,25 +222,21 @@ export async function logOpenEventWait({ loadId, eventType, eventAt }) {
   }
 
   const eventMs = new Date(eventAt).getTime()
-  const runEvents = await dutyEventsRepo.forLoad(pool, loadId)
+  const runEvents = await dutyEventsRepo.forLoad(db, loadId)
   const drivenMi = Math.min(load.distanceMi, Math.max(0, drivenMilesBefore(runEvents, eventMs)))
 
-  await withTransaction(async (client) => {
-    await dutyEventsRepo.cutLoadAt(client, { loadId, at: new Date(eventMs) })
-    await stopVisitsRepo.deleteUnsettledFrom(client, { loadId, at: new Date(eventMs) })
-    await dutyEventsRepo.insertMany(client, [{
+  await inTx(async (tx) => {
+    await dutyEventsRepo.cutLoadAt(tx, { loadId, at: new Date(eventMs) })
+    await stopVisitsRepo.deleteUnsettledFrom(tx, { loadId, at: new Date(eventMs) })
+    await dutyEventsRepo.insertMany(tx, [{
       driverId: load.driverId,
       loadId,
       truckId: load.truckId,
       status,
       startedAt: new Date(eventMs),
-      // NULL would violate 037's NOT NULL; the ELD convention instead is
-      // an open block that the next write (resolve, cancel, delivery)
-      // closes. One compressed hour, re-cut by every later write, is the
-      // honest encoding: hosClock clips sums at now(), so a block running
-      // past now would read the same -- but a past-ended block keeps the
-      // uniqueness guard (one active start per driver per instant) sound.
-      endedAt: new Date(eventMs + simDaysToMs(1 / 24)),
+      // Open-ended until resolve or cancel re-cuts it (eventBlocks.js's
+      // openWaitEndMs says why a fixed short end was wrong).
+      endedAt: new Date(openWaitEndMs(eventMs)),
       routeOffsetMi: Math.round(drivenMi),
       facilityId: null,
     }])

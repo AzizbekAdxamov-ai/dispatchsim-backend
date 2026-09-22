@@ -172,6 +172,8 @@ export async function resolve({ eventId, loadId, optionKey, userId }) {
   const replan = await replanAfterEvent({
     loadId: result.loadId,
     eventAt: result.occurredAt,
+    resolvedAt: result.event?.resolvedAt ?? new Date().toISOString(),
+    eventType: result.eventType,
     delayHours: result.applied.hours,
     delayStatus: dutyStatusDuring(result.eventType, result.applied.key),
     label: `${EVENT_TYPES[result.eventType]?.summary ?? 'Road event'} (${result.applied.label})`,

@@ -139,7 +139,11 @@ export const HOS_LOW_DRIVERS_SQL = `
          d.hos_remaining_min AS "hosRemainingMin",
          l.id AS "loadId", l.rate_usd AS "rateUsd"
     FROM drivers d
-    JOIN loads l ON l.driver_id = d.id AND l.status = 'in-transit'
+    -- 'ontime'/'warn'/'crit' are the dispatched, undelivered statuses
+    -- (007's loads_status_valid). This read 'in-transit' -- a value the
+    -- CHECK does not allow -- so the alert could never fire;
+    -- test/loadStatusLiterals.test.js now pins every l.status literal.
+    JOIN loads l ON l.driver_id = d.id AND l.status IN ('ontime', 'warn', 'crit')
    WHERE d.duty_status <> 'off'
      AND d.hos_remaining_min IS NOT NULL
      AND d.hos_remaining_min <= $1::int

@@ -116,7 +116,8 @@ test('a driver with owed ten-hour rest is still dispatchable', { skip: !hasDb },
   // fixture (inside the rolled-back transaction) recreates the exact
   // state the old RESTING branch refused: a driver who delivered a load
   // this instant, whose live clock is wide open.
-  const { pool, withTransaction } = await import('../src/db/pool.js')
+  const { pool } = await import('../src/db/pool.js')
+  const { inRollback } = await import('./helpers/rollback.js')
   const { driverAvailability } = await import('../src/modules/availability/availability.service.js')
 
   const client0 = await pool.connect()
@@ -132,7 +133,7 @@ test('a driver with owed ten-hour rest is still dispatchable', { skip: !hasDb },
     return
   }
 
-  await withTransaction(async (client) => {
+  await inRollback(pool, async (client) => {
     // Isolate the two clocks this decision is about: payroll grievances
     // paid off inside the transaction (rolled back with everything else),
     // so the only remaining fact is the state releaseDriver leaves --
