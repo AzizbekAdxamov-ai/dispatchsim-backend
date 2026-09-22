@@ -77,6 +77,7 @@ export const OPEN_EVENT_SQL = `
 // cannot both apply it; the conditional UPDATE below is the other half.
 export const CLAIM_EVENT_SQL = `
   SELECT e.id, e.load_id AS "loadId", e.event_type AS "eventType", e.place,
+         e.occurred_at AS "occurredAt",
          l.eta_at AS "etaAt", l.accessorials
     FROM load_events e
     JOIN loads l ON l.id = e.load_id

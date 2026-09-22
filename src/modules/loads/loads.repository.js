@@ -35,6 +35,8 @@ const LOAD_COLUMNS = `
   l.status, l.driver_id AS "driverId", l.truck_id AS "truckId",
   l.booked_at AS "bookedAt", l.pickup_at AS "pickupAt", l.delivery_at AS "deliveryAt",
   l.dispatched_at AS "dispatchedAt", l.eta_at AS "etaAt", l.delivered_at AS "deliveredAt",
+  l.stop_plan_status AS "stopPlanStatus", l.stop_plan_facts AS "stopPlanFacts",
+  l.promised_eta_at AS "promisedEtaAt",
   l.payment_terms AS "paymentTerms", l.invoice_paid_at AS "invoicePaidAt",
   l.accessorials,
   l.created_at AS "createdAt", l.updated_at AS "updatedAt"
@@ -312,8 +314,76 @@ export async function dispatchLoad(client, { loadId, driverId, truckId, etaSecon
             eta_at = now() + ($4::int * interval '1 second')
       WHERE id = $1 AND status = 'neutral'
       RETURNING id, eta_at AS "etaAt", promised_eta_at AS "promisedEtaAt",
-                distance_mi AS "distanceMi", rate_usd AS "rateUsd"`,
+                distance_mi AS "distanceMi", rate_usd AS "rateUsd",
+                -- dispatched_at plus the lane's own city/state pair --
+                -- stop planning (dispatch.service.js's planAndSaveStops,
+                -- facilities/stopPlan.js) needs both, read straight off
+                -- this same write instead of a second SELECT for a fact
+                -- this statement already knows.
+                dispatched_at AS "dispatchedAt",
+                origin_city AS "originCity", origin_state AS "originState",
+                destination_city AS "destinationCity", destination_state AS "destinationState"`,
     [loadId, driverId, truckId, etaSeconds, promisedSeconds],
+  )
+  return result.rows[0] ?? null
+}
+
+// eta_at, moved to what the LAW says the run takes, once stop planning
+// (dispatch.service.js's planAndSaveStops, facilities/stopPlan.js) has
+// actually worked it out. Two timestamps stay on two different clocks
+// here, on purpose: promised_eta_at is NOT touched -- it is the broker's
+// own promise, and an event does not renegotiate it (loadEvents.sql.js's
+// EXTEND_ETA_SQL makes the identical choice) -- so a legal arrival later
+// than the promise is exactly what markLate's own eta_at > promised_eta_at
+// branch is for, not a reason to refuse the dispatch.
+//
+// Runs as its own statement, AFTER dispatchLoad's own transaction has
+// already committed (dispatch.service.js's planAndSaveStops runs there
+// for the same reason: a stop-planning failure must never roll back a
+// dispatch that already succeeded). Guarded the same way EXTEND_ETA_SQL
+// is -- not yet delivered, and actually dispatched -- so a load that
+// delivered or was cancelled in the gap between those two moments is
+// left alone rather than getting a legal ETA against a run that is no
+// longer happening. Zero rows back means exactly that: nothing was
+// silently overwritten, and the caller's own "dispatched anyway, ETA
+// left as before" warning already covers this case.
+export async function setLegalEtaAt(client, { loadId, legalArrivalAt }) {
+  const result = await client.query(
+    `UPDATE loads
+        SET eta_at = $2
+      WHERE id = $1 AND delivered_at IS NULL AND dispatched_at IS NOT NULL
+      RETURNING id, eta_at AS "etaAt"`,
+    [loadId, legalArrivalAt],
+  )
+  return result.rows[0] ?? null
+}
+
+// What stop planning concluded, on the load itself -- not only in a
+// server log nobody reads (037's header). status is one of 037's
+// loads_stop_plan_status values; facts is the hosFacts/warnings list,
+// each { code, cfr, detail }: things that are true about this run, never
+// a verdict on whoever dispatched it.
+export async function setStopPlanOutcome(client, { loadId, status, facts }) {
+  const result = await client.query(
+    `UPDATE loads
+        SET stop_plan_status = $2, stop_plan_facts = $3::jsonb, stop_plan_at = now()
+      WHERE id = $1
+     RETURNING id`,
+    [loadId, status, JSON.stringify(facts ?? [])],
+  )
+  return result.rows[0] ?? null
+}
+
+// Adds facts to what stop planning already said about this load --
+// a re-plan after a road event keeps the dispatch-time facts and says
+// what changed on top of them.
+export async function appendStopPlanFacts(client, { loadId, facts }) {
+  const result = await client.query(
+    `UPDATE loads
+        SET stop_plan_facts = stop_plan_facts || $2::jsonb, stop_plan_at = now()
+      WHERE id = $1
+     RETURNING id`,
+    [loadId, JSON.stringify(facts ?? [])],
   )
   return result.rows[0] ?? null
 }
@@ -446,10 +516,17 @@ export async function markInvoicePaid(client, loadId) {
 //
 // 'resting' is the honest state for a driver between loads: not on a
 // load, not unavailable. HOS resets because the rest is what resets it.
+//
+// hos_remaining_min is NOT reset to 660 here any more. That was the one
+// write the column had, and it was wrong the moment it happened: a driver
+// who has just driven eleven hours does not get eleven more by handing
+// over the paperwork. The tick's syncDriverHos (dispatch.service.js)
+// derives it from duty_events (037) through hosClock.js's
+// driverHosSnapshot -- the rest resets it as the rest is actually taken.
 export async function releaseDriver(client, { driverId }) {
   if (!driverId) return
   await client.query(
-    `UPDATE drivers SET duty_status = 'resting', hos_remaining_min = 660 WHERE id = $1`,
+    `UPDATE drivers SET duty_status = 'resting' WHERE id = $1`,
     [driverId],
   )
 }

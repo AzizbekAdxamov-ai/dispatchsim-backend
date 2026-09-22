@@ -25,7 +25,7 @@ async function tick(reason) {
   if (running) return
   running = true
   try {
-    const { delivered, paid, interest, insurance, events } = await runTick()
+    const { delivered, paid, stopsSettled, interest, insurance, events } = await runTick()
     if (delivered.length > 0) {
       for (const d of delivered) {
         console.log(`[opsTick] delivered ${d.id} — fuel $${d.fuelUsd}, driver owed $${d.owedUsd}, invoice due in ${d.dueIn} days`)
@@ -34,6 +34,14 @@ async function tick(reason) {
     if (paid.length > 0) {
       const total = paid.reduce((sum, p) => sum + p.amountUsd, 0)
       console.log(`[opsTick] invoices paid: ${paid.map((p) => p.id).join(', ')} — $${total.toLocaleString()}`)
+    }
+    // Same "every cost a tick applies is named here" rule the comment
+    // below states for interest/insurance -- a mid-route fuel stop is
+    // money leaving the account exactly like those are, so it gets the
+    // same treatment rather than being visible only in the database.
+    if (stopsSettled.length > 0) {
+      const total = stopsSettled.reduce((sum, s) => sum + s.costUsd, 0)
+      console.log(`[opsTick] fuel stops settled: ${stopsSettled.map((s) => s.id).join(', ')} — $${total.toLocaleString()}`)
     }
     // One line, everything the tick took, and what it left behind.
     //

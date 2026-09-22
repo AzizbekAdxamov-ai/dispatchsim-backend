@@ -72,6 +72,81 @@ export function interpolateGreatCircle(a, b, f) {
   }
 }
 
+// A point along an ACTUAL route polyline, by fraction f in [0,1] of the
+// route's own length -- not by index into the coordinates array.
+//
+// `coordinates` is OSRM's own [[lon,lat], ...] GeoJSON order (see
+// routing/osrm.js's header on why that shape is kept verbatim rather than
+// converted to {lat,lon} on the way into lane_routes). Segment lengths are
+// real distances (haversineMi), summed into a running total, so f=0.5
+// lands at the HALFWAY-BY-DISTANCE point -- critical for a route whose
+// segments are wildly uneven lengths (a simplified OSRM polyline has long
+// straight interstate segments and short knotted city-exit segments in the
+// same route): halfway by INDEX would put the marker a few miles from the
+// origin on such a route while claiming the truck is half done, because
+// most of the coordinate array's entries cluster around the two cities'
+// interchanges. Halfway by distance is where the truck actually is.
+//
+// Interpolation WITHIN a segment is a plain lat/lon lerp, not the sphere
+// slerp interpolateGreatCircle() uses for the whole-lane fallback below:
+// a route's own segments are short by construction (overview=simplified
+// still breaks a cross-country route into many points), so the lerp error
+// over a few miles is negligible -- the slerp exists because the fallback
+// arc spans an entire multi-hundred-mile lane in ONE step, which a lerp
+// would visibly cut through the wrong part of the country.
+export function pointAlongPath(coordinates, f) {
+  if (!Array.isArray(coordinates) || coordinates.length === 0) return null
+
+  const clamped = Math.min(1, Math.max(0, f))
+
+  if (coordinates.length === 1) {
+    const [lon, lat] = coordinates[0]
+    return { lat, lon }
+  }
+
+  const segmentLengths = []
+  let totalMi = 0
+  for (let i = 0; i < coordinates.length - 1; i += 1) {
+    const [lon1, lat1] = coordinates[i]
+    const [lon2, lat2] = coordinates[i + 1]
+    const len = haversineMi({ lat: lat1, lon: lon1 }, { lat: lat2, lon: lon2 })
+    segmentLengths.push(len)
+    totalMi += len
+  }
+
+  // Every point in the polyline is the same point (zero-length route) --
+  // degenerate, but real enough (an origin/destination pair OSRM still
+  // routed even though every vertex collapsed) that returning NaN would be
+  // worse than just answering with the one coordinate that exists.
+  if (totalMi === 0) {
+    const [lon, lat] = coordinates[0]
+    return { lat, lon }
+  }
+
+  const targetMi = clamped * totalMi
+  let coveredMi = 0
+  for (let i = 0; i < segmentLengths.length; i += 1) {
+    const segLen = segmentLengths[i]
+    const isLastSegment = i === segmentLengths.length - 1
+    if (coveredMi + segLen >= targetMi || isLastSegment) {
+      const segF = segLen === 0 ? 0 : (targetMi - coveredMi) / segLen
+      const [lon1, lat1] = coordinates[i]
+      const [lon2, lat2] = coordinates[i + 1]
+      return {
+        lat: lat1 + (lat2 - lat1) * segF,
+        lon: lon1 + (lon2 - lon1) * segF,
+      }
+    }
+    coveredMi += segLen
+  }
+
+  // Unreachable given the loop above always resolves on its last
+  // iteration, kept only so a future edit that breaks that invariant
+  // fails loudly here instead of returning undefined to the caller.
+  const [lon, lat] = coordinates[coordinates.length - 1]
+  return { lat, lon }
+}
+
 // Where the load is, as fractions and raw numbers. `progress` is the
 // elapsed share of the *current* ETA window; `distanceRemainingMi` follows
 // the same share so the marker, the miles and the bar never disagree.
@@ -81,7 +156,23 @@ export function interpolateGreatCircle(a, b, f) {
 // sailing off past the destination into the Atlantic the moment a road
 // event pushed the ETA out. The load's lateness is stated by `late`, not
 // implied by a marker in the ocean.
-export function positionFor(load, now = new Date()) {
+//
+// `routeGeometry` (optional): a lane_routes.geometry array
+// ([[lon,lat], ...], OSRM's own coordinate order), the load's alternative
+// 0 route joined in by tracking.repository.js. When it's there the marker
+// travels pointAlongPath() -- the actual road. When it's null (an older
+// load whose lane was never searched, or a lane OSRM has no route for),
+// the marker falls back to interpolateGreatCircle() exactly as before --
+// this parameter is additive, not a breaking change to any existing call.
+// `geometrySource` on the return says which one ran, so the page can say
+// so too instead of pretending every marker was always road-accurate.
+//
+// `load.currentStop` (optional, set by tracking.repository.js's board
+// query): { lat, lon, arrivedAt, ... } for the facility the load is AT
+// right now, or absent/null otherwise. When present it freezes the marker
+// the same way `load.eventOpenedAt` already does -- see the precedence
+// comment beside `freezeAtMs` below for which one wins when both apply.
+export function positionFor(load, now = new Date(), routeGeometry = null) {
   const { origin, destination } = laneEndpoints(load)
   if (!origin || !destination) return null
 
@@ -103,8 +194,22 @@ export function positionFor(load, now = new Date()) {
   // there, and the badge has to say so even though the marker itself does
   // not move. Two different "now"s for two different questions -- one
   // asks where the truck is, the other asks whether it's on time.
-  const effectiveNowMs = load.eventOpenedAt
-    ? Math.min(now.getTime(), new Date(load.eventOpenedAt).getTime())
+  // A planned stop (facilities/stopPlan.js, via stop_visits, joined in by
+  // tracking.repository.js as `currentStop`) freezes the truck the same
+  // way an open road event does -- at the moment it arrived -- but an
+  // open event wins when both are true at once. A road event is something
+  // that happened TO the run (a blowout, a DOT stop, weather) that nobody
+  // planned; a stop is the run going exactly as planned. The more
+  // truthful "where is the truck right now" answer, for a driver who is
+  // simultaneously mid-emergency AND mid-plan, is the emergency -- so
+  // eventOpenedAt's freeze point governs, and its ALREADY-EXISTING
+  // computed route position is used below, not the facility's
+  // coordinates.
+  const freezeAtMs = load.eventOpenedAt
+    ? new Date(load.eventOpenedAt).getTime()
+    : (load.currentStop ? new Date(load.currentStop.arrivedAt).getTime() : null)
+  const effectiveNowMs = freezeAtMs !== null
+    ? Math.min(now.getTime(), freezeAtMs)
     : now.getTime()
 
   const totalMs = etaMs - dispatchedMs
@@ -112,7 +217,25 @@ export function positionFor(load, now = new Date()) {
   const f = Math.min(1, Math.max(0, elapsedMs / totalMs))
   const late = now.getTime() > etaMs
 
-  const point = interpolateGreatCircle(origin, destination, f)
+  // A real route beats the fallback arc whenever there is one worth
+  // using. Fewer than 2 coordinates can't be interpolated (a single point,
+  // or a geometry column holding something malformed) -- that's treated
+  // the same as "no route", not as a crash.
+  const hasRoute = Array.isArray(routeGeometry) && routeGeometry.length >= 2
+  // At a facility (and not simultaneously mid-event -- see the precedence
+  // comment above) the marker sits on the facility's OWN coordinates, not
+  // wherever `f` projects onto the route: a stop candidate is only
+  // required to be within ROUTE_CORRIDOR_MI of the route (stopPlan.js),
+  // not ON it, so the two points can differ by up to that radius, and
+  // showing the truck exactly where it is parked is the more honest
+  // answer than showing it floating on the road beside the facility.
+  const atFacility = Boolean(load.currentStop) && !load.eventOpenedAt
+  const point = atFacility
+    ? { lat: load.currentStop.lat, lon: load.currentStop.lon }
+    : hasRoute
+      ? pointAlongPath(routeGeometry, f)
+      : interpolateGreatCircle(origin, destination, f)
+  const geometrySource = atFacility ? 'stop' : (hasRoute ? 'route' : 'arc')
 
   // Great-circle miles for the trip, and the share of the lane's CONTRACT
   // miles that share implies. distance_mi is the 1.18 road-factor figure;
@@ -129,6 +252,11 @@ export function positionFor(load, now = new Date()) {
     lon: Number(point.lon.toFixed(5)),
     distanceRemainingMi,
     laneHaversineMi: Math.round(laneHaversineMi),
+    // 'route' when the marker walked the real OSRM polyline, 'arc' when it
+    // fell back to the great-circle arc, 'stop' when it's pinned to a
+    // facility the load is currently stopped at -- see the parameter doc
+    // above and the freeze-precedence comment near `freezeAtMs`.
+    geometrySource,
     // The lane's own endpoints, so the page can draw the whole route line
     // and both city dots -- not just the marker floating in space. Same
     // closed-set resolution the marker itself used.

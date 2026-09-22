@@ -5,7 +5,7 @@
 // out: nothing assigned it, nothing delivered it, nothing invoiced it. So
 // cash could only ever drain. These two pieces close the loop --
 // dispatch starts the clock, the tick finishes the run and pays for it.
-import { withTransaction } from '../../db/pool.js'
+import { withTransaction, pool } from '../../db/pool.js'
 import { AppError } from '../../lib/errors.js'
 import * as loadsRepo from './loads.repository.js'
 import * as cash from '../cash/cash.service.js'
@@ -19,6 +19,7 @@ import * as maintenanceRepo from '../fleet/maintenance.repository.js'
 const MAX_PER_TICK = 25
 import {
   simDaysToSeconds,
+  simDaysToMs,
   billableSimDays,
   interestForPeriodExactTiered,
 } from '../../constants/simClock.js'
@@ -38,6 +39,12 @@ import {
   TIRE_LIFE_FRONT_MI, TIRE_LIFE_REAR_MI, DAILY_DISTANCE_CAP_MI,
 } from '../../constants/truckWear.js'
 import { SIM_TODAY_SQL } from '../fleet/fleet.sql.js'
+import { planStops, describeWarning } from '../facilities/stopPlan.js'
+import * as facilitiesService from '../facilities/facilities.service.js'
+import * as routingRepo from '../routing/routing.repository.js'
+import * as stopVisitsRepo from '../facilities/stopVisits.repository.js'
+import * as dutyEventsRepo from '../hos/dutyEvents.repository.js'
+import { fromHosDomain, driverHosSnapshot, HOS_LOOKBACK_HOURS } from '../../constants/hosClock.js'
 
 // How long the run takes, in simulated days, from the window the broker
 // promised. Floored at half a day so a short local run still has a
@@ -54,14 +61,31 @@ export function transitDaysFor({ pickupAt, deliveryAt }) {
 // number was decided before the truck moved, and nothing ever said what
 // caused it. That was an improvement on what came before it (a load could
 // not be late at all), but it left the student watching a load slide to
-// 'crit' with no cause to look at and nothing to do.
+// 'crit' with no cause to look at and nothing to do -- there was no
+// visible reason for the lateness, only a die roll at t=0.
 //
-// Delay now comes from load_events -- weather, a breakdown, detention, a
+// There are now TWO real reasons a load can run late, and both say why.
+//
+// Delay comes from load_events -- weather, a breakdown, detention, a
 // closed road. The driver calls it in, the dispatcher chooses how to
 // handle it, and eta_at moves because of that choice. See
 // src/constants/loadEvents.js. About one load in five still meets
 // something, the same rate delayFactor produced; the difference is that
 // the fifth load now has a reason and a decision in it.
+//
+// Delay ALSO comes from the law, before the truck has met anything at
+// all: facilities/stopPlan.js runs the dispatched route against 49 CFR
+// 395's hours-of-service rules (src/constants/hosClock.js) and returns
+// legalArrivalAt -- when the run can ACTUALLY finish once the mandatory
+// breaks and 10-hour resets are accounted for. planAndSaveStops below
+// writes that onto eta_at once it is known. promised_eta_at is never
+// touched by either path -- it is what the broker was told, and an event
+// or a legal schedule does not renegotiate it -- so eta_at > promised_eta_at
+// is exactly the gap markLate already watches for (loads.repository.js),
+// now with a second, entirely legitimate cause behind it: a broker's
+// promised transit time that HOS never actually allowed in the first
+// place. That is a fact about the lane, not a verdict on the dispatcher
+// who booked it.
 
 export function fuelCostFor(distanceMi) {
   return Math.round((distanceMi / AVG_MPG) * FUEL_PRICE_PER_GAL)
@@ -73,7 +97,34 @@ export function fuelCostFor(distanceMi) {
 
 export async function dispatchLoad({ loadId, driverId, userId }) {
   try {
-    return await dispatchLoadInner({ loadId, driverId, userId })
+    const dispatched = await dispatchLoadInner({ loadId, driverId, userId })
+    // Best-effort, AFTER the dispatch's own transaction has committed --
+    // never inside it. A stop-planning failure (no cached route, no
+    // facility nearby, a malformed geometry) must not roll back a
+    // dispatch that already succeeded, and running it inside that
+    // transaction risks exactly that even with a local try/catch:
+    // Postgres marks a transaction aborted on its first failing
+    // statement regardless of whether JS caught the error. This is the
+    // "yuk baribir dispatch bo'lsin" requirement, structurally --
+    // nothing this call does can undo the dispatch above it.
+    await planAndSaveStops(dispatched).catch(async (err) => {
+      // Said on the load itself (loads.stop_plan_status/facts, 037), where
+      // the dispatcher's own screens read it -- not only in a server log.
+      // Only if even THAT write fails is the console the last place left.
+      await loadsRepo.setStopPlanOutcome(pool, {
+        loadId,
+        status: 'failed',
+        facts: [{
+          code: 'STOP_PLAN_FAILED',
+          cfr: null,
+          detail: `Stop planning failed (${err.message}). The load is dispatched; no fuel or rest stops `
+            + 'were planned and the ETA is the broker\'s transit estimate, not the HOS-legal one.',
+        }],
+      }).catch((writeErr) => {
+        console.error(`[dispatch] load ${loadId}: stop planning failed (${err.message}) and so did recording that (${writeErr.message})`)
+      })
+    })
+    return dispatched
   } catch (err) {
     // getDriverForDispatch is an unlocked SELECT, so two dispatches of two
     // different loads to the same driver both pass the pre-flight check.
@@ -184,6 +235,155 @@ async function dispatchLoadInner({ loadId, driverId, userId }) {
       transitDays: actualDays,
     }
   })
+}
+
+// ---------------------------------------------------------------------
+// Stop planning -- fuel and rest stops for the run just dispatched
+// ---------------------------------------------------------------------
+//
+// Runs AFTER dispatchLoadInner's own transaction commits (see
+// dispatchLoad's own comment on why) -- its own read of the load's route
+// and the truck's tank, its own writes, in a transaction of its own.
+// Nothing here can undo the dispatch; the worst outcome is a load with no
+// stop plan and eta_at left at the old, non-HOS-aware estimate -- and
+// that outcome is written onto the load (stop_plan_status/facts, 037),
+// never only logged and never thrown.
+//
+// Ordering: eta_at CANNOT be set inside dispatchLoadInner's own
+// transaction, and this is the second, sharper reason (past the
+// Postgres-transaction-poisoning one dispatchLoad's own comment already
+// gives): the legal arrival planStops computes depends on primary.geometry
+// (a cache READ against routing.repository.js) and the truck's own tank
+// state, neither of which dispatchLoadInner reads. Computing them inside
+// that transaction would mean holding it open across two more reads for a
+// number the dispatch itself does not need to succeed. So eta_at is
+// written here, in its OWN follow-up statement (loadsRepo.setLegalEtaAt),
+// after stop planning has actually produced a legal arrival -- a second
+// write to a row already committed, guarded the same way
+// loadEvents.sql.js's EXTEND_ETA_SQL guards its own eta_at update
+// (dispatched, not yet delivered), so a load that raced ahead in the gap
+// is left with whatever eta_at it already has rather than being
+// overwritten against a run that has moved on.
+//
+// dutyTimeline is persisted to duty_events (037) in the same transaction
+// as the stop visits -- the driver's ELD log for this run, planned once,
+// read back by the tick's syncDriverHos and by the NEXT dispatch's own
+// planStops call (priorDutyEvents), so hours carry from load to load.
+async function planAndSaveStops({ load, driver, truckId }) {
+  const lane = {
+    origin: { city: load.originCity, state: load.originState },
+    destination: { city: load.destinationCity, state: load.destinationState },
+  }
+  const laneText = `${lane.origin.city}, ${lane.origin.state} -> ${lane.destination.city}, ${lane.destination.state}`
+  const outcome = (status, facts) => loadsRepo.setStopPlanOutcome(pool, { loadId: load.id, status, facts })
+  const NOT_HOS_ETA = 'No fuel or rest stops were planned and the ETA is the broker\'s transit estimate, not the HOS-legal one.'
+
+  // Cache read ONLY -- routing.repository.js's getRoutes, never
+  // routing.service.js's routesFor. A load dispatches whether or not
+  // OSRM has ever been asked about this lane; asking it NOW would make
+  // dispatch depend on a network call to a third party, which no other
+  // write path in this codebase does.
+  const routes = await routingRepo.getRoutes(lane)
+  const primary = routes.find((r) => r.alternativeIndex === 0)
+  if (!primary) {
+    await outcome('no-route', [{
+      code: 'NO_CACHED_ROUTE',
+      cfr: null,
+      detail: `No road route is cached for ${laneText} (npm run routes:warm fills it). ${NOT_HOS_ETA}`,
+    }])
+    return
+  }
+
+  const truck = await trucksRepo.getTruckById(truckId)
+  if (!truck) {
+    await outcome('no-truck', [{
+      code: 'TRUCK_NOT_FOUND', cfr: null, detail: `Truck ${truckId} was not found. ${NOT_HOS_ETA}`,
+    }])
+    return
+  }
+
+  // Every known facility -- stopPlan.js does its own corridor filtering
+  // (perpMi <= ROUTE_CORRIDOR_MI), so nothing needs to be pre-filtered by
+  // geography here.
+  const facilities = await facilitiesService.listAll()
+
+  // The driver's own recent log. Without it every load started on a fresh
+  // 11 hours no matter what the driver did an hour ago, and the 60/70-hour
+  // weekly limits could never accumulate across loads.
+  const dispatchedMs = new Date(load.dispatchedAt).getTime()
+  const priorDutyEvents = await dutyEventsRepo.recentForDriver(pool, {
+    driverId: driver.id,
+    since: new Date(dispatchedMs - simDaysToMs(HOS_LOOKBACK_HOURS / 24)),
+  })
+
+  const { stops, dutyTimeline, legalArrivalAt, hosFacts, warnings } = planStops({
+    routeGeometry: primary.geometry,
+    distanceMi: load.distanceMi,
+    startFuelGallons: truck.fuelGallons,
+    fuelCapacityGal: truck.fuelCapacityGal,
+    facilities,
+    dispatchedAt: load.dispatchedAt,
+    promisedEtaAt: load.promisedEtaAt,
+    priorDutyEvents,
+  })
+
+  // Facts, not verdicts (BOSS/coder rule): legal reasons the run takes as
+  // long as it does -- including, when it applies, that the broker's
+  // promised window never fit the law -- plus anything the planner could
+  // not do (warnings), all stored on the load. No AppError, no block: the
+  // dispatch already happened.
+  const facts = [
+    ...hosFacts,
+    ...warnings.map((w) => ({ code: w.code, cfr: null, detail: describeWarning(w) })),
+  ]
+
+  if (!legalArrivalAt) {
+    await outcome('no-legal-arrival', [...facts, {
+      code: 'NO_LEGAL_ARRIVAL', cfr: null, detail: `The planner produced no arrival time. ${NOT_HOS_ETA}`,
+    }])
+    return
+  }
+
+  // dutyTimeline is in literal hours around dispatchedMs (stopPlan.js's
+  // two-clocks header); duty_events lives on the compressed calendar.
+  const dutyRows = fromHosDomain(dutyTimeline, dispatchedMs).map((e) => ({
+    driverId: driver.id,
+    loadId: load.id,
+    truckId,
+    status: e.status,
+    startedAt: new Date(e.startedAt),
+    endedAt: new Date(e.endedAt),
+    routeOffsetMi: e.routeOffsetMi,
+    facilityId: e.facilityId,
+  }))
+
+  await withTransaction(async (client) => {
+    await dutyEventsRepo.insertMany(client, dutyRows)
+    if (stops.length > 0) {
+      await stopVisitsRepo.insertMany(client, stops.map((s) => ({
+        loadId: load.id,
+        truckId,
+        driverId: driver.id,
+        facilityId: s.facilityId,
+        reason: s.reason,
+        routeOffsetMi: s.routeOffsetMi,
+        arrivedAt: s.arrivedAt,
+        departedAt: s.departedAt,
+        gallons: s.gallons,
+        costUsd: s.costUsd,
+      })))
+    }
+  })
+
+  const updated = await loadsRepo.setLegalEtaAt(pool, { loadId: load.id, legalArrivalAt })
+  if (!updated) {
+    facts.push({
+      code: 'ETA_NOT_UPDATED',
+      cfr: null,
+      detail: 'The load was delivered or cancelled before planning finished, so its ETA was left as it was.',
+    })
+  }
+  await outcome('planned', facts)
 }
 
 // ---------------------------------------------------------------------
@@ -489,6 +689,67 @@ export async function payDueInvoices() {
   return paid
 }
 
+// Fuel bought mid-route, paid for once the truck actually gets there.
+//
+// The STOP itself was already decided at dispatch (facilities/stopPlan.js)
+// -- this only waits for arrived_at to pass and then pays for it, the same
+// division of labour dispatch/tick already has for everything else: what
+// happens is decided once, what it COSTS is charged when the clock says it
+// happened. One transaction per visit, same reasoning as deliverArrivedLoads'
+// own header -- one refused spend must not take payDueInvoices or the rest
+// of the tick down with it.
+export async function settleArrivedStops() {
+  const settled = []
+  for (let i = 0; i < MAX_PER_TICK; i += 1) {
+    let handled = null
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      await withTransaction(async (client) => {
+        const [visit] = await stopVisitsRepo.claimArrivedFuelVisits(client, 1)
+        if (!visit) return
+
+        // Unlike the delivery-day fuel charge (addEntry, never refused --
+        // see applyRunToTruck's own comment on why a cost already incurred
+        // cannot be declined), a mid-route top-up still goes through the
+        // ordinary credit-limit guard: nothing forces this particular spend
+        // the way a delivered load's burn is forced, so a company already
+        // past its line meets the same refusal here it would meet buying
+        // fuel any other way. A refusal leaves settled_at NULL -- the next
+        // tick tries again.
+        await cash.spend(client, {
+          kind: 'fuel',
+          amountUsd: visit.costUsd,
+          description: `Fuel — stop at ${visit.facilityId}, load ${visit.loadId}`,
+          refType: 'stop_visit',
+          refId: String(visit.id),
+        })
+
+        const marked = await stopVisitsRepo.markSettled(client, visit.id)
+        if (!marked) return
+
+        // The tank fills by exactly what was bought here. lockTruckForRun
+        // reads the level under lock so the top-up can't race a concurrent
+        // delivery's burn; refuelTruck is reused as-is (the same function
+        // fleet.service.js's own manual refuel() calls) rather than a
+        // second UPDATE against trucks.
+        const truck = await trucksRepo.lockTruckForRun(client, visit.truckId)
+        if (truck) {
+          const toGallons = Math.min(truck.fuelCapacityGal, truck.fuelGallons + visit.gallons)
+          await trucksRepo.refuelTruck(client, { truckId: visit.truckId, toGallons })
+        }
+
+        handled = { id: visit.id, loadId: visit.loadId, costUsd: visit.costUsd, gallons: visit.gallons }
+      })
+    } catch (err) {
+      console.error(`[tick] stop settlement failed: ${err.message}`)
+      break
+    }
+    if (!handled) break
+    settled.push(handled)
+  }
+  return settled
+}
+
 // Interest accrues every tick against the balance as it stands, and the
 // clock advances whether or not anything is owed.
 //
@@ -625,7 +886,12 @@ export async function cancelDispatch({ loadId }) {
     // own comment promises cannot happen.
     const closed = await loadEventsRepo.closeEventsForLoad(client, loadId)
 
-    return { load: cancelled, eventsClosed: closed.length }
+    // The duty log planned for this run: what has not happened yet is
+    // removed, the status in progress ends now. The part already lived
+    // stays -- those hours were really driven and still count.
+    const duty = await dutyEventsRepo.trimForCancelledLoad(client, loadId)
+
+    return { load: cancelled, eventsClosed: closed.length, dutyEventsRemoved: duty.removed }
   })
 }
 
@@ -645,6 +911,33 @@ export async function markLateLoads() {
   return marked
 }
 
+// drivers.hos_remaining_min / hours_today_min / hours_week_min /
+// duty_status, derived from duty_events (037) for every working driver --
+// the writer those columns never had (hos.js's header). One transaction
+// for the whole roster: a company has a handful of drivers, and a
+// half-synced roster would show two drivers on two different clocks.
+export async function syncDriverHos() {
+  const nowMs = Date.now()
+  const since = new Date(nowMs - simDaysToMs(HOS_LOOKBACK_HOURS / 24))
+  const synced = []
+  await withTransaction(async (client) => {
+    const rows = await dutyEventsRepo.recentForWorkingDrivers(client, { since })
+    for (const { driverId, events } of rows) {
+      const snap = driverHosSnapshot(events, nowMs)
+      // eslint-disable-next-line no-await-in-loop -- one small UPDATE per driver
+      const done = await dutyEventsRepo.updateDriverHos(client, {
+        driverId,
+        dutyStatus: snap.dutyStatus,
+        hosRemainingMin: snap.hosRemainingMin,
+        hoursTodayMin: snap.hoursTodayMin,
+        hoursWeekMin: snap.hoursWeekMin,
+      })
+      if (done) synced.push(driverId)
+    }
+  })
+  return synced
+}
+
 // The three stages are independent on purpose. Each one already handles
 // its own failures, and this makes sure a thrown error in one can never
 // stop the other two -- the failure mode that froze the whole simulator.
@@ -659,6 +952,10 @@ export async function runTick() {
   }
   const delivered = (await settle('delivery', deliverArrivedLoads)) ?? []
   const paid = (await settle('invoices', payDueInvoices)) ?? []
+  // Mid-route fuel: the stop was already decided at dispatch, this is only
+  // the money once arrived_at has passed. Same place in the sequence as
+  // `paid` -- both settle something the world already did.
+  const stopsSettled = (await settle('stops', settleArrivedStops)) ?? []
   const interest = await settle('interest', chargeInterest)
   const insurance = await settle('insurance', chargeInsurance)
   // Events are rolled AFTER delivery, not before. A load that has already
@@ -669,5 +966,8 @@ export async function runTick() {
   // Last, so a load whose ETA just moved is classified on this tick
   // rather than looking on time for another thirty seconds.
   const late = (await settle('lateness', markLateLoads)) ?? []
-  return { delivered, paid, interest, insurance, events, late }
+  // After delivery (releaseDriver) so a driver who just finished is read
+  // off their log, not left on whatever the release wrote.
+  const hosSynced = (await settle('hos', syncDriverHos)) ?? []
+  return { delivered, paid, stopsSettled, interest, insurance, events, late, hosSynced }
 }

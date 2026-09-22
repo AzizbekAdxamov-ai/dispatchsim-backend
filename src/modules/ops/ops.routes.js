@@ -48,6 +48,7 @@ async function handleTick(req, res, next) {
     res.status(200).json({
       delivered: result.delivered.length,
       paid: result.paid.length,
+      stopsSettled: result.stopsSettled.length,
       late: result.late.length,
       interestUsd: result.interest?.amountUsd ?? 0,
       insuranceUsd: result.insurance?.amountUsd ?? 0,

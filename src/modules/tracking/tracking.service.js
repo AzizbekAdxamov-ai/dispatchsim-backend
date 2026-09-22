@@ -6,8 +6,62 @@
 // the bar and the ETA line can never disagree with one another.
 
 import * as repo from './tracking.repository.js'
+import * as loadsRepo from '../loads/loads.repository.js'
 import { positionFor, laneEndpoints } from './position.js'
-import { CITIES } from '../../../scripts/seed/cities.js'
+import { AppError } from '../../lib/errors.js'
+import { CITIES, roadMiles } from '../../../scripts/seed/cities.js'
+import { resolveCity, cityCompletions, rankPostings, hotLanes } from './laneSearch.js'
+import { simplifyPath } from '../routing/simplify.js'
+import * as routingService from '../routing/routing.service.js'
+
+// How much a board-poll route line may deviate (in miles, simplify.js's
+// own unit) from the full OSRM geometry before the map's own pixels would
+// show the difference -- the tolerance simplifyPath() is called with
+// below, so /tracking's 10s poll carries a few dozen points per lane
+// instead of the 2,000+ osrm.js now fetches (see its own header), while
+// the marker itself still walks the FULL geometry via position.js
+// (unchanged -- see positionFor's call below, which is handed
+// `load.routeGeometry` straight off the repository, not the simplified
+// copy this constant is for).
+//
+// CALCULATED, not picked: derived from the SAME projection constants the
+// board map itself renders with (frontend/src/data/usMap.js's
+// PROJECTION_BOUNDS and frontend/src/utils/usProjection.js's VIEW_W/PAD/
+// mercY -- duplicated here as plain numbers, since this is the backend
+// and cannot import a frontend file; see the numbers cited below so a
+// change on either side is at least visible as a stale comment, not a
+// silent drift).
+//
+//   1. usProjection.js's makeProject() fits PROJECTION_BOUNDS into a
+//      VIEW_W=740 x VIEW_H=400 viewBox with PAD=16 on every side, at
+//      whichever of the two axis scales is smaller (the tighter fit wins,
+//      same as `background-size: contain`). For this exact bounds box
+//      (minLon -124.7336, maxLon -66.9819, minY/maxY = mercY(25.2991) /
+//      mercY(56.9567)) the Y axis is the tighter fit:
+//        lonSpan  = 57.7517 deg
+//        yMercSpan = mercY(56.9567) - mercY(25.2991) = 43.4672
+//        scaleX = (740 - 2*16) / lonSpan  = 12.259 px/deg
+//        scaleY = (400 - 2*16) / yMercSpan =  8.466 px/deg  <- smaller, wins
+//      So the map actually renders at 8.466 SVG px per degree of
+//      longitude, not 12.259 -- using the wrong (wider) one here would
+//      UNDERSTATE how many miles a pixel covers and simplify too
+//      little.
+//   2. Miles per degree of LONGITUDE is latitude-dependent (a degree of
+//      longitude shrinks toward the poles); this board spans 25.3 deg to
+//      57.0 deg latitude, so the midpoint (41.128 deg -- roughly the
+//      Kansas/Nebraska line, a reasonable single number for a board that
+//      shows the whole country) is used: 69.172 * cos(41.128 deg) =
+//      52.08 mi/deg.
+//   3. Miles per SVG pixel, at that midpoint: 52.08 / 8.466 = 6.15 mi/px.
+//   4. Tolerance: a deviation of HALF a pixel is what "the eye cannot
+//      tell the difference" means on a raster/vector display -- anything
+//      smaller never resolves into a visibly different pixel column no
+//      matter how the SVG viewBox is finally scaled to the actual screen.
+//      0.5 * 6.15 = 3.075 mi, rounded DOWN (not to the nearest whole
+//      number) to 3 -- a smaller tolerance keeps MORE points, so rounding
+//      down is the conservative direction if this estimate is ever a
+//      little off.
+const BOARD_TOLERANCE_MI = 3
 
 // Why a row could not be placed. Mirrors the two things positionFor()
 // refuses on: a lane endpoint outside the closed CITIES set (a row written
@@ -32,7 +86,12 @@ export function shapeBoard(rows, now = new Date()) {
   const excluded = []
 
   for (const load of rows) {
-    const position = positionFor(load, now)
+    // load.routeGeometry: the LEFT JOINed lane_routes.geometry column
+    // (tracking.repository.js) -- null for a lane never searched, an
+    // array of [lon,lat] pairs for one that has been. positionFor()
+    // itself decides route-vs-arc; this call site only forwards what the
+    // query already fetched.
+    const position = positionFor(load, now, load.routeGeometry)
     if (!position) {
       // Loud, not silent -- see loadBoard.repository.js's buildBaseCte.
       // A load that quietly drops off the board reads as "nothing to see
@@ -57,9 +116,38 @@ export function shapeBoard(rows, now = new Date()) {
       etaAt: load.etaAt,
       promisedEtaAt: load.promisedEtaAt,
       dispatchedAt: load.dispatchedAt,
-      driver: load.driver, // { id, name } or null
+      // { id, name, dutyStatus, hosRemainingMin, hoursTodayMin,
+      //   hoursWeekMin } or null -- the HOS columns syncDriverHos writes.
+      driver: load.driver,
+      stopPlanStatus: load.stopPlanStatus ?? null,
+      stopPlanFacts: load.stopPlanFacts ?? [],
       truck: load.truck, // { id, make, model } or null
       openEvent: Boolean(load.eventOpenedAt),
+      // The facility the load is AT right now, or null between stops --
+      // straight off tracking.repository.js's own currentStop subselect,
+      // minus the lat/lon it carries only for position.js's freeze (the
+      // page draws the marker at the SAME point positionFor() already
+      // returned as lat/lon above; a second coordinate pair here would
+      // just be a second, possibly-stale copy of the same fact).
+      currentStop: load.currentStop
+        ? {
+          facilityName: load.currentStop.facilityName,
+          city: load.currentStop.city,
+          state: load.currentStop.state,
+          reason: load.currentStop.reason,
+          arrivedAt: load.currentStop.arrivedAt,
+          departedAt: load.currentStop.departedAt,
+          gallons: load.currentStop.gallons,
+          costUsd: load.currentStop.costUsd,
+        }
+        : null,
+      // The load's whole planned run of stops (see tracking.repository.js's
+      // own header on why this is embedded here rather than a separate
+      // endpoint) -- [] for a load dispatched before stop planning existed,
+      // or one whose lane/truck lookup failed at dispatch time (said in
+      // stopPlanStatus/stopPlanFacts above, never thrown; see
+      // dispatch.service.js's planAndSaveStops).
+      plannedStops: load.plannedStops ?? [],
       // Position fields, one flat level down so the page reads one shape.
       progress: position.progress,
       late: position.late,
@@ -70,6 +158,31 @@ export function shapeBoard(rows, now = new Date()) {
       // Lane endpoints with coordinates, for drawing the route line.
       originPos: position.origin,
       destinationPos: position.destination,
+      // A SIMPLIFIED copy of the polyline (not the full OSRM geometry --
+      // see BOARD_TOLERANCE_MI's own header above for why), so the page
+      // can draw the actual road's shape instead of just the
+      // straight-line endpoints above -- null when no route has been
+      // fetched for this lane yet (GET /tracking/route, or the new
+      // GET /tracking/loads/:id/route, fetches and caches one on demand).
+      // The marker's OWN position, computed above, still walked the FULL
+      // geometry (positionFor() was handed `load.routeGeometry` straight
+      // off the repository a few lines up, before this simplification
+      // ever runs) -- simplifying is a board-payload-size decision, not
+      // an accuracy one, and it never touches where the dot itself sits.
+      routeGeometry: load.routeGeometry ? simplifyPath(load.routeGeometry, BOARD_TOLERANCE_MI) : null,
+      // States the contract of the field above rather than leaving the
+      // page to assume it: this is always the simplified copy when
+      // present, never the full one. A load's own detail panel fetches
+      // the full geometry separately (GET /tracking/loads/:id/route,
+      // 'detail: full' in ITS OWN response) when the user actually
+      // selects that load -- see tracking.controller.js's loadRoute.
+      routeGeometryDetail: 'simplified',
+      // 'route' | 'arc' from positionFor() says which geometry the marker
+      // ITSELF walked -- stated here rather than left for the page to
+      // infer from routeGeometry's presence, because the two can disagree
+      // (a route with fewer than 2 points is present but unusable, and
+      // positionFor() already fell back to the arc for it).
+      geometrySource: position.geometrySource,
     })
   }
 
@@ -132,4 +245,105 @@ export function mapReference() {
   return {
     cities: CITIES.map(({ city, state, lat, lon }) => ({ city, state, lat, lon })),
   }
+}
+
+// The fleet map's A→B lane search. Reads like the load board's own
+// filters: optional origin, optional destination, both resolved against
+// the closed city set -- an unknown city is a 400 (UNKNOWN_CITY), never
+// a silent empty result, because "no freight" and "not a city we map"
+// are different answers to a dispatcher choosing where to send a truck.
+//
+// Three result blocks:
+//   lane    -- the resolved lane itself (miles via cities.js's
+//              roadMiles(), the same mileage the board stores); null
+//              unless BOTH ends are named -- an origin-only search has
+//              no lane to draw yet
+//   results -- ranked open postings: exact lane first, then one-end
+//              matches, then the market's best (see laneSearch.js)
+//   hotLanes -- the busiest open lanes. Served both for the initial
+//              no-search view (open the page, see the market) and after
+//              clearing the boxes -- an empty search means "show me the
+//              market", which is an answer, not an error.
+export async function searchLane({ origin, destination }) {
+  const originCity = origin ? resolveCity(origin) : null
+  if (origin && !originCity) throw new AppError('UNKNOWN_CITY')
+  const destinationCity = destination ? resolveCity(destination) : null
+  if (destination && !destinationCity) throw new AppError('UNKNOWN_CITY')
+
+  if (!originCity && !destinationCity) {
+    const postings = await repo.openPostings()
+    return { lane: null, results: [], hotLanes: hotLanes(postings, 6) }
+  }
+
+  const lane = originCity && destinationCity
+    ? {
+      origin: { city: originCity.city, state: originCity.state, lat: originCity.lat, lon: originCity.lon },
+      destination: { city: destinationCity.city, state: destinationCity.state, lat: destinationCity.lat, lon: destinationCity.lon },
+      distanceMi: roadMiles(originCity, destinationCity),
+    }
+    : null
+
+  const postings = await repo.openPostings()
+  const anchor = lane ? lane.origin : originCity
+  const results = rankPostings(postings, { lane, anchor, limit: 6 })
+
+  return {
+    lane,
+    results,
+    hotLanes: [],
+  }
+}
+
+// The search box's type-ahead. Deliberately NOT a fuzzy matcher over an
+// unbounded gazetteer: the freight world this simulator routes through
+// is cities.js's closed set, so completions come from the same list the
+// board's own filters use -- a city that completes here is one the lane
+// search can actually resolve.
+export function searchCompletions(query) {
+  return { completions: cityCompletions(query, 6) }
+}
+
+// GET /tracking/loads/:loadId/route -- the FULL, unsimplified road
+// geometry for ONE load, fetched once when a dispatcher actually selects
+// it on the board (never on the 10s poll -- see BOARD_TOLERANCE_MI's own
+// header on why the board itself only ever ships the simplified copy).
+//
+// Reads the load's own lane (loads.repository's getLoadById, the same
+// row /loads/:id already serves) rather than requiring the caller to
+// already know the origin/destination cities -- a dispatcher selecting a
+// load off the board only has its id. Routed through
+// routing.service.js's own read-through cache exactly like GET
+// /tracking/route (tracking.controller.js's `route` handler) -- a lane
+// already searched by EITHER endpoint is reused by both, and a lane no
+// one has ever searched is fetched here on the spot rather than answered
+// with an empty result.
+//
+// Two distinct failure modes, both loud (never a silent empty array --
+// see routing.service.js's own header on why an OSRM failure is never
+// swallowed):
+//   - the load id itself doesn't exist -> LOAD_NOT_FOUND, the same error
+//     GET /loads/:id already uses for the same fact.
+//   - the load exists but its lane can't be routed (an unmapped city, or
+//     OSRM refusing/timing out) -> whatever AppError routingService.
+//     routesFor() throws (UNKNOWN_CITY / ROUTE_UNAVAILABLE), unmodified --
+//     duplicating that error handling here would be a second place for
+//     the two to drift apart.
+export async function loadRoute(loadId) {
+  const load = await loadsRepo.getLoadById(loadId)
+  if (!load) throw new AppError('LOAD_NOT_FOUND')
+
+  const routes = await routingService.routesFor(
+    { city: load.originCity, state: load.originState },
+    { city: load.destinationCity, state: load.destinationState },
+  )
+
+  // routesFor() always throws rather than resolving with an empty array
+  // (see its own header) -- this guard is defensive, not a path this
+  // module expects to hit, kept so a future change there that DID start
+  // returning [] would fail loudly here instead of handing the page a
+  // geometry: undefined it has to guess about.
+  const primary = routes[0]
+  if (!primary) throw new AppError('ROUTE_UNAVAILABLE', 'No route available for this lane')
+
+  return { geometry: primary.geometry, detail: 'full' }
 }

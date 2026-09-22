@@ -67,6 +67,16 @@ const WIPE = [
 
   ['maintenance_records',  'DELETE FROM maintenance_records'],
   ['truck_daily_metrics',  'DELETE FROM truck_daily_metrics'],
+  // stop_visits (036): ON DELETE CASCADE off load_id, truck_id AND
+  // driver_id all at once -- it has to go before every one of those three
+  // parents, not just before loads. facility_id has no ON DELETE clause
+  // (a facility is never deleted -- see 036's own comment), so ordering
+  // against facilities (KEEP, never wiped) never comes up.
+  ['stop_visits',          'DELETE FROM stop_visits'],
+  // duty_events (037): CASCADE off driver_id, load_id and truck_id -- same
+  // reasoning as stop_visits directly above; facility_id is a plain
+  // reference into facilities (KEEP), which is never wiped.
+  ['duty_events',          'DELETE FROM duty_events'],
   ['loads',                'DELETE FROM loads'],
   ['trucks',               'DELETE FROM trucks'],
   ['drivers',              'DELETE FROM drivers'],

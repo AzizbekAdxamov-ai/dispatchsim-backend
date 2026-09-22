@@ -23,6 +23,7 @@
 // not judge. An option with no downside would be the program telling them
 // what to do.
 
+import { DUTY_STATUS } from './hosClock.js'
 import { FUEL_PRICE_PER_GAL, AVG_MPG } from '../modules/finance/finance.constants.js'
 
 // About one load in five meets something. Stated per LOAD, because that is
@@ -202,4 +203,29 @@ export function optionsFor(eventType) {
     ...resolveOption(eventType, o.key),
     detail: o.detail,
   }))
+}
+
+// What the driver's log says while an event's delay runs (duty_events,
+// 037). The duty status is a fact the law defines, not a choice:
+//
+//   49 CFR 395.2, "On-duty time", includes all time "waiting to be
+//   loaded or unloaded" (detention at the dock) and all time "repairing,
+//   obtaining assistance, or remaining in attendance upon a disabled
+//   commercial motor vehicle" (a breakdown, repaired on the shoulder or
+//   towed) -- On Duty Not Driving.
+//   Routing around weather or a closure is more road: Driving.
+//   Sitting out weather or a closure with the truck parked is Off Duty --
+//   the driver is relieved of work while nothing can move. That one is a
+//   stated modelling decision (a real driver could also log Sleeper
+//   Berth); the adverse-conditions extension (395.1(b)(1)) is not
+//   modelled, as hosClock.js's header says.
+const DUTY_DURING = Object.freeze({
+  weather: { wait: DUTY_STATUS.OFF_DUTY, reroute: DUTY_STATUS.DRIVING },
+  breakdown: { roadside: DUTY_STATUS.ON_DUTY_NOT_DRIVING, tow: DUTY_STATUS.ON_DUTY_NOT_DRIVING },
+  detention: { wait: DUTY_STATUS.ON_DUTY_NOT_DRIVING, bill: DUTY_STATUS.ON_DUTY_NOT_DRIVING },
+  roadClosure: { wait: DUTY_STATUS.OFF_DUTY, detour: DUTY_STATUS.DRIVING },
+})
+
+export function dutyStatusDuring(eventType, optionKey) {
+  return DUTY_DURING[eventType]?.[optionKey] ?? null
 }

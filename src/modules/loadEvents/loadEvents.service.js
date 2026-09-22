@@ -12,8 +12,11 @@ import * as chatRepo from '../driverChat/driverChat.repository.js'
 // hears.
 const EVENT_REPORT_DELAY_SEC = 12
 import {
-  EVENT_TYPES, chanceForFraction, pickEventType, resolveOption, optionsFor,
+  EVENT_TYPES, chanceForFraction, pickEventType, resolveOption, optionsFor, dutyStatusDuring,
 } from '../../constants/loadEvents.js'
+import { replanAfterEvent } from '../hos/replan.service.js'
+import * as loadsRepo from '../loads/loads.repository.js'
+import { pool } from '../../db/pool.js'
 import { simDaysToSeconds } from '../../constants/simClock.js'
 
 // Where the driver is when they call.
@@ -150,6 +153,41 @@ export async function listForLoad(loadId) {
 // One transaction: the ETA move, the money and the resolution have to land
 // together or a student pays for a tow that did not happen.
 export async function resolve({ eventId, loadId, optionKey, userId }) {
+  const result = await resolveInner({ eventId, loadId, optionKey, userId })
+
+  // The delay onto the driver's log, and the rest of the run planned again
+  // under HOS (hos/replan.service.js). AFTER the transaction above: the
+  // decision and its charge stand whatever happens here. A failure is
+  // written onto the load's stop_plan_facts, not only logged.
+  const e = result.event
+  const replan = await replanAfterEvent({
+    loadId: result.loadId,
+    eventAt: result.occurredAt,
+    delayHours: result.applied.hours,
+    delayStatus: dutyStatusDuring(result.eventType, result.applied.key),
+    label: `${EVENT_TYPES[result.eventType]?.summary ?? 'Road event'} (${result.applied.label})`,
+  }).catch(async (err) => {
+    await loadsRepo.appendStopPlanFacts(pool, {
+      loadId: result.loadId,
+      facts: [{ code: 'REPLAN_FAILED', cfr: null, detail: `The road event could not be written to the driver's log (${err.message}); the ETA moved by the option's hours only.` }],
+    }).catch((writeErr) => {
+      console.error(`[loadEvents] event ${e?.id}: replan failed (${err.message}) and so did recording that (${writeErr.message})`)
+    })
+    return { replanned: false, legalArrivalAt: null }
+  })
+
+  const etaAt = replan.legalArrivalAt ?? result.etaAt
+  return {
+    event: result.event,
+    applied: result.applied,
+    etaAt,
+    promisedEtaAt: result.promisedEtaAt,
+    nowLate: Boolean(etaAt && result.promisedEtaAt && new Date(etaAt) > new Date(result.promisedEtaAt)),
+    hosReplanned: replan.replanned,
+  }
+}
+
+async function resolveInner({ eventId, loadId, optionKey, userId }) {
   return withTransaction(async (client) => {
     const event = await repo.claimEvent(client, eventId)
     if (!event) throw new AppError('EVENT_NOT_FOUND')
@@ -203,11 +241,11 @@ export async function resolve({ eventId, loadId, optionKey, userId }) {
     return {
       event: resolved,
       applied,
+      loadId: event.loadId,
+      eventType: event.eventType,
+      occurredAt: event.occurredAt,
       etaAt: load?.etaAt ?? null,
       promisedEtaAt: load?.promisedEtaAt ?? null,
-      // Stated, not judged. Whether this run is now late is a fact the
-      // dispatcher can read off two timestamps.
-      nowLate: Boolean(load && new Date(load.etaAt) > new Date(load.promisedEtaAt)),
     }
   })
 }

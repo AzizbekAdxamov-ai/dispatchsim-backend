@@ -32,6 +32,11 @@ import * as solvencySql from '../src/modules/cash/solvency.sql.js'
 // reset-company.js cannot be imported -- it wipes on load -- so the query
 // it depends on lives in a module that can be.
 import * as chatBudgetSql from '../src/modules/chat/chatBudget.sql.js'
+import * as routingSql from '../src/modules/routing/routing.sql.js'
+import * as facilitiesSql from '../src/modules/facilities/facilities.sql.js'
+import * as stopVisitsSql from '../src/modules/facilities/stopVisits.sql.js'
+import * as dutyEventsSql from '../src/modules/hos/dutyEvents.sql.js'
+import * as complianceSql from '../src/modules/compliance/compliance.sql.js'
 import { REACHABLE_SQL } from '../src/db/companyTables.js'
 
 const STATEMENTS = [
@@ -168,7 +173,19 @@ const STATEMENTS = [
      FOR UPDATE SKIP LOCKED`],
 
   ['releaseDriver', `
-    UPDATE drivers SET duty_status = 'resting', hos_remaining_min = 660 WHERE id = $1`],
+    UPDATE drivers SET duty_status = 'resting' WHERE id = $1`],
+
+  ['appendStopPlanFacts', `
+    UPDATE loads
+       SET stop_plan_facts = stop_plan_facts || $2::jsonb, stop_plan_at = now()
+     WHERE id = $1
+    RETURNING id`],
+
+  ['setStopPlanOutcome', `
+    UPDATE loads
+       SET stop_plan_status = $2, stop_plan_facts = $3::jsonb, stop_plan_at = now()
+     WHERE id = $1
+    RETURNING id`],
 
   ['driver availability (real statuses)', `
     SELECT count(*)::int FROM loads l
@@ -389,7 +406,7 @@ const STATEMENTS = [
 // that does not name its statements by hand, and it exists because the
 // hand-written list is the part that rots: someone adds a query, forgets
 // this file, and the checker keeps reporting a clean run it never earned.
-for (const [label, mod] of [['alerts', alertSql], ['payroll', payrollSql], ['driverChat', driverChatSql], ['availability', availabilitySql], ['loadEvents', loadEventsSql], ['fleet', fleetSql], ['tracking', trackingSql], ['documents', documentsSql], ['solvency', solvencySql], ['chatBudget', chatBudgetSql]]) {
+for (const [label, mod] of [['alerts', alertSql], ['payroll', payrollSql], ['driverChat', driverChatSql], ['availability', availabilitySql], ['loadEvents', loadEventsSql], ['fleet', fleetSql], ['tracking', trackingSql], ['documents', documentsSql], ['solvency', solvencySql], ['chatBudget', chatBudgetSql], ['routing', routingSql], ['facilities', facilitiesSql], ['stopVisits', stopVisitsSql], ['dutyEvents', dutyEventsSql], ['compliance', complianceSql]]) {
   for (const [name, sql] of Object.entries(mod)) {
     if (typeof sql === 'string' && /^\s*(SELECT|INSERT|UPDATE|DELETE|WITH)/i.test(sql)) {
       STATEMENTS.push([`${label}: ${name}`, sql])
