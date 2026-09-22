@@ -10,7 +10,7 @@
 // for trailer_type (index-based) — same rule as build.js.
 import { findCity, roadMiles } from './cities.js'
 import { rateBandFor } from './validate.js'
-import { transitBand, EQUIP_LENGTHS } from './build.js'
+import { drawTransitHours, EQUIP_LENGTHS } from './build.js'
 import { raw } from './render.js'
 
 // ---------------------------------------------------------------------
@@ -176,8 +176,7 @@ export function buildPostingRows({ rng, postingItems, drivers, trucks, fleetEqui
       : Math.floor(rng() * (POSTING_CONFIG.coverageHours * 60 + 1))  // in the future
     const expiresOffset = postedOffset + lifetimeMin
     const pickupOffset = expiresOffset + 60 + Math.floor(rng() * 2821)
-    const { minH, maxH } = transitBand(item.distanceMi)
-    const transitH = minH + rng() * (maxH - minH)
+    const transitH = drawTransitHours(rng, item.distanceMi)
     const deliveryOffset = pickupOffset + Math.ceil(transitH * 60)
 
     // Rate: distance * ratePerMile, clamped to [distance, distance*5]

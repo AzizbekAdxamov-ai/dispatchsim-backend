@@ -11,6 +11,7 @@ import { ANCHOR_LOADS, ANCHOR_DRIVERS } from './anchors.js'
 import { renderInsert, jsonb } from './render.js'
 import { buildPostingRows } from './postings.js'
 import { buildTruckRows } from './trucks.js'
+import { BREAK_MINUTES, DRIVING_LIMIT_HOURS, DUTY_WINDOW_HOURS, REQUIRED_REST_HOURS } from '../../src/constants/hosClock.js'
 
 // Fixed point in time every generated timestamp is computed relative to.
 // Never Date.now() -- a run's output must not depend on when it happened
@@ -193,6 +194,53 @@ export function transitBand(distanceMi) {
   return { minH: distanceMi / 58 + 2, maxH: distanceMi / 42 + 12 * days }
 }
 
+// The SHORTEST transit a legal schedule can produce, 49 CFR 395.3:
+//
+//   (a)(2) 14-hour window after 10 consecutive hours off (a)(1), of
+//          which at most 11 hours may be driving (a)(3), with a 30-minute
+//          break (a)(3)(ii) due after 8 cumulative hours. One duty day
+//          therefore moves 11 hours of driving and 30 minutes of on-duty
+//          break, then 10 off -- a 24h cycle (or 24.5 where the break is
+//          additional) moving at most 11 hours of road time.
+//
+// DRIVING_LIMIT_HOURS / DUTY_WINDOW_HOURS / BREAK_MINUTES are the same
+// constants the live planner (facilities/stopPlan.js via hosClock.js)
+// enforces; deriving the floor from them is what makes a seeded window
+// and a planned run agree rather than two opinions about the law.
+// (Sleeper-berth splits can squeeze more driving into a window, but not
+// more driving into a DAY -- 11 hours is the daily driving cap regardless
+// of how the rest is split, so the floor stands without modelling it.)
+// The fastest legal schedule drives the clock's daily cap every day, so
+// the binding caps are the driving limit and the window: 14h of window
+// minus the 30-minute break could hold 13.5h of road time, but the 11h
+// driving cap is tighter -- it binds.
+const DRIVING_SPEED_MPH = 55 // long-haul planning speed, the same average the band's fast end assumes (58/42 across duty days)
+const MAX_DRIVE_HOURS_PER_DAY = Math.min(DRIVING_LIMIT_HOURS, DUTY_WINDOW_HOURS - BREAK_MINUTES / 60) // 11
+const MILES_PER_LEGAL_DAY = MAX_DRIVE_HOURS_PER_DAY * DRIVING_SPEED_MPH // 605 mi
+
+export function legalTransitFloorHours(distanceMi) {
+  const drivingH = distanceMi / DRIVING_SPEED_MPH
+  const days = Math.max(1, Math.ceil(distanceMi / MILES_PER_LEGAL_DAY))
+  // The whole run's driving, one 30-minute break made due inside each
+  // duty day (the 8-hour rule), and the ten-hour off-duty reset between
+  // consecutive duty days. Nothing is split per day because the fastest
+  // legal schedule just adds the per-day constants; the window cannot
+  // bind (a day's share of driving plus its break never exceeds 11.5h).
+  return drivingH + days * (BREAK_MINUTES / 60) + (days - 1) * REQUIRED_REST_HOURS
+}
+
+// The transit a posting advertises: a uniform draw inside transitBand's
+// window, floored at legalTransitFloorHours. The floor binds on multi-day
+// lanes -- hand-computed: at 800mi the band min promises 15.8h against a
+// legal minimum of 25.5h (two duty days + the reset); at 1200mi 22.7h
+// against 32.8h. Sub-day lanes are untouched: their band min is already
+// slower than the legal floor, and the board's short-haul spread keeps
+// its shape.
+export function drawTransitHours(rng, distanceMi) {
+  const { minH, maxH } = transitBand(distanceMi)
+  return Math.max(legalTransitFloorHours(distanceMi), minH + rng() * (maxH - minH))
+}
+
 // slack = how many hours before the promised delivery_at the load's ETA
 // sits. Comfortably early -> ontime, a little behind -> warn, well past
 // the promise -> crit. This is the single source of truth for in-transit
@@ -209,9 +257,8 @@ function statusFromSlack(slackH) {
 // the random slack draw into a sub-range that only ever resolves to one
 // status -- used to reverse-fit an anchor's already-decided status.
 function buildInTransitTimestamps(rng, distanceMi, forcedSlackRange) {
-  const { minH, maxH } = transitBand(distanceMi)
   const pickupAt = addHours(REFERENCE_NOW, -randFloat(rng, 6, 60))
-  const deliveryAt = addHours(pickupAt, randFloat(rng, minH, maxH))
+  const deliveryAt = addHours(pickupAt, drawTransitHours(rng, distanceMi))
   const [slackMin, slackMax] = forcedSlackRange || [-18, 12]
   const slackH = randFloat(rng, slackMin, slackMax)
   const etaAt = addHours(deliveryAt, -slackH)
@@ -225,11 +272,10 @@ function buildInTransitTimestamps(rng, distanceMi, forcedSlackRange) {
 // by the caller (it drives which AR-aging bucket the load's invoice
 // falls into), not picked here.
 function buildDoneTimestamps(rng, distanceMi, deliveredDaysAgo) {
-  const { minH, maxH } = transitBand(distanceMi)
   const deliveredAt = addHours(REFERENCE_NOW, -(deliveredDaysAgo * 24 + randFloat(rng, 0, 20)))
-  const actualTransitH = randFloat(rng, minH, maxH)
+  const actualTransitH = drawTransitHours(rng, distanceMi)
   const pickupAt = addHours(deliveredAt, -actualTransitH)
-  const promisedTransitH = randFloat(rng, minH, maxH)
+  const promisedTransitH = drawTransitHours(rng, distanceMi)
   const deliveryAt = addHours(pickupAt, promisedTransitH)
   const bookedAt = addHours(pickupAt, -randFloat(rng, 12, 96))
   const dispatchedAt = addHours(bookedAt, randFloat(rng, 1, Math.max(2, hoursBetween(bookedAt, pickupAt) - 1)))
@@ -239,10 +285,8 @@ function buildDoneTimestamps(rng, distanceMi, deliveredDaysAgo) {
 // A load that's booked but not yet picked up (status='neutral' --
 // dispatched_at/driver/truck stay NULL per loads_pending_clean).
 function buildNeutralTimestamps(rng, distanceMi) {
-  const { minH, maxH } = transitBand(distanceMi)
-  const bookedAt = addHours(REFERENCE_NOW, -randFloat(rng, 4, 72))
   const pickupAt = addHours(REFERENCE_NOW, randFloat(rng, 6, 140))
-  const deliveryAt = addHours(pickupAt, randFloat(rng, minH, maxH))
+  const deliveryAt = addHours(pickupAt, drawTransitHours(rng, distanceMi))
   return { bookedAt, pickupAt, deliveryAt, dispatchedAt: null, etaAt: null, deliveredAt: null, status: 'neutral' }
 }
 
