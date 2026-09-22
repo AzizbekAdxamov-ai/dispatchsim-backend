@@ -36,12 +36,6 @@ const UNPAID = [
   (a) => `Not until that ${money(a.owedUsd)} hits my account. I have been waiting ${a.daysOverdue} days on the oldest one.`,
 ]
 
-const RESTING = [
-  (a) => `I just came off a run. I have got about ${a.restHoursLeft} hours left on my ten.`,
-  (a) => `Cannot do it yet, I am on my ten. About ${a.restHoursLeft} hours to go.`,
-  (a) => `Give me ${a.restHoursLeft} more hours, I am still in my break from that last one.`,
-]
-
 const OUT_OF_HOURS = [
   (a) => `My eleven are gone. I cannot move this truck until I have had my ten off -- that is the law, not a mood.`,
   (a) => `I am at zero on drive time. Paper says eleven hours, I have driven every one of them. Ten off and I am yours.`,
@@ -55,7 +49,6 @@ const QUIT = [
 
 const BY_REASON = {
   [REASONS.UNPAID]: UNPAID,
-  [REASONS.RESTING]: RESTING,
   [REASONS.OUT_OF_HOURS]: OUT_OF_HOURS,
   [REASONS.QUIT]: QUIT,
 }

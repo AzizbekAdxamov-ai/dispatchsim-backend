@@ -8,18 +8,23 @@
 // running database.
 //
 // Order is the order they are checked. A driver who has quit is gone
-// whatever else is true; unpaid work outranks a rest break, because being
-// owed money is a decision the driver has made and a break is only time
-// passing.
+// whatever else is true; unpaid work outranks everything else, because
+// being owed money is a decision the driver has made.
+//
+// The ten-hour break used to be here and is not any more: the stop
+// planner carries owed rest into the run (the first block on the new log,
+// at the origin) instead of the dispatch refusing it. What remains as a
+// refusal is the state where the driver cannot drive AT ALL right now --
+// the 11-hour clock at zero -- which the planner cannot plan around,
+// because there is nothing to plan: the run simply starts with the full
+// ten-hour reset, and dispatching a driver at zero is dispatching a
+// person the law has parked.
 export const REASONS = Object.freeze({
   QUIT: 'quit',
   UNPAID: 'unpaid',
-  RESTING: 'resting',
-  // The 11-hour driving clock at zero (49 CFR 395.3(a)(3)). Checked after
-  // RESTING: both answer "can this person run right now", and the ten-hour
-  // break is the longer fact. Possible only since syncDriverHos began
-  // writing drivers.hos_remaining_min -- the availability header's own rule
-  // about reasons built on columns nothing writes.
+  // The 11-hour driving clock at zero (49 CFR 395.3(a)(3)). Written by
+  // syncDriverHos from the ELD log; NULL (log never covered the driver)
+  // stays dispatchable.
   OUT_OF_HOURS: 'out-of-hours',
 })
 

@@ -6,39 +6,23 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import 'dotenv/config'
 
-import { restHoursRemaining, isRested, REQUIRED_REST_HOURS, REQUIRED_REST_SIM_DAYS } from '../src/constants/hos.js'
+import { REQUIRED_REST_HOURS } from '../src/constants/hos.js'
 import { REASONS, REASON_KEYS } from '../src/constants/availabilityReasons.js'
 import { refusalLine } from '../src/modules/driverChat/driverChat.refusal.js'
-import { simDaysToSeconds } from '../src/constants/simClock.js'
 
-test('a driver who has never delivered is not a driver who needs rest', () => {
-  // Number(null) is 0, so a naive coercion turns "has never delivered
-  // anything" into "delivered this instant" -- and a brand new hire is
-  // sent to bed for ten hours before their first load. The SQL returns
-  // NULL for this case and the service must keep it NULL.
-  assert.equal(restHoursRemaining(null), 0)
-  assert.equal(restHoursRemaining(undefined), 0)
-  assert.ok(isRested(null))
-  // And the two states must not collapse into each other.
-  assert.notEqual(restHoursRemaining(null), restHoursRemaining(0))
+// The ten-hour break is no longer a refusal reason: the stop planner
+// carries owed rest into the run, so a driver who just delivered can be
+// dispatched and the run simply starts with the rest at the origin.
+// stopPlan.test.js asserts the planner side of that decision; these tests
+// assert that availability no longer stands between the two.
+test('resting is not a refusal reason any more', () => {
+  assert.ok(!Object.values(REASONS).includes('resting'))
 })
 
-test('the rest break is the ten hours 49 CFR 395.3 requires', () => {
+test('the ten-hour constant stays the law\'s, wherever it is used', () => {
   assert.equal(REQUIRED_REST_HOURS, 10)
-  assert.equal(restHoursRemaining(0), 10)
-  assert.equal(restHoursRemaining(4), 6)
-  assert.equal(restHoursRemaining(10), 0)
-  assert.equal(restHoursRemaining(99), 0)
-  assert.ok(!isRested(9.9))
-  assert.ok(isRested(10))
-})
-
-test('ten hours on the compressed calendar is fifty real seconds', () => {
-  // Long enough to be felt as "not yet", short enough that nobody sits
-  // watching a clock. If this were counted in real hours the break would
-  // be twelve real hours long and would read as the app refusing to work.
-  assert.equal(simDaysToSeconds(REQUIRED_REST_SIM_DAYS), 50)
 })
 
 test('every reason has something for the driver to say', () => {
@@ -120,4 +104,48 @@ test('every reason key still maps to refusal lines', () => {
     const line = refusalLine({ driverId: 'd1', reason: key, restHoursLeft: 5, owedUsd: 100, daysOverdue: 2, unpaidCount: 1 })
     assert.ok(line, `${key} has something to say`)
   }
+})
+
+// --- the dispatch level: owed rest does not refuse ----------------------
+
+const hasDb = Boolean(process.env.DATABASE_URL)
+
+test('a driver with owed ten-hour rest is still dispatchable', { skip: !hasDb }, async (t) => {
+  // The decision this test pins: the stop planner carries the rest into
+  // the run, so availability must not refuse it on a second clock. The
+  // fixture (inside the rolled-back transaction) recreates the exact
+  // state the old RESTING branch refused: a driver who delivered a load
+  // this instant, whose live clock is wide open.
+  const { pool, withTransaction } = await import('../src/db/pool.js')
+  const { driverAvailability } = await import('../src/modules/availability/availability.service.js')
+
+  const client0 = await pool.connect()
+  let driverId
+  try {
+    const r = await client0.query(`SELECT id FROM drivers ORDER BY created_at LIMIT 1`)
+    driverId = r.rows[0]?.id
+  } finally {
+    client0.release()
+  }
+  if (!driverId) {
+    t.skip('no driver available')
+    return
+  }
+
+  await withTransaction(async (client) => {
+    // Isolate the two clocks this decision is about: payroll grievances
+    // paid off inside the transaction (rolled back with everything else),
+    // so the only remaining fact is the state releaseDriver leaves --
+    // duty rest, live clock wide open. The service reads only the live
+    // clock; the old branch read a second clock (sim hours since
+    // delivery) that the planner does not use, which is the whole reason
+    // it is gone.
+    await client.query(`UPDATE driver_settlements SET paid_at = now() WHERE driver_id = $1 AND paid_at IS NULL`, [driverId])
+    await client.query(`UPDATE drivers SET duty_status = 'resting', hos_remaining_min = 600 WHERE id = $1`, [driverId])
+
+    const availability = await driverAvailability(client, driverId)
+    assert.equal(availability.available, true,
+      'owed rest is carried by the stop plan, not refused at dispatch')
+    assert.equal(availability.reason, null)
+  })
 })

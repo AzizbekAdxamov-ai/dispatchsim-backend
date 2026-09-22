@@ -23,24 +23,8 @@
 //   49 CFR 395.3(a)(1) -- a property-carrying driver must have 10
 //   consecutive hours off duty before driving again.
 //
-// So a driver who has just delivered is on their ten. That is the only HOS
-// claim this file makes, and when the other columns get writers the rest
-// can be added here.
+// So a driver who has just delivered is on their ten. The stop planner
+// (facilities/stopPlan.js) carries that fact into every run it plans --
+// the owed rest is the first block on the new log -- and dispatch no
+// longer refuses it separately on a sim-hour clock.
 export const REQUIRED_REST_HOURS = 10
-
-// Ten hours on the compressed calendar. One simulated day is two real
-// minutes, so this is fifty real seconds -- long enough to be felt as "not
-// yet", short enough that a student is not sitting watching a clock.
-export const REQUIRED_REST_SIM_DAYS = REQUIRED_REST_HOURS / 24
-
-// Hours of rest still owed, given how long ago the last load delivered.
-// null in means never delivered anything, which is not a driver who needs
-// rest -- it is a driver who has not worked yet.
-export function restHoursRemaining(simHoursSinceDelivery) {
-  if (simHoursSinceDelivery == null) return 0
-  return Math.max(0, REQUIRED_REST_HOURS - simHoursSinceDelivery)
-}
-
-export function isRested(simHoursSinceDelivery) {
-  return restHoursRemaining(simHoursSinceDelivery) <= 0
-}

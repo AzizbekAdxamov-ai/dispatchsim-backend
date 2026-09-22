@@ -200,8 +200,6 @@ async function dispatchLoadInner({ loadId, driverId, userId }) {
         owedUsd: availability.standing.owedUsd,
         daysOverdue: availability.standing.daysOverdue,
         unpaidCount: availability.standing.unpaidCount,
-        restHoursLeft: availability.restHoursLeft ?? null,
-        requiredRestHours: availability.requiredRestHours ?? null,
       })
     }
 
