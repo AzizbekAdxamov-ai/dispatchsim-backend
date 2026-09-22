@@ -229,3 +229,22 @@ const DUTY_DURING = Object.freeze({
 export function dutyStatusDuring(eventType, optionKey) {
   return DUTY_DURING[eventType]?.[optionKey] ?? null
 }
+
+// What the driver is doing while the event is OPEN -- before any option
+// is chosen. The wait's status is a fact about the EVENT under 49 CFR
+// 395.2, not about the choice: attending a disabled truck is On Duty
+// whether it ends up repaired on the shoulder or towed, sitting out
+// weather/closure is Off Duty the whole time it is parked. Every event
+// type here resolves into one of those two while open, so the mapping is
+// by type, not by option. loadEvents.service.js's dutyStatusDuring keeps
+// its own role: the RESOLVED delay's status, which is the option's.
+const DUTY_WHILE_OPEN = Object.freeze({
+  weather: DUTY_STATUS.OFF_DUTY,
+  breakdown: DUTY_STATUS.ON_DUTY_NOT_DRIVING,
+  detention: DUTY_STATUS.ON_DUTY_NOT_DRIVING,
+  roadClosure: DUTY_STATUS.OFF_DUTY,
+})
+
+export function dutyStatusWhileOpen(eventType) {
+  return DUTY_WHILE_OPEN[eventType] ?? null
+}

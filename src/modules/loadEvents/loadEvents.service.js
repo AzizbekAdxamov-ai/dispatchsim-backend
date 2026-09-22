@@ -14,7 +14,7 @@ const EVENT_REPORT_DELAY_SEC = 12
 import {
   EVENT_TYPES, chanceForFraction, pickEventType, resolveOption, optionsFor, dutyStatusDuring,
 } from '../../constants/loadEvents.js'
-import { replanAfterEvent } from '../hos/replan.service.js'
+import { replanAfterEvent, logOpenEventWait } from '../hos/replan.service.js'
 import * as loadsRepo from '../loads/loads.repository.js'
 import { pool } from '../../db/pool.js'
 import { simDaysToSeconds } from '../../constants/simClock.js'
@@ -77,6 +77,15 @@ export async function rollEvents({ rng = Math.random, limit = 50 } = {}) {
         return row
       })
       if (!event) continue
+
+      // The wait goes on the driver's log NOW -- the truck stopped when
+      // the event happened, not when the dispatcher decides. Fire and
+      // forget like the chat report below: a log write that fails must
+      // not un-raise an event that has already happened, and the fact
+      // lands on the load's stop_plan_facts either way.
+      // eslint-disable-next-line no-await-in-loop
+      await logOpenEventWait({ loadId: load.id, eventType, eventAt: event.occurredAt })
+        .catch((e) => console.error(`[loadEvents] could not log the open wait on ${load.id}:`, e.message))
 
       // The driver reports it. Fire and forget: a chat write that fails
       // must not un-raise an event that has already happened.

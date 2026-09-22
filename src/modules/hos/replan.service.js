@@ -42,6 +42,7 @@ import {
   planStops, describeWarning, drivenMilesBefore, sliceRouteFrom,
 } from '../facilities/stopPlan.js'
 import { fromHosDomain, HOS_LOOKBACK_HOURS } from '../../constants/hosClock.js'
+import { dutyStatusWhileOpen } from '../../constants/loadEvents.js'
 import { simDaysToMs } from '../../constants/simClock.js'
 import { AVG_MPG } from '../finance/finance.constants.js'
 
@@ -168,4 +169,74 @@ export async function replanAfterEvent({ loadId, eventAt, delayHours, delayStatu
   facts.push(fact('ETA_REPLANNED', `After ${label.toLowerCase()}, the HOS-legal arrival is ${plan.legalArrivalAt}.`))
   await say()
   return { replanned: Boolean(updated), legalArrivalAt: updated ? plan.legalArrivalAt : null }
+}
+
+// An event that is still OPEN also stops the truck -- the driver is
+// standing at the place they reported from, now, not after the dispatcher
+// decides. Until now the cut happened only at resolve (this file's own
+// header states that limit), so while a dispatcher thought about an
+// option the ELD kept recording the plan driving on without the driver.
+//
+// This writes the wait as it happens:
+//   - the plan from occurred_at on is cut (the same cut resolve applies,
+//   - the wait is logged in the status the law gives that event while it
+//     is unresolved (dutyStatusDuring with a null option: attending a
+//     disabled truck is On Duty under 395.2 no matter how it ends up
+//     being fixed; sitting out weather/closure is Off Duty),
+//   - the wait event's ended_at is NULL-ended by convention: it runs to
+//     "now" until something else is written after it.
+//
+// Idempotent the way rule 7 demands: the cut is idempotent, and the wait
+// row rides duty_events_one_active_start's ON CONFLICT DO NOTHING on
+// (driver_id, started_at) -- a re-run writes nothing new. Resolve then
+// runs its own cut (a no-op against rows that are already cut) and its
+// delay row; the open wait row is replaced by the delay row's status via
+// the same one-active-start convention (the wait ends at the delay's
+// start, written by END_AT inside cutLoadAt).
+//
+// What it did is stated on the load, never only logged.
+export async function logOpenEventWait({ loadId, eventType, eventAt }) {
+  const facts = []
+  const say = () => loadsRepo.appendStopPlanFacts(pool, { loadId, facts })
+
+  const load = await loadsRepo.getLoadById(loadId)
+  if (!load || load.deliveredAt || !load.dispatchedAt || !load.driverId) {
+    return { logged: false }
+  }
+  // An event with no option chosen yet has no option key -- the status is
+  // what the EVENT is under the law, not what the dispatcher will pick.
+  const status = dutyStatusWhileOpen(eventType)
+  if (!status) {
+    facts.push(fact('EVENT_NOT_LOGGED', `${eventType}: no duty status is defined for this event type while it is unresolved, so the wait is not on the driver's log.`))
+    await say()
+    return { logged: false }
+  }
+
+  const eventMs = new Date(eventAt).getTime()
+  const runEvents = await dutyEventsRepo.forLoad(pool, loadId)
+  const drivenMi = Math.min(load.distanceMi, Math.max(0, drivenMilesBefore(runEvents, eventMs)))
+
+  await withTransaction(async (client) => {
+    await dutyEventsRepo.cutLoadAt(client, { loadId, at: new Date(eventMs) })
+    await stopVisitsRepo.deleteUnsettledFrom(client, { loadId, at: new Date(eventMs) })
+    await dutyEventsRepo.insertMany(client, [{
+      driverId: load.driverId,
+      loadId,
+      truckId: load.truckId,
+      status,
+      startedAt: new Date(eventMs),
+      // NULL would violate 037's NOT NULL; the ELD convention instead is
+      // an open block that the next write (resolve, cancel, delivery)
+      // closes. One compressed hour, re-cut by every later write, is the
+      // honest encoding: hosClock clips sums at now(), so a block running
+      // past now would read the same -- but a past-ended block keeps the
+      // uniqueness guard (one active start per driver per instant) sound.
+      endedAt: new Date(eventMs + simDaysToMs(1 / 24)),
+      routeOffsetMi: Math.round(drivenMi),
+      facilityId: null,
+    }])
+  })
+  facts.push(fact('EVENT_WAIT_LOGGED', `Open ${eventType}: the driver is ${status === 'off-duty' ? 'off duty at the scene' : 'on duty at the scene'} (mile ${Math.round(drivenMi)}) until a choice is applied; the clock is running.`))
+  await say()
+  return { logged: true, status }
 }
