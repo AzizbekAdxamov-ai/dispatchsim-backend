@@ -179,6 +179,59 @@ const BUILT_IN_SERVICE_NOTES = Object.freeze([
   'Recent alignment and brake service',
 ])
 
+// ---------------------------------------------------------------------
+// Facilities (migration 035) -- fuel stops, truck stops, rest areas and
+// repair shops placed along cached road geometry by
+// scripts/generate-facilities.js. Only two lists live here (rest_area
+// names are structural, built from the nearest city -- see
+// scripts/seed/facilities.js's restAreaName()) -- fuel and truck_stop
+// share TRUCK_STOP_NAMES.
+//
+// Every name here is invented. REAL BRAND NAMES ARE NOT ALLOWED --
+// see BANNED_TRUCK_STOP_BRANDS (validate.js) and
+// vocabularySchema.js's WRITABLE.TRUCK_STOP_NAMES/REPAIR_SHOP_NAMES
+// bannedExtra check: Pilot, Flying J, Love's, TA, TravelCenters, Petro,
+// QuikTrip, Buc-ee's, Sapp Bros and Roady's are real companies, and
+// attaching a fabricated price or service history to one of their names
+// would be publishing a false, damaging fact about a real business (the
+// same rule 013_brokers.sql states for brokers).
+//
+// Sized at 30 each -- above MAX_STOPS_PER_ROUTE (facilities.js: 27, the
+// worst case for the longest cached route landing entirely on one kind),
+// so scripts/generate-facilities.js's per-route pickUnusedName() never
+// has to repeat a name on any route this project's schema allows.
+//
+// MAX_STOPS_PER_ROUTE moved from 21 to 27 when hosClock.js's fix to
+// DAILY_DRIVE_MI (facilities.js: 770mi off the wrong legal number down
+// to 605mi, the real 11-hour driving limit) shrank SPACING_MI with it --
+// a denser corridor means MORE stops fit on the same 4000mi ceiling, so
+// six names were added to each list to clear the new floor with the same
+// margin the original 24 held over the old one.
+const BUILT_IN_TRUCK_STOP_NAMES = Object.freeze([
+  'Cedar Ridge Travel Plaza', 'Blue Mesa Fuel Stop', 'Prairie Wind Truck Stop',
+  'Redwood Crossing Fuel Center', "Sunbelt Traveler's Stop", 'Overland Fuel & Travel',
+  'Copper Creek Truck Plaza', 'Granite Pass Fuel Stop', 'Silver Spur Travel Center',
+  'Northgate Fuel Plaza', 'Timberline Truck Stop', 'Highline Fuel & Service',
+  'Eastbound Traveler Stop', 'Ironwood Fuel Depot', 'Sagebrush Truck Plaza',
+  'Milestone Fuel Center', 'Broken Wheel Truck Stop', 'Longhaul Fuel & Rest',
+  'Crossroads Fuel Plaza', 'Amber Valley Truck Stop', 'Westline Fuel Depot',
+  'Stonegate Travel Plaza', 'Coyote Bend Fuel Stop', 'Wayfarer Truck Plaza',
+  'Meadowlark Fuel & Travel', 'Palisade Truck Plaza', 'Driftwood Fuel Stop',
+  'Bearclaw Travel Center', 'Sundown Truck & Fuel', 'Whistlestop Fuel Plaza',
+])
+
+const BUILT_IN_REPAIR_SHOP_NAMES = Object.freeze([
+  'Ironhorse Diesel Repair', 'Redline Truck Service', 'Big Sky Diesel & Repair',
+  'Roadside Fleet Repair', 'Anchor Point Truck Service', 'Steel Bridge Diesel Shop',
+  'Highway Star Repair', 'Granite Creek Truck Repair', 'Norwood Diesel Service',
+  'Trailhead Truck & Trailer Repair', 'Copperline Fleet Service', 'Overpass Diesel Repair',
+  'Riverside Truck Service Center', 'Northbound Repair & Tire', 'Timber Fork Diesel Shop',
+  'Wayside Truck Repair', 'Stonebridge Fleet Repair', 'Ridgeline Diesel & Trailer',
+  'Crosscut Truck Service', 'Longview Repair Depot', 'Amber Creek Diesel Shop',
+  'Sable Point Truck Repair', 'Westbound Fleet Service', 'Millstone Diesel Repair',
+  'Farview Diesel & Trailer', 'Bluffside Truck Service', 'Hollowpine Fleet Repair',
+  'Cinderpost Diesel Shop', 'Rimrock Truck Repair', 'Eastfork Fleet & Tire',
+])
 
 // ---------------------------------------------------------------------
 // The generated overlay
@@ -244,6 +297,8 @@ export const FIRST_NAMES = Object.freeze(OVERLAY?.FIRST_NAMES ?? BUILT_IN_FIRST_
 export const LAST_NAMES = Object.freeze(OVERLAY?.LAST_NAMES ?? BUILT_IN_LAST_NAMES)
 export const SELLERS = Object.freeze(OVERLAY?.SELLERS ?? BUILT_IN_SELLERS)
 export const SERVICE_NOTES = Object.freeze(OVERLAY?.SERVICE_NOTES ?? BUILT_IN_SERVICE_NOTES)
+export const TRUCK_STOP_NAMES = Object.freeze(OVERLAY?.TRUCK_STOP_NAMES ?? BUILT_IN_TRUCK_STOP_NAMES)
+export const REPAIR_SHOP_NAMES = Object.freeze(OVERLAY?.REPAIR_SHOP_NAMES ?? BUILT_IN_REPAIR_SHOP_NAMES)
 
 // The built-ins stay exported so the schema can be checked against them:
 // test/vocabulary.test.js asserts that what ships satisfies the rules a
@@ -255,4 +310,6 @@ export const BUILT_IN = Object.freeze({
   LAST_NAMES: BUILT_IN_LAST_NAMES,
   SELLERS: BUILT_IN_SELLERS,
   SERVICE_NOTES: BUILT_IN_SERVICE_NOTES,
+  TRUCK_STOP_NAMES: BUILT_IN_TRUCK_STOP_NAMES,
+  REPAIR_SHOP_NAMES: BUILT_IN_REPAIR_SHOP_NAMES,
 })

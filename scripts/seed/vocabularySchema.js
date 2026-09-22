@@ -13,7 +13,7 @@
 // write at all. See FIXED below.
 
 import { EQUIPMENT_KEYS } from '../../src/constants/equipment.js'
-import { BANNED } from './validate.js'
+import { BANNED, BANNED_BRAND } from './validate.js'
 // Only from marketTargets.js, which imports nothing. Importing these from
 // the files that use them created vocabulary -> schema -> generate ->
 // vocabulary, and ESM answered it differently depending on which file was
@@ -22,6 +22,11 @@ import {
   EQUIPMENT_MIX, SERVICE_NOTE_DRAW, SERVICE_NOTES_FIELD_MAX,
   POSTING_CONFIG, APPLICANT_CONFIG, TRUCK_CONFIG,
 } from './marketTargets.js'
+// facilities.js imports nothing from this file (or from vocabulary.js/
+// validate.js) -- see its own header -- so importing MAX_STOPS_PER_ROUTE
+// from it here is one-directional and cannot recreate the cycle the
+// comment above describes.
+import { MAX_STOPS_PER_ROUTE } from './facilities.js'
 
 // Lists the model may write. Everything here is invented flavour: no real
 // company, no real person, nothing a student could look up and find a
@@ -91,6 +96,16 @@ export const WRITABLE = Object.freeze({
     min: Math.max(TRUCK_CONFIG.visibleTarget, SERVICE_NOTE_DRAW[1]),
     maxChars: SERVICE_NOTE_MAX_CHARS,
   },
+  // scripts/generate-facilities.js draws one of these per stop and
+  // refuses to repeat a name within a single route (facilities.js's
+  // pickUnusedName) -- MAX_STOPS_PER_ROUTE is the worst case, every stop
+  // on the longest cached route (lane_routes_distance_range, 034:
+  // <= 4000mi) landing on this one kind, so a list this long can never be
+  // forced to repeat on any real route. bannedExtra rejects the actual
+  // truck-stop/travel-center chains this project must never claim to be
+  // (see BANNED_TRUCK_STOP_BRANDS's own header in validate.js).
+  TRUCK_STOP_NAMES: { kind: 'list', min: MAX_STOPS_PER_ROUTE, maxChars: 40, bannedExtra: BANNED_BRAND },
+  REPAIR_SHOP_NAMES: { kind: 'list', min: MAX_STOPS_PER_ROUTE, maxChars: 40, bannedExtra: BANNED_BRAND },
 })
 
 // Lists the model may NOT write, and why. This is the line between
@@ -180,6 +195,13 @@ function reasonToDrop(value, rule, min) {
   if (t.length > rule.maxChars) return `${t.length} belgi, chegara ${rule.maxChars}`
   if (!SHAPE.test(t)) return 'ruxsat etilmagan belgi'
   if (BANNED.test(t)) return "taqiqlangan so'z"
+  // Per-rule extra ban, on top of the product-rules BANNED check above --
+  // today only TRUCK_STOP_NAMES/REPAIR_SHOP_NAMES set this, against real
+  // truck-stop brand names (BANNED_TRUCK_STOP_BRANDS, validate.js). A
+  // second, separate regex rather than merging into BANNED: that list is
+  // enforced on EVERY writable list (Mahsulot-qoidalari SS2, global), this
+  // one only makes sense for facility names.
+  if (rule.bannedExtra && rule.bannedExtra.test(t)) return "taqiqlangan brend nomi"
   return null
 }
 

@@ -17,6 +17,7 @@ import { dirname, join } from 'node:path'
 import {
   BUILT_IN, VOCABULARY_SOURCE, TRUCK_MODELS, TRUCK_MAKES,
   COMMODITIES, FIRST_NAMES, LAST_NAMES, SELLERS, SERVICE_NOTES,
+  TRUCK_STOP_NAMES, REPAIR_SHOP_NAMES,
 } from '../scripts/seed/vocabulary.js'
 import {
   validateVocabulary, normalizeVocabulary, WRITABLE, FIXED, COMMODITY_MIN,
@@ -194,6 +195,7 @@ test('whichever vocabulary is loaded, it satisfies the rules', () => {
 
   const loaded = {
     COMMODITIES, FIRST_NAMES, LAST_NAMES, SELLERS, SERVICE_NOTES,
+    TRUCK_STOP_NAMES, REPAIR_SHOP_NAMES,
   }
   const { ok, errors } = validateVocabulary(loaded)
   assert.deepEqual(errors, [], `yuklangan lug'at (${VOCABULARY_SOURCE}) qoidalardan o'tmadi`)

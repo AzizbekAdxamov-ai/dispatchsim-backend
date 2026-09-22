@@ -33,6 +33,24 @@ export const KEEP = Object.freeze(new Set([
   'users',
   'invite_codes',
   'brokers',
+  // lane_routes (034) -- a road-geometry cache keyed by city PAIR
+  // (origin/destination text columns), not by a foreign key into any
+  // company table. The same Dallas -> Houston route is the same route
+  // whichever company searches it -- it's world geography, not something
+  // this company owns -- so it belongs with brokers/CITIES, not with the
+  // drivers/trucks/loads a reset actually clears.
+  'lane_routes',
+  // facilities (035) -- fuel stops, truck stops, rest areas and repair
+  // shops placed along lane_routes geometry. Same reasoning as lane_routes
+  // directly above: a truck stop sitting on I-40 outside Amarillo is not
+  // this company's truck stop, it is the road's, and the next company
+  // that opens an account drives past the exact same one. Nothing here
+  // references a company table by foreign key (near_city/near_state are
+  // plain text, like brokers' own lack of a FK -- see 013's header), so
+  // reset-company.js's REACHABLE_SQL walk never even reaches it; it's
+  // listed here anyway so companyTables.test.js's "every table is
+  // classified" check has an explicit answer instead of an accidental one.
+  'facilities',
 ]))
 
 // Tables that are neither the company's nor the world's -- they are the

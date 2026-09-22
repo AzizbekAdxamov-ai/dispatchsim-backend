@@ -31,6 +31,23 @@ export const BANNED_WORDS = Object.freeze([
 // enforces cannot drift apart.
 export const BANNED = new RegExp(`\\b(${BANNED_WORDS.join('|')})\\b`, 'i')
 
+// Real truck-stop/travel-center/repair-chain brand names. Every facility
+// scripts/seed/facilities.js generates is invented (013_brokers.sql's own
+// header explains the same rule for brokers: this project attaches a
+// price and a service history to these names, and doing that to a real
+// company would be publishing a false, damaging fact about an actual
+// business). Kept as its own list rather than folded into BANNED_WORDS --
+// that list is a product-rules word ban (Mahsulot-qoidalari SS2, applies
+// everywhere); this one is specific to facility naming, checked only by
+// scripts/seed/vocabularySchema.js's TRUCK_STOP_NAMES/REPAIR_SHOP_NAMES
+// rules, and mixing the two would make BANNED_WORDS a place someone edits
+// to fix a facility-naming bug and forgets is also the product-rules list.
+export const BANNED_TRUCK_STOP_BRANDS = Object.freeze([
+  'Pilot', 'Flying J', "Love's", 'TA', 'TravelCenters', 'Petro',
+  'QuikTrip', "Buc-ee's", 'Sapp Bros', "Roady's",
+])
+export const BANNED_BRAND = new RegExp(`\\b(${BANNED_TRUCK_STOP_BRANDS.join('|')})\\b`, 'i')
+
 // Sweeps every string-valued field of a generated item and returns the
 // first field name that matches BANNED, or null if none do. Generic over
 // item shape on purpose -- it's used for loads, drivers, trucks and
