@@ -131,3 +131,14 @@ export async function openRoadEvents() {
   const { openEvents } = await import('../loadEvents/loadEvents.repository.js')
   return openEvents()
 }
+
+// Drive clocks inside their last hour, with the load they are running.
+// The threshold arrives as a bound from the catalog's constant, and the
+// sql-check registry PREPAREs the string against the live schema.
+export async function hosLowDrivers(thresholdMin) {
+  const result = await query(
+    SQL.HOS_LOW_DRIVERS_SQL,
+    [thresholdMin],
+  )
+  return result.rows
+}

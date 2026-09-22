@@ -127,3 +127,20 @@ export const ACK_SQL = `INSERT INTO alert_acks (user_id, alert_key, fingerprint)
 // Take it back.
 export const UNACK_SQL = `DELETE FROM alert_acks WHERE user_id = $1 AND alert_key = $2 RETURNING alert_key AS "alertKey"`
 
+
+// Drivers on the road whose 11-hour driving clock is inside its last hour
+// (49 CFR 395.3(a)(3) -- the number the alert counts down to). The load
+// comes along because the alert points at the run that is about to stop:
+// drivers.hos_remaining_min is written by the tick's syncDriverHos (037).
+// The threshold is a placeholder bound ($2), not typed into the string --
+// the constant lives in alerts.catalog.js.
+export const HOS_LOW_DRIVERS_SQL = `
+  SELECT d.id AS "driverId", d.name AS "driverName",
+         d.hos_remaining_min AS "hosRemainingMin",
+         l.id AS "loadId", l.rate_usd AS "rateUsd"
+    FROM drivers d
+    JOIN loads l ON l.driver_id = d.id AND l.status = 'in-transit'
+   WHERE d.duty_status <> 'off'
+     AND d.hos_remaining_min IS NOT NULL
+     AND d.hos_remaining_min <= $1::int
+   ORDER BY d.hos_remaining_min`

@@ -25,6 +25,13 @@
 // different situation, rather than the same one a minute later?
 
 import { CREDIT_LIMIT_USD, CREDIT_APR } from '../../constants/simClock.js'
+import { DRIVING_LIMIT_HOURS } from '../../constants/hosClock.js'
+
+// The clock this family watches is the law's 11-hour driving limit; the
+// alert fires inside the last hour of it -- a plain constant, but derived
+// from the CFR's own number rather than typed beside it.
+export const HOS_LOW_THRESHOLD_MIN = 60
+export const HOS_LOW_HOUR = DRIVING_LIMIT_HOURS
 
 // Money in the account moves constantly -- the tick charges interest every
 // 30 seconds -- so a fingerprint of the exact balance would un-silence the
@@ -158,6 +165,24 @@ export const FAMILIES = Object.freeze({
     fingerprint: () => 'idle',
     href: (a) => `/drivers/${a.driverId}`,
     stakeUsd: () => 0,
+  },
+
+  'driver.hos-low': {
+    // A clock the LAW owns: 49 CFR 395.3(a)(3) stops the 11-hour driving
+    // limit at zero, so the threshold is not picked -- it is the CFR
+    // section the remaining minutes count down to. The fingerprint is the
+    // remaining minutes quantized to whole HOS hours: a clock that ticks
+    // down minute by minute is the same situation until a full hour is
+    // gone, and a minute-resolution fingerprint would un-silence on every
+    // tick. Possible only since syncDriverHos (037) began WRITING
+    // drivers.hos_remaining_min -- see rule 2 in this file's header: an
+    // alert on a column nothing writes is a permanent lie, and this one
+    // waited until its data came alive.
+    title: (a) => `${a.driverName} has ${a.hosLabel} of drive time left`,
+    detail: (a) => `Load ${a.loadId} · 49 CFR 395.3(a)(3) — the 11-hour limit stops the run at zero`,
+    fingerprint: (a) => `h${Math.floor(a.hosRemainingMin / 60)}`,
+    href: (a) => `/loads/${a.loadId}`,
+    stakeUsd: (a) => a.rateUsd,
   },
 
   'driver.no-truck': {

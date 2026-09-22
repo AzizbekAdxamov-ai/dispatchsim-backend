@@ -6,7 +6,7 @@
 
 import * as repo from './alerts.repository.js'
 import * as cashRepo from '../cash/cash.repository.js'
-import { FAMILIES, isLeavingSoon } from './alerts.catalog.js'
+import { FAMILIES, isLeavingSoon, HOS_LOW_THRESHOLD_MIN } from './alerts.catalog.js'
 import { simAgo, realAgo, place } from './alerts.format.js'
 import { CREDIT_LIMIT_USD } from '../../constants/simClock.js'
 import { EVENT_TYPES } from '../../constants/loadEvents.js'
@@ -49,13 +49,14 @@ async function collect(label, fn, degraded) {
 export async function listAlerts({ userId, now = new Date() }) {
   const degraded = []
 
-  const [loads, roadEvents, unassigned, invoices, drivers, replies, rateCons, applicants, listings, balanceUsd, standing, acks] =
+  const [loads, roadEvents, unassigned, invoices, drivers, hosLow, replies, rateCons, applicants, listings, balanceUsd, standing, acks] =
     await Promise.all([
       collect('lateLoads', () => repo.lateLoads(), degraded),
       collect('openRoadEvents', () => repo.openRoadEvents(), degraded),
       collect('unassignedLoads', () => repo.unassignedLoads(), degraded),
       collect('overdueInvoices', () => repo.overdueInvoices(), degraded),
       collect('idleDrivers', () => repo.idleDrivers(), degraded),
+      collect('hosLowDrivers', () => repo.hosLowDrivers(HOS_LOW_THRESHOLD_MIN), degraded),
       collect('brokerReplies', () => repo.brokerReplies({ userId }), degraded),
       collect('unacceptedRateCons', () => repo.unacceptedRateCons({ userId }), degraded),
       collect('expiringApplicants', () => repo.expiringApplicants(), degraded),
@@ -117,6 +118,17 @@ export async function listAlerts({ userId, now = new Date() }) {
     } else {
       alerts.push(build('driver.idle', d.driverId, d))
     }
+  }
+
+  for (const d of hosLow) {
+    alerts.push(build('driver.hos-low', d.driverId, {
+      driverId: d.driverId,
+      driverName: d.driverName,
+      hosRemainingMin: d.hosRemainingMin,
+      loadId: d.loadId,
+      rateUsd: d.rateUsd,
+      hosLabel: `${Math.floor(d.hosRemainingMin / 60)}h ${d.hosRemainingMin % 60}m`,
+    }))
   }
 
   for (const r of replies) {

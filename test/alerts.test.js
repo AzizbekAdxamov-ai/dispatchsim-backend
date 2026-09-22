@@ -116,3 +116,34 @@ test('durations are singular when they should be, and never negative', () => {
   // A future timestamp is not a duration.
   assert.equal(simAgo(new Date(now.getTime() + 60000), now), 'not yet')
 })
+
+// --- driver.hos-low ----------------------------------------------------
+
+test('driver.hos-low: fingerprint quantizes to whole hours, so a ticking clock does not re-speak', () => {
+  const def = FAMILIES['driver.hos-low']
+  const at47 = def.fingerprint({ hosRemainingMin: 47 * 60 + 59 })
+  const at46 = def.fingerprint({ hosRemainingMin: 46 * 60 })
+  assert.equal(at47, 'h47')
+  assert.equal(at46, 'h46')
+  assert.notEqual(at47, at46, 'a whole hour gone is a different situation')
+  // The mutation this kills: a fingerprint of the raw minutes would
+  // un-silence the alert on every 30-second tick -- 59min, 58min, ... --
+  // which is spam, not an alert.
+  assert.notEqual(def.fingerprint({ hosRemainingMin: 47 * 60 }), def.fingerprint({ hosRemainingMin: 47 * 60 - 1 }))
+})
+
+test('driver.hos-low: the threshold and the CFR agree', async () => {
+  // The alert counts down to the 11-hour limit; the threshold constant
+  // must sit inside that limit, not beside it.
+  const { HOS_LOW_THRESHOLD_MIN, HOS_LOW_HOUR } = await import('../src/modules/alerts/alerts.catalog.js')
+  const { DRIVING_LIMIT_HOURS } = await import('../src/constants/hosClock.js')
+  assert.equal(HOS_LOW_HOUR, DRIVING_LIMIT_HOURS)
+  assert.ok(HOS_LOW_THRESHOLD_MIN > 0 && HOS_LOW_THRESHOLD_MIN <= DRIVING_LIMIT_HOURS * 60)
+})
+
+test('driver.hos-low: the detail names the CFR section it counts down to', () => {
+  const detail = FAMILIES['driver.hos-low'].detail({
+    loadId: '600009', hosRemainingMin: 45 * 60,
+  })
+  assert.ok(detail.includes('395.3(a)(3)'), detail)
+})
