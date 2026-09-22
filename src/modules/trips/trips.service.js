@@ -79,27 +79,50 @@ export async function planTrip({ waypoints, truck }) {
     }))
 
   const byId = new Map(facilities.map((f) => [f.id, f]))
+
+  // A rest with no facility is still a stop the plan makes -- the timeline
+  // and legalArrivalAt already carry it -- but `plan.stops` only holds
+  // facility-backed rows (stop_visits.facility_id is NOT NULL, 036), so
+  // without this the summary's own "Stops 10h 30m" pointed at a report
+  // that read "no stop is required". Shoulder rests come from the timeline's
+  // stationary off-duty/sleeper blocks that no facility-backed stop covers.
+  const coveredAt = new Set(plan.stops.map((s) => s.routeOffsetMi))
+  const shoulderRests = (plan.dutyTimeline ?? [])
+    .filter((e) => (e.status === 'off-duty' || e.status === 'sleeper-berth')
+      && e.routeOffsetMi != null
+      && !coveredAt.has(Math.round(e.routeOffsetMi)))
+    .map((e) => ({
+      reason: 'rest',
+      mile: Math.round(e.routeOffsetMi),
+      facility: null, // the 'Roadside' row the report already knows how to render
+      gallons: null,
+      costUsd: null,
+    }))
+
   return {
     ...summary,
     truck,
     geometry,
     tankGal: PLANNER_TANK_GAL,
-    plannedStops: plan.stops.map((s) => ({
-      reason: s.reason,
-      mile: s.routeOffsetMi,
-      facility: byId.has(s.facilityId)
-        ? {
-          id: s.facilityId,
-          name: byId.get(s.facilityId).name,
-          city: byId.get(s.facilityId).nearCity,
-          state: byId.get(s.facilityId).nearState,
-          lat: Number(byId.get(s.facilityId).lat),
-          lon: Number(byId.get(s.facilityId).lon),
-        }
-        : null,
-      gallons: s.gallons,
-      costUsd: s.costUsd,
-    })),
+    plannedStops: [
+      ...plan.stops.map((s) => ({
+        reason: s.reason,
+        mile: s.routeOffsetMi,
+        facility: byId.has(s.facilityId)
+          ? {
+            id: s.facilityId,
+            name: byId.get(s.facilityId).name,
+            city: byId.get(s.facilityId).nearCity,
+            state: byId.get(s.facilityId).nearState,
+            lat: Number(byId.get(s.facilityId).lat),
+            lon: Number(byId.get(s.facilityId).lon),
+          }
+          : null,
+        gallons: s.gallons,
+        costUsd: s.costUsd,
+      })),
+      ...shoulderRests,
+    ].sort((a, b) => a.mile - b.mile),
     hosFacts: [...plan.hosFacts, ...plan.warnings.map((w) => ({ code: w.code, cfr: null, detail: describeWarning(w) }))],
     truckStops,
   }
