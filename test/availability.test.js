@@ -104,3 +104,20 @@ test('nobody threatens anybody', () => {
     }
   }
 })
+
+// --- out-of-hours: the live 11-hour clock (syncDriverHos) --------------
+
+test('out-of-hours has lines for the driver to say, without inventing numbers', () => {
+  // The refusal line gets the minutes; the sentences must not round them
+  // into a different fact -- they reference the clock, not a fake figure.
+  const line = refusalLine({ driverId: 'd1', reason: REASONS.OUT_OF_HOURS, driveRemainingMin: 0 })
+  assert.ok(line, 'the reason has a line')
+  assert.ok(!/about|roughly|a couple/i.test(line), line)
+})
+
+test('every reason key still maps to refusal lines', () => {
+  for (const key of REASON_KEYS) {
+    const line = refusalLine({ driverId: 'd1', reason: key, restHoursLeft: 5, owedUsd: 100, daysOverdue: 2, unpaidCount: 1 })
+    assert.ok(line, `${key} has something to say`)
+  }
+})

@@ -42,6 +42,12 @@ const RESTING = [
   (a) => `Give me ${a.restHoursLeft} more hours, I am still in my break from that last one.`,
 ]
 
+const OUT_OF_HOURS = [
+  (a) => `My eleven are gone. I cannot move this truck until I have had my ten off -- that is the law, not a mood.`,
+  (a) => `I am at zero on drive time. Paper says eleven hours, I have driven every one of them. Ten off and I am yours.`,
+  (a) => `No. My clock is at zero -- forty-nine CFR three ninety-five says I stop here, and so do I.`,
+]
+
 const QUIT = [
   () => 'I do not run for you any more.',
   () => 'I have moved on. Still want what I was owed.',
@@ -50,6 +56,7 @@ const QUIT = [
 const BY_REASON = {
   [REASONS.UNPAID]: UNPAID,
   [REASONS.RESTING]: RESTING,
+  [REASONS.OUT_OF_HOURS]: OUT_OF_HOURS,
   [REASONS.QUIT]: QUIT,
 }
 

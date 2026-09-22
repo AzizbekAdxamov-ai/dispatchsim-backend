@@ -62,5 +62,25 @@ export async function driverAvailability(client, driverId) {
     }
   }
 
+  // The LIVE driving clock, written by the tick's syncDriverHos (037).
+  // Checked after the rest break because both answer "can this person run
+  // right now" and the rest is the longer fact. A driver whose hours are
+  // unknown (hos_remaining_min NULL -- the log has never covered them) is
+  // NOT a driver at zero, and stays dispatchable exactly as before this
+  // check existed. At zero the law -- not this program -- stops the run;
+  // the planStops block in dispatch would catch it anyway, but refusing
+  // here speaks in the driver's own voice while a midnight arrival would
+  // only say so after the fact.
+  const hosRow = await runner.query(SQL.DRIVE_REMAINING_SQL, [driverId])
+  const driveRemainingMin = hosRow.rows[0]?.driveRemainingMin == null ? null : Number(hosRow.rows[0].driveRemainingMin)
+  if (driveRemainingMin != null && driveRemainingMin <= 0) {
+    return {
+      available: false,
+      reason: REASONS.OUT_OF_HOURS,
+      standing,
+      driveRemainingMin,
+    }
+  }
+
   return { available: true, reason: null, standing }
 }

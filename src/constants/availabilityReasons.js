@@ -15,6 +15,12 @@ export const REASONS = Object.freeze({
   QUIT: 'quit',
   UNPAID: 'unpaid',
   RESTING: 'resting',
+  // The 11-hour driving clock at zero (49 CFR 395.3(a)(3)). Checked after
+  // RESTING: both answer "can this person run right now", and the ten-hour
+  // break is the longer fact. Possible only since syncDriverHos began
+  // writing drivers.hos_remaining_min -- the availability header's own rule
+  // about reasons built on columns nothing writes.
+  OUT_OF_HOURS: 'out-of-hours',
 })
 
 export const REASON_KEYS = Object.freeze(Object.values(REASONS))

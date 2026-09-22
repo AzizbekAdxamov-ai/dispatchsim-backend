@@ -25,3 +25,12 @@ export const HOURS_SINCE_LAST_DELIVERY_SQL = `
     LEFT JOIN loads l ON l.driver_id = d.id AND l.delivered_at IS NOT NULL
    WHERE d.id = $1
    GROUP BY d.id`
+
+// The driver's live 11-hour driving clock (49 CFR 395.3(a)(3)), as the
+// tick's syncDriverHos writes it. NULL when the log has never covered this
+// driver -- a driver whose hours are unknown is NOT a driver at zero, and
+// the service keeps those apart.
+export const DRIVE_REMAINING_SQL = `
+  SELECT hos_remaining_min AS "driveRemainingMin"
+    FROM drivers
+   WHERE id = $1 AND duty_status <> 'off'`
