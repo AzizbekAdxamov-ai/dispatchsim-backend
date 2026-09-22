@@ -64,6 +64,7 @@ export const ERROR_CODES = {
   APPLICANT_ALREADY_HIRED:{ status: 409, message: 'This applicant has already been hired' },
   DRIVER_EMAIL_TAKEN:     { status: 409, message: 'A driver with this email already exists' },
   UNKNOWN_CITY:           { status: 400, message: 'City not found in the system' },
+  LANE_SEARCH_EMPTY:      { status: 400, message: 'Enter an origin or a destination to search' },
   LISTING_NOT_FOUND:      { status: 404, message: 'Truck listing not found' },
   LISTING_ALREADY_BOUGHT: { status: 409, message: 'This listing has already been purchased' },
   LISTING_EXPIRED:        { status: 410, message: 'This listing has expired' },
@@ -108,6 +109,11 @@ export const ERROR_CODES = {
   LOAD_NOT_DISPATCHED:    { status: 409, message: 'This load has not been dispatched yet' },
   // GET /loads/:id/pod.pdf before delivery: there is nothing to prove yet.
   LOAD_NOT_DELIVERED:     { status: 409, message: 'This load has not been delivered yet' },
+  // GET /tracking/route: OSRM (router.project-osrm.org) timed out, refused
+  // the connection, or answered with code !== 'Ok'. A shared public demo
+  // server, not this app's own outage -- src/modules/routing/osrm.js never
+  // swallows this into a null/empty route, it always throws.
+  ROUTE_UNAVAILABLE:       { status: 503, message: 'Could not fetch a route right now' },
 }
 
 export class AppError extends Error {

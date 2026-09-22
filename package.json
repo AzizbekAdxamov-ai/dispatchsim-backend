@@ -31,6 +31,8 @@
     "mig:status": "node scripts/mig-status.js",
     "db:state": "node scripts/db-state.js",
     "sim:check": "node scripts/sim-clock-check.js",
+    "routes:warm": "node scripts/warm-routes.js",
+    "facilities:generate": "node scripts/generate-facilities.js",
     "prod": "node scripts/prod.js"
   },
   "dependencies": {

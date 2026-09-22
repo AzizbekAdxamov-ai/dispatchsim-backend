@@ -23,6 +23,9 @@ import opsRoutes from './modules/ops/ops.routes.js'
 import hrRoutes from './modules/hr/hr.routes.js'
 import trackingRoutes from './modules/tracking/tracking.routes.js'
 import documentsRoutes from './modules/documents/documents.routes.js'
+import facilitiesRoutes from './modules/facilities/facilities.routes.js'
+import complianceRoutes from './modules/compliance/compliance.routes.js'
+import tripsRoutes from './modules/trips/trips.routes.js'
 import { notFound } from './middleware/notFound.js'
 import { errorHandler } from './middleware/errorHandler.js'
 
@@ -63,6 +66,9 @@ app.use('/ops', opsRoutes)
 app.use('/hr', hrRoutes)
 app.use('/tracking', trackingRoutes)
 app.use('/documents', documentsRoutes)
+app.use('/facilities', facilitiesRoutes)
+app.use('/compliance', complianceRoutes)
+app.use('/trips', tripsRoutes)
 
 // Must stay last, in this order: notFound only catches requests that fell
 // through every real route above, and errorHandler must be the very last
