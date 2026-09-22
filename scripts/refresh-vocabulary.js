@@ -143,6 +143,35 @@ const REQUESTS = [
       + 'was removed, cleaned and reinstalled at 412,000 miles." Percentages and fractions '
       + 'are fine.',
   },
+  // Fictional truck-stop and repair-shop names for the facilities the
+  // generator places along routes (scripts/seed/facilities.js). The real
+  // chains are rejected by the schema's bannedExtra (BANNED_BRAND) -- the
+  // prompt names that rule too, so fewer items are wasted on it.
+  {
+    key: 'TRUCK_STOP_NAMES',
+    want: overAsk(WRITABLE.TRUCK_STOP_NAMES.min),
+    maxChars: WRITABLE.TRUCK_STOP_NAMES.maxChars,
+    system:
+      'You invent names for fictional independent truck stops and travel plazas on US interstates. '
+      + 'Reply with strict JSON only: {"items":[string]}. '
+      + 'Two to four words each, in the style of a regional independent stop.',
+    user: (want) =>
+      `Invent ${want} distinct truck-stop names. They must be INVENTED: never the name of a real `
+      + 'truck-stop or travel-center chain (for example Pilot, Flying J, Love\'s, TA, Petro, '
+      + 'QuikTrip, Buc-ee\'s, Sapp Bros, Roady\'s) or any business that exists.',
+  },
+  {
+    key: 'REPAIR_SHOP_NAMES',
+    want: overAsk(WRITABLE.REPAIR_SHOP_NAMES.min),
+    maxChars: WRITABLE.REPAIR_SHOP_NAMES.maxChars,
+    system:
+      'You invent names for fictional independent heavy-truck repair shops in the United States. '
+      + 'Reply with strict JSON only: {"items":[string]}. '
+      + 'Two to four words each, in the style of a local diesel or fleet repair shop.',
+    user: (want) =>
+      `Invent ${want} distinct repair-shop names. They must be INVENTED: never the name of a real `
+      + 'repair chain, dealer network or any business that exists.',
+  },
 ]
 
 const { config, errors } = readAiConfig({ prefix: 'AI' })
@@ -223,7 +252,7 @@ if (!ok) {
 for (const [eq, items] of Object.entries(cleaned.COMMODITIES)) {
   console.log(`  COMMODITIES.${eq.padEnd(12)} ${String(items.length).padStart(3)} ta  (kerak ${COMMODITY_MIN[eq]})`)
 }
-for (const key of ['FIRST_NAMES', 'LAST_NAMES', 'SELLERS', 'SERVICE_NOTES']) {
+for (const key of ['FIRST_NAMES', 'LAST_NAMES', 'SELLERS', 'SERVICE_NOTES', 'TRUCK_STOP_NAMES', 'REPAIR_SHOP_NAMES']) {
   console.log(`  ${key.padEnd(24)} ${String(cleaned[key].length).padStart(3)} ta  (kerak ${WRITABLE[key].min})`)
 }
 console.log(`\n  o'zgarmaydigan ro'yxatlar (model yoza olmaydi): ${FIXED.join(', ')}`)

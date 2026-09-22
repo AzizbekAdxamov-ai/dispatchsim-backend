@@ -308,3 +308,18 @@ test('every rule the checker enforces is a rule the prompt states', () => {
     "taqiqlangan so'zlar qo'lda ko'chirilgan")
   assert.ok(BANNED.test(`a ${BANNED_WORDS[0]} here`))
 })
+
+// Kills: a list added to WRITABLE that refresh-vocabulary.js never asks
+// for. TRUCK_STOP_NAMES/REPAIR_SHOP_NAMES were added to the schema but not
+// to the script's requests, so every refresh was rejected as a whole
+// ("TRUCK_STOP_NAMES: yo'q") and the generated vocabulary silently fell
+// back to the built-in one.
+test('refresh-vocabulary asks the model for every list the schema lets it write', async () => {
+  const { WRITABLE: writable } = await import('../scripts/seed/vocabularySchema.js')
+  const { readFileSync: read } = await import('node:fs')
+  const src = read(new URL('../scripts/refresh-vocabulary.js', import.meta.url), 'utf8')
+  const asked = new Set([...src.matchAll(/key: '([A-Z_]+)'/g)].map((m) => m[1]))
+  if (/key: `COMMODITIES\./.test(src)) asked.add('COMMODITIES')
+  const missing = Object.keys(writable).filter((k) => !asked.has(k))
+  assert.deepEqual(missing, [])
+})
