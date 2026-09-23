@@ -21,10 +21,11 @@ import { pool, withTransaction } from '../src/db/pool.js'
 import { listAllRoutes } from '../src/modules/routing/routing.repository.js'
 import * as facilitiesRepo from '../src/modules/facilities/facilities.repository.js'
 import {
-  placeAlongRoute, countTargetPoints, SPACING_MI, MERGE_RADIUS_MI,
+  placeAlongRoute, placeAroundCity, countTargetPoints, SPACING_MI, MERGE_RADIUS_MI,
   facilityId, facilityRng, nearestCity, pickKind, fuelPriceCents,
-  pickAmenities, pickUnusedName, restAreaName,
+  pickAmenities, pickUnusedName, restAreaName, mulberry32, fnv1aSeed,
 } from './seed/facilities.js'
+import { CITIES } from './seed/cities.js'
 import { TRUCK_STOP_NAMES, REPAIR_SHOP_NAMES } from './seed/vocabulary.js'
 
 const FUEL_SELLING_KINDS = new Set(['fuel', 'truck_stop'])
@@ -71,12 +72,10 @@ async function main() {
   const routes = await listAllRoutes()
 
   if (routes.length === 0) {
-    // Not a silent no-op -- an empty facilities table after running this
-    // script reads as "the road network has no facilities on it", which
-    // is a different fact from "nobody has cached a road yet".
-    console.error('no routes stored yet -- run `npm run routes:warm` first')
-    await pool.end()
-    process.exit(1)
+    // Not a failure any more: the city pass below fills the map whether
+    // or not anybody has warmed a lane. It IS worth saying, because a
+    // corridor with no cached route gets no stops along it.
+    console.log('no routes cached yet (`npm run routes:warm` adds them) -- placing city stops only')
   }
 
   const existingRows = await facilitiesRepo.listAll()
@@ -131,9 +130,35 @@ async function main() {
     }
   }
 
+  // ---- second pass: every seed city gets its own ring of stops -------
+  //
+  // Deterministic per city (the rng is seeded from "city, ST"), so a
+  // re-run places the same ring and inserts nothing new -- the same
+  // idempotency the route pass gets from the point-derived id.
+  let cityCandidates = 0
+  let cityCreated = 0
+  for (const city of CITIES) {
+    const rng = mulberry32(fnv1aSeed(`${city.city}, ${city.state}`))
+    const points = placeAroundCity(city, { rng, existing: existingPoints })
+    cityCandidates += points.length
+    if (points.length === 0) continue
+    const usedNames = { truckStopLike: new Set(), repair: new Set(), restArea: new Set() }
+    const rows = points.map((point) => buildRow(point, usedNames))
+    try {
+      // eslint-disable-next-line no-await-in-loop -- one city at a time,
+      // same reasoning as the route loop above.
+      cityCreated += await withTransaction((client) => facilitiesRepo.insertMany(client, rows))
+      for (const point of points) existingPoints.push(point)
+    } catch (err) {
+      failures.push({ lane: `${city.city}, ${city.state}`, message: err.message })
+      console.error(`  FAILED  ${city.city}, ${city.state}: ${err.message}`)
+    }
+  }
+
   console.log('')
+  console.log(`${CITIES.length} city ring(s): ${cityCandidates} candidate stop(s), ${cityCreated} newly created.`)
   console.log(`${routesRead} route(s) read, ${candidatesTotal} candidate stop(s) considered.`)
-  console.log(`${createdTotal} facility row(s) newly created, ${mergedTotal} candidate(s) merged into an existing facility.`)
+  console.log(`${createdTotal} route facility row(s) newly created, ${mergedTotal} candidate(s) merged into an existing facility.`)
   if (failures.length > 0) {
     console.log(`${failures.length} route(s) failed:`)
     for (const f of failures) console.log(`  - ${f.lane}: ${f.message}`)

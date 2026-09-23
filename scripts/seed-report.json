@@ -1,9 +1,19 @@
 {
   "summary": {
     "postings": {
-      "requested": 12,
-      "accepted": 12
+      "requested": 600,
+      "accepted": 158
+    },
+    "truckListings": {
+      "requested": 20,
+      "accepted": 8
     }
   },
-  "buildError": "need at least 5 accepted trucks to cover the anchor drivers, got 0"
+  "gate": {
+    "ok": false,
+    "problems": [
+      "postings: 158/600 accepted (26%, need 90-110%)",
+      "truckListings: 8/20 accepted (40%, need 90-110%)"
+    ]
+  }
 }

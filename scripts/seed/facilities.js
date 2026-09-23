@@ -216,6 +216,13 @@ export function countTargetPoints(geometry, spacingMi = SPACING_MI) {
 // FNV-1a, a standard 32-bit non-cryptographic string hash (not invented
 // here) -- used only to turn a stable text key into a numeric PRNG seed,
 // never for anything security-sensitive.
+// Exported as fnv1aSeed so callers that need a seed from their own key
+// (generate-facilities.js's city ring) use this hash rather than a second
+// one of their own.
+export function fnv1aSeed(str) {
+  return fnv1a(str)
+}
+
 function fnv1a(str) {
   let h = 0x811c9dc5
   for (let i = 0; i < str.length; i += 1) {
@@ -282,6 +289,74 @@ export function nearestCity(lat, lon) {
     }
   }
   return best
+}
+
+// ---------------------------------------------------------------------
+// Stops around a city, not only along a cached route
+// ---------------------------------------------------------------------
+//
+// placeAlongRoute only knows the lanes somebody has already warmed
+// (lane_routes, 034). With 19 of 3,426 lanes cached the country was
+// almost empty of stops, and a plan for an uncached corridor put every
+// rest on the shoulder. Real truck services cluster around metros
+// whether or not this app has routed through them, so every seed city
+// gets its own ring of stops as well.
+//
+// Stated modelling decisions, not measured figures (the same admission
+// FACILITY_KIND_MIX makes about itself):
+//   - how many: 3 to 8 per city, drawn per city. Enough that a metro is
+//     never a blank spot, few enough that the map is not a wall of dots.
+//   - how far out: between MERGE_RADIUS_MI (any closer and they would
+//     merge into one another) and half of SPACING_MI (any further and
+//     they stop being that city's stops). Both bounds are the corridor
+//     numbers this file already derives, not new ones.
+// Kinds, names, prices and amenities come from the same functions the
+// route pass uses, so a city stop and a corridor stop are the same kind
+// of thing.
+export const CITY_STOPS_MIN = 3
+export const CITY_STOPS_MAX = 8
+export const CITY_RING_MIN_MI = MERGE_RADIUS_MI
+export const CITY_RING_MAX_MI = Math.round(SPACING_MI / 2)
+
+// Miles per degree of latitude, and of longitude at a given latitude.
+// Local flat-earth arithmetic on purpose: over tens of miles the error
+// is a few hundred feet, and round4() (about 36 feet) already bounds the
+// precision this file keeps. MI_PER_DEG_LAT is measured through
+// haversineMi rather than typed, so it cannot disagree with the distance
+// function everything else here uses.
+const MI_PER_DEG_LAT = haversineMi({ lat: 0, lon: 0 }, { lat: 1, lon: 0 })
+
+export function offsetPoint(lat, lon, bearingRad, distanceMi) {
+  const dLat = (distanceMi * Math.cos(bearingRad)) / MI_PER_DEG_LAT
+  const cosLat = Math.max(0.01, Math.cos((lat * Math.PI) / 180))
+  const dLon = (distanceMi * Math.sin(bearingRad)) / (MI_PER_DEG_LAT * cosLat)
+  return { lat: lat + dLat, lon: lon + dLon }
+}
+
+// A ring of new stop points around one city. Deterministic: the rng is
+// seeded by the caller from the city's own key, so the same city always
+// produces the same ring. Points inside mergeRadiusMi of anything already
+// known (or of each other) are dropped, exactly as on a route.
+export function placeAroundCity(city, {
+  rng,
+  mergeRadiusMi = MERGE_RADIUS_MI,
+  minMi = CITY_RING_MIN_MI,
+  maxMi = CITY_RING_MAX_MI,
+  existing = [],
+} = {}) {
+  const accepted = []
+  const isNear = (lat, lon) => existing.some((p) => haversineMi({ lat, lon }, p) <= mergeRadiusMi)
+    || accepted.some((p) => haversineMi({ lat, lon }, p) <= mergeRadiusMi)
+
+  const want = CITY_STOPS_MIN + Math.floor(rng() * (CITY_STOPS_MAX - CITY_STOPS_MIN + 1))
+  for (let i = 0; i < want; i += 1) {
+    const bearing = rng() * 2 * Math.PI
+    const distance = minMi + rng() * (maxMi - minMi)
+    const p = offsetPoint(city.lat, city.lon, bearing, distance)
+    if (isNear(p.lat, p.lon)) continue
+    accepted.push({ lat: round4(p.lat), lon: round4(p.lon) })
+  }
+  return accepted
 }
 
 // ---------------------------------------------------------------------

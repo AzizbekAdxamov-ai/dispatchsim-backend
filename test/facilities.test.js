@@ -318,3 +318,77 @@ test('pickKind produces all four kinds over enough draws, never anything else', 
   for (let i = 0; i < 1000; i += 1) seen.add(pickKind(rng))
   assert.deepEqual([...seen].sort(), ['fuel', 'repair', 'rest_area', 'truck_stop'])
 })
+
+// ---------------------------------------------------------------------
+// City rings -- stops that do not depend on a cached lane
+// ---------------------------------------------------------------------
+import {
+  placeAroundCity, offsetPoint, mulberry32, fnv1aSeed,
+  CITY_STOPS_MIN, CITY_STOPS_MAX, CITY_RING_MIN_MI, CITY_RING_MAX_MI,
+} from '../scripts/seed/facilities.js'
+
+const haversine = haversineMi
+const DALLAS = CITIES.find((c) => c.city === 'Dallas' && c.state === 'TX')
+const ringFor = (city, opts = {}) =>
+  placeAroundCity(city, { rng: mulberry32(fnv1aSeed(`${city.city}, ${city.state}`)), ...opts })
+
+// Kills: offsetting by degrees instead of miles, or forgetting that a
+// degree of longitude shrinks with latitude.
+test('offsetPoint moves the stated number of miles, north and east', () => {
+  const north = offsetPoint(40, -100, 0, 50)
+  const east = offsetPoint(40, -100, Math.PI / 2, 50)
+  assert.ok(Math.abs(haversine({ lat: 40, lon: -100 }, north) - 50) < 0.5)
+  assert.ok(Math.abs(haversine({ lat: 40, lon: -100 }, east) - 50) < 0.5)
+  assert.ok(north.lat > 40 && Math.abs(north.lon + 100) < 1e-9, 'due north keeps the longitude')
+  assert.ok(east.lon > -100, 'due east increases the longitude')
+})
+
+// Kills: a ring that lands on the city itself, or scattered across the
+// country -- both bounds are the corridor numbers this file derives.
+test('a city ring sits between the merge radius and half the corridor spacing', () => {
+  for (const city of CITIES.slice(0, 12)) {
+    for (const p of ringFor(city)) {
+      const mi = haversine(city, p)
+      assert.ok(mi >= CITY_RING_MIN_MI - 1 && mi <= CITY_RING_MAX_MI + 1,
+        `${city.city}: a stop ${mi.toFixed(1)}mi out is outside [${CITY_RING_MIN_MI}, ${CITY_RING_MAX_MI}]`)
+    }
+  }
+})
+
+// Kills: a count outside the stated range, or a ring that is always the
+// same size.
+test('a city gets between CITY_STOPS_MIN and CITY_STOPS_MAX stops, and not always the same number', () => {
+  const counts = CITIES.map((c) => ringFor(c).length)
+  for (const n of counts) assert.ok(n >= 0 && n <= CITY_STOPS_MAX, `${n} stops is outside the range`)
+  assert.ok(Math.max(...counts) >= CITY_STOPS_MIN, 'no city reached the minimum -- the draw is broken')
+  assert.ok(new Set(counts).size > 1, 'every city drew the same number')
+  // Kills a fixed count: with a real draw some city must exceed the floor.
+  assert.ok(Math.max(...counts) > CITY_STOPS_MIN, 'no city drew more than the minimum -- the count is not being drawn')
+})
+
+// Kills: a non-deterministic ring (a re-run would insert a second set of
+// stops beside the first).
+test('the same city always produces the same ring', () => {
+  assert.deepEqual(ringFor(DALLAS), ringFor(DALLAS))
+})
+
+// Kills: dropping the dedupe -- a city stop landing on a corridor stop.
+test('a city stop inside the merge radius of a known point is dropped', () => {
+  const plain = ringFor(DALLAS)
+  assert.ok(plain.length > 0)
+  const blocked = ringFor(DALLAS, { existing: plain })
+  assert.deepEqual(blocked, [], 'every point of its own ring blocks it the second time')
+})
+
+// Kills: a ring that ignores the whole country -- every city must get
+// its own, so the map is not empty where no lane has been warmed.
+test('every seed city can place at least one stop on an empty map', () => {
+  const existing = []
+  let total = 0
+  for (const city of CITIES) {
+    const points = ringFor(city, { existing })
+    total += points.length
+    existing.push(...points)
+  }
+  assert.ok(total >= CITIES.length, `only ${total} stops for ${CITIES.length} cities`)
+})
