@@ -51,6 +51,8 @@ export async function getLoadById(id) {
 function cardFrom(row) {
   return {
     id: row.id,
+    driverId: row.driverId,
+    truckId: row.truckId,
     broker: row.broker,
     originCity: row.originCity,
     originState: row.originState,

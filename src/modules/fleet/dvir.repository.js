@@ -13,7 +13,7 @@ export async function insertReport(client, r) {
     r.truckId, r.driverId, r.loadId, r.odometerMi, r.locationLabel,
     r.brakesOk, r.lightsOk, r.tiresOk, r.steeringOk, r.couplingOk,
     r.hornOk, r.wipersOk, r.mirrorsOk, r.emergencyEqOk,
-    JSON.stringify(r.defects), r.defectsCorrected,
+    JSON.stringify(r.defects), JSON.stringify(r.notes), r.defectsCorrected,
   ])
   return result.rows[0] ?? null
 }

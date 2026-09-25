@@ -13,9 +13,9 @@ export const INSERT_DVIR_SQL = `
     truck_id, driver_id, load_id, odometer_mi, location_label,
     brakes_ok, lights_ok, tires_ok, steering_ok, coupling_ok,
     horn_ok, wipers_ok, mirrors_ok, emergency_eq_ok,
-    defects, defects_corrected
-  ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb, $16)
-  RETURNING id, truck_id AS "truckId", defects, defects_corrected AS "defectsCorrected"`
+    defects, notes, defects_corrected
+  ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb, $16::jsonb, $17)
+  RETURNING id, truck_id AS "truckId", defects, notes, defects_corrected AS "defectsCorrected"`
 
 // The board/list read: recent reports with the names the screen shows.
 export const LIST_DVIR_SQL = `
@@ -28,7 +28,7 @@ export const LIST_DVIR_SQL = `
          r.coupling_ok AS "couplingOk", r.horn_ok AS "hornOk",
          r.wipers_ok AS "wipersOk", r.mirrors_ok AS "mirrorsOk",
          r.emergency_eq_ok AS "emergencyEqOk",
-         r.defects, r.defects_corrected AS "defectsCorrected",
+         r.defects, r.notes, r.defects_corrected AS "defectsCorrected",
          jsonb_build_object('id', c.id, 'name', c.name) AS "certifiedBy",
          r.certified_at AS "certifiedAt",
          r.created_at AS "createdAt"

@@ -75,7 +75,7 @@ export async function getDashboard() {
 // discipline as alerts.service.js's degraded list.
 
 import * as complianceService from '../compliance/compliance.service.js'
-import { query } from '../../db/pool.js'
+import { query, pool } from '../../db/pool.js'
 import { REAL_SEC_PER_SIM_DAY } from '../../constants/simClock.js'
 import { REVIEW_THRESHOLD_MIN } from '../hos/repositioning.js'
 
@@ -107,7 +107,19 @@ const UNREVIEWED_UNIDENTIFIED_SQL = `
      AND (EXTRACT(EPOCH FROM (e.ended_at - e.started_at)) / 60) > $1::int`
 
 export async function getComplianceOverview(opts = {}) {
-  const inTx = (fn) => (opts.client ? fn(opts.client) : query)
+  // inTx runs fn with a connection: the test's transaction client, or a
+  // one-shot pooled client. query(fn) would pass fn as SQL text (found
+  // by the smoke test's degraded list, 2026-09-25), so the pool path
+  // checks out a client for the same shape every caller gets.
+  const inTx = async (fn) => {
+    if (opts.client) return fn(opts.client)
+    const client = await pool.connect()
+    try {
+      return await fn(client)
+    } finally {
+      client.release()
+    }
+  }
   const degraded = []
 
   async function collect(label, fn) {
@@ -123,9 +135,13 @@ export async function getComplianceOverview(opts = {}) {
   const [dq, hosViolations, openEvents, unreviewed] = await Promise.all([
     collect('driverQualification', () => complianceService.listDriverQualification({ client: opts.client ?? null })),
     collect('hosViolations', () => complianceService.listViolations({ days: 1 })),
-    collect('openEvents', () => inTx((client) => client.query(OPEN_EVENTS_SQL)).then((r) => r.rows)),
+    collect('openEvents', () =>
+      // inTx takes the function and calls it with the connection -- a
+      // .then chained on its return value failed on every live request
+      // (found by the smoke test's degraded list, 2026-09-25).
+      inTx(async (client) => (await client.query(OPEN_EVENTS_SQL)).rows)),
     collect('unreviewedUnidentified', () =>
-      inTx((client) => client.query(UNREVIEWED_UNIDENTIFIED_SQL, [REVIEW_THRESHOLD_MIN])).then((r) => r.rows[0])),
+      inTx(async (client) => (await client.query(UNREVIEWED_UNIDENTIFIED_SQL, [REVIEW_THRESHOLD_MIN])).rows[0])),
   ])
 
   // -- DQ: clear / attention / action drivers, and every open document --

@@ -56,8 +56,9 @@ test('worn-but-legal tires are a note, not a defect', () => {
   // replacement scheduled, which is a different sentence.
   const worn = seedReport({ rng: seeded(4), truck: { ...TRUCK, tireFrontPct: 30, tireRearPct: 55 } })
   assert.equal(worn.items.tires, true, 'worn-but-legal is not a failed item')
-  assert.ok(worn.defects.some((d) => /schedule replacement/.test(d.detail)),
-    'but the note travels with the report')
+  assert.deepEqual(worn.defects, [], 'a note never rides in the defect list -- the correction pair is defects only')
+  assert.ok(worn.notes.some((d) => /schedule replacement/.test(d.detail)),
+    'but the note travels with the report, in its own list')
   assert.equal(worn.hasDefects, false, 'a note is not a defect -- no correction owed')
 })
 
@@ -84,7 +85,7 @@ test('a breakdown the run met becomes a note, never a new failure', () => {
   // breakdown already cost the company; the report records the driver's
   // observation.
   const r = seedReport({ rng: seeded(5), truck: TRUCK, hadBreakdown: true })
-  assert.ok(r.defects.some((d) => /roadside repair/.test(d.detail)))
+  assert.ok(r.notes.some((d) => /roadside repair/.test(d.detail)))
   assert.equal(r.items.steering, true, 'the item passes; the note is the observation')
 })
 

@@ -12,6 +12,7 @@ import { renderInsert, jsonb } from './render.js'
 import { buildPostingRows } from './postings.js'
 import { buildTruckRows } from './trucks.js'
 import { BREAK_MINUTES, DRIVING_LIMIT_HOURS, DUTY_WINDOW_HOURS, REQUIRED_REST_HOURS } from '../../src/constants/hosClock.js'
+import { REAL_MS_PER_SIM_DAY } from '../../src/constants/simClock.js'
 
 // Fixed point in time every generated timestamp is computed relative to.
 // Never Date.now() -- a run's output must not depend on when it happened
@@ -83,6 +84,14 @@ function hoursBetween(a, b) {
 
 function toDateOnly(date) {
   return date.toISOString().slice(0, 10)
+}
+
+// One SIM day in real milliseconds. DQ document dates are written as
+// sim-calendar moments: the qualification reader times them in sim
+// days, so a real-calendar offset reads as hundreds of sim days stale
+// (found live, 2026-09-25).
+function simDayMs(days) {
+  return days * REAL_MS_PER_SIM_DAY
 }
 
 function randomCity(rng) {
@@ -355,7 +364,11 @@ function buildDriverRow({ rng, id, item, hasCurrentTruck, dutyOverride, usedEmai
   const payModel = pick(rng, ['percent', 'permile'])
   const payPercentBp = payModel === 'percent' ? randInt(rng, 1800, 3200) : null
   const payPerMileCents = payModel === 'permile' ? randInt(rng, 45, 85) : null
-  const licenseExpiresOn = toDateOnly(addHours(REFERENCE_NOW, randInt(rng, 24 * 60, 24 * 1400)))
+  // The license rides drivers.license_expires_on (005) -- now
+  // timestamptz (043), same sim-calendar rule as the DQ dates: the
+  // reader times it in sim days, so a real-calendar date would read as
+  // hundreds of sim days stale.
+  const licenseExpiresOn = new Date(REFERENCE_NOW.getTime() + simDayMs(randInt(rng, 180, 1400))).toISOString()
   const currentLocation =
     dutyStatus === 'off'
       ? `${item.homeBaseCity}, ${item.homeBaseState} yard`
@@ -576,20 +589,28 @@ function buildDqRow({ rng, driver }) {
   // the window reads 'expiring' without the seed claiming it.
   const cdlStatus = 'valid'
 
+  // Dates are FULL SIM-CALENDAR MOMENTS, not dates: the qualification
+  // reader times every document on the simulated calendar (daysUntil
+  // divides the gap by REAL_MS_PER_SIM_DAY, ~2 real minutes per sim
+  // day), and a DATE column collapses its value to midnight UTC -- the
+  // collapse alone reads as half a sim day of noise, and a real-calendar
+  // date reads as thousands of sim days stale. Written as full moments:
+  // the offset count is the sim-day count, scaled by 24h/720 = 2 real
+  // minutes per sim day (simClock's own arithmetic).
   // The medical card: most drivers hold one for two years (391.43); a
   // few are inside their renewal window -- enough for the screen to show
   // what 'expiring' looks like, not enough to be a fleet of expiries.
   const medicalRoll = randInt(rng, 0, 99)
   const medicalExpiresOn = medicalRoll < 6
-    ? toDateOnly(addHours(REFERENCE_NOW, randInt(rng, 24, 24 * 30))) // inside 30 sim days
-    : toDateOnly(addHours(REFERENCE_NOW, randInt(rng, 24 * 90, 24 * 700)))
+    ? new Date(REFERENCE_NOW.getTime() + simDayMs(randInt(rng, 4, 30))).toISOString() // inside 30 sim days
+    : new Date(REFERENCE_NOW.getTime() + simDayMs(randInt(rng, 90, 700))).toISOString()
   const medicalStatus = 'valid'
 
-  // The MVR review: pulled within the last year (391.25), carrying the
-  // violations count the applicant already generated. buildDriverRow's
-  // item.mvrViolations is not on the row, so the count rides on the
-  // driver's safety_rating band instead: a low rating implies the tail.
-  const mvrCheckedOn = toDateOnly(addHours(REFERENCE_NOW, -randInt(rng, 20, 330)))
+  // The MVR review: pulled within the last year of SIM days (391.25),
+  // carrying the violations count. The applicant's violations ride on
+  // the driver's safety_rating band instead: a low rating implies the
+  // tail.
+  const mvrCheckedOn = new Date(REFERENCE_NOW.getTime() - simDayMs(randInt(rng, 20, 330))).toISOString()
   const mvrViolations = driver.safety_rating < 80 ? randInt(rng, 1, 3) : randInt(rng, 0, 1)
   const mvrStatus = 'valid'
 

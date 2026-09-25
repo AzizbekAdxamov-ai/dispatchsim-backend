@@ -32,12 +32,16 @@ export function buildReportRow({ rng, truck, driverId, loadId, locationLabel, ha
     mirrorsOk: report.items.mirrors,
     emergencyEqOk: report.items.emergencyEq,
     defects: report.defects,
+    notes: report.notes,
     defectsCorrected: false,
   }
 }
 
-export async function listReports({ limit = 100 } = {}) {
-  const reports = await repo.listReports({ limit })
+// The list the Fleet screen reads. `client` (optional) lets a caller read
+// inside its own transaction -- the schema-backed test inserts a row and
+// reads it back before the runner's rollback, on the same connection.
+export async function listReports({ limit = 100 } = {}, client = null) {
+  const reports = await repo.listReports({ limit }, client)
   return {
     items: DVIR_ITEMS,
     reports: reports.map((r) => ({
@@ -52,8 +56,12 @@ export async function listReports({ limit = 100 } = {}) {
 // vehicle; this write clears it. The certifying driver must be the
 // truck's CURRENT driver: the rule speaks of the driver who takes the
 // vehicle next, and in this program that is the assignment on the truck.
-export async function certifyReport({ reportId, driverId }) {
-  const row = await query(
+// `client` (optional): run every read and write on that one connection,
+// inside whatever transaction its owner opened -- the schema-backed test
+// rides the same seam listReports takes.
+export async function certifyReport({ reportId, driverId }, client = null) {
+  const runner = client ?? query
+  const row = await runner.query(
     `SELECT r.id, r.truck_id AS "truckId", r.defects,
             r.defects_corrected AS "defectsCorrected",
             (t.driver_id = $2) AS "isCurrentDriver"
@@ -66,16 +74,15 @@ export async function certifyReport({ reportId, driverId }) {
   if (!report) throw new AppError('SERVICE_NOT_FOUND')
   if (!report.isCurrentDriver) throw new AppError('TRUCK_HAS_DRIVER')
 
-  const decision = certificationDecision(report)
-  if (!decision.allowed) {
-    // Unreachable while certificationDecision agrees with the column
-    // (defects_corrected=false + defects>0 is exactly the not-allowed
-    // case), but the refusal names the rule rather than falling through
-    // to a silent no-op.
-    throw new AppError('LOAD_NOT_DISPATCHABLE', { detail: decision.reason, cfr: decision.cfr })
-  }
-
-  const updated = await repo.certify(query, { reportId, driverId })
+  // No certificationDecision guard here: the open hold (defects listed,
+  // nothing certified) is exactly what this write RESOLVES -- the decision
+  // function is the screen's verdict, this endpoint is the cure. Under
+  // migration 040 the guard was dead code (open-hold rows could not exist
+  // at all), and keeping it past 041 made every real certification a
+  // refusal. The repository's conditional UPDATE is the gate: a report
+  // with nothing open certifies nothing, and returns null ->
+  // SERVICE_ALREADY_DONE.
+  const updated = await repo.certify(runner, { reportId, driverId })
   if (!updated) {
     // Already certified by someone -- the normal case a second click
     // produces, not an error.

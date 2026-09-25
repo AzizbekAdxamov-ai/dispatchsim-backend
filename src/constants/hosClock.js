@@ -650,8 +650,23 @@ export function driverHosSnapshot(events, nowRealMs) {
     state.dutyMinutesInWindow7DayRemaining,
     state.dutyMinutesInWindow8DayRemaining,
   ))
-  const hoursTodayMin = Math.round(sumStatusMinutes(
-    normalizeEvents(hosEvents, nowReal), state.lastRestEndedAt, nowReal, (s) => ON_DUTY_STATUSES.has(s),
+  // The writers of the drivers columns (the tick's syncDriverHos) must stay
+  // inside migration 005's bounds: drivers_hours_today caps at the 14-hour
+  // window (840), drivers_hours_week at 70 hours (4200). hosState's sums can
+  // exceed both: an open event runs until the read (normalizeEvents closes
+  // it at now), and a wait written open-ended -- eventBlocks.js's
+  // openWaitEndMs, replan.service.js's logOpenEventWait -- stretches 1,130
+  // real seconds into 226 literal HOS hours of on-duty time while the
+  // dispatcher thinks. The LAW saturates a driver's log the same way (no
+  // violation grows past the window that bounds it); without the clamp the
+  // write died on drivers_hours_today, found live in the tick log
+  // (2026-09-25). mayDrive stays honest: hosState lists the limit that
+  // bound (DUTY_WINDOW), so the dispatcher sees why the clock shows full.
+  const hoursTodayMin = Math.round(Math.min(
+    sumStatusMinutes(
+      normalizeEvents(hosEvents, nowReal), state.lastRestEndedAt, nowReal, (s) => ON_DUTY_STATUSES.has(s),
+    ),
+    DUTY_WINDOW_HOURS * 60,
   ))
 
   return {
@@ -659,7 +674,7 @@ export function driverHosSnapshot(events, nowRealMs) {
     eldStatus: current ? current.status : null,
     hosRemainingMin,
     hoursTodayMin,
-    hoursWeekMin: state.dutyMinutesInWindow8Day,
+    hoursWeekMin: Math.round(Math.min(state.dutyMinutesInWindow8Day, WEEKLY_LIMIT_HOURS_8DAY * 60)),
     mayDrive: state.mayDrive,
     limits: state.limits,
   }

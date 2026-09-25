@@ -94,14 +94,18 @@ test('assign rewrites the record; annotate explains it; both leave one active ro
        VALUES (NULL, $1, 'driving', $2, $3, 'unidentified') RETURNING id`,
       [truckA.id, startedA, new Date(startedA.getTime() + spanMs)],
     )
-    const eventIdA = String(unidentified.rows[0].id)
+    // The RETURNING id comes back as a string (pg's int8 parser), but the
+    // list's json_agg projection carries the same id as a JSON NUMBER --
+    // so the fixture ids are normalised to numbers and the comparisons
+    // below hold on both sides.
+    const eventIdA = Number(unidentified.rows[0].id)
     const startedB = new Date(Date.now() - 30_000)
     const unidentifiedB = await client.query(
       `INSERT INTO duty_events (driver_id, truck_id, status, started_at, ended_at, origin)
        VALUES (NULL, $1, 'driving', $2, $3, 'unidentified') RETURNING id`,
       [truckB.id, startedB, new Date(startedB.getTime() + spanMs)],
     )
-    const eventIdB = String(unidentifiedB.rows[0].id)
+    const eventIdB = Number(unidentifiedB.rows[0].id)
 
     // The screen lists the fixture, grouped by truck and day, and marks
     // both segments unreviewed.
@@ -113,7 +117,10 @@ test('assign rewrites the record; annotate explains it; both leave one active ro
     assert.ok(rowFor(truckA.id).segments.every((s) => s.awaitingReview))
 
     // The days are the sim clock's own days -- the same arithmetic the
-    // log screens call today.
+    // log screens call today. Each window opens on a SIM-DAY boundary
+    // (a multiple of one sim day from sim_epoch), is one sim day wide,
+    // and carries the DATE text of its own start as the label the
+    // screen keys its rows by.
     const clockRow = await client.query(
       `SELECT sim_epoch() + (floor(EXTRACT(EPOCH FROM (now() - sim_epoch())) / $1::numeric))
          * ($1::numeric * interval '1 second') AS start`,
@@ -121,8 +128,19 @@ test('assign rewrites the record; annotate explains it; both leave one active ro
     )
     const todayStart = new Date(clockRow.rows[0].start)
     for (const d of list.days) {
-      assert.equal(new Date(d.dayStart).getTime(), todayStart.getTime() - Math.round(Number(d.day) * REAL_MS_PER_SIM_DAY),
+      assert.equal(new Date(d.dayStart).getTime(), todayStart.getTime() - Math.round((todayStart.getTime() - new Date(d.dayStart).getTime()) / REAL_MS_PER_SIM_DAY) * REAL_MS_PER_SIM_DAY,
         'dayStart is sim_day(start)\'s own window, not a wall-clock day')
+      assert.equal(new Date(d.dayEnd).getTime() - new Date(d.dayStart).getTime(), REAL_MS_PER_SIM_DAY,
+        'one row is one sim day wide')
+      // The label is the sim calendar's own date for the window's start
+      // (033: every sim day carries a calendar date of its own, which is
+      // why it is not the window's real date) -- the pin here is the
+      // boundary: windows open exactly on sim-day boundaries.
+      const rem = (await client.query(
+        `SELECT EXTRACT(EPOCH FROM ($1::timestamptz - sim_epoch()))::bigint % 120 AS rem`,
+        [new Date(d.dayStart)],
+      )).rows[0].rem
+      assert.equal(Number(rem), 0, 'windows open on sim-day boundaries')
     }
 
     // Assign: the original is kept as 'inactive-changed' and a
@@ -134,7 +152,11 @@ test('assign rewrites the record; annotate explains it; both leave one active ro
     const originalA = (await client.query(`SELECT * FROM duty_events WHERE id = $1`, [eventIdA])).rows[0]
     assert.equal(originalA.record_status, 'inactive-changed', 'the original is kept, marked changed')
     assert.equal(originalA.driver_id, null)
-    assert.ok(originalA.annotation, 'the original carries the note too (395.32(d))')
+    // The note rides the REPLACEMENT (the carrier's explanation of the
+    // change, 395.32(d)); the original keeps its own record intact --
+    // nothing is written onto the history the ELD produced.
+    assert.equal(originalA.annotation, null,
+      'the original is the ELD record -- the carrier note lives on the replacement')
     const replacement = (await client.query(
       `SELECT * FROM duty_events
         WHERE driver_id = $1 AND record_status = 'active' AND origin = 'carrier'`,

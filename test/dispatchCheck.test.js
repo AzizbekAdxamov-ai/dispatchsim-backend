@@ -38,8 +38,15 @@ test('the check composes real lines for a real load and driver', { skip: !hasDb 
     )).rows[0]
     if (!load) return // no neutral load in this database; nothing to ask about
 
+    // The qualification reader reads EVERY driver (LEFT JOIN on the DQ
+    // row), so the fixture driver must not have one already -- pick a
+    // driver the demo fleet left out of the DQ table, and let the insert
+    // below write the row the check will read.
     const driver = (await client.query(
-      `SELECT id FROM drivers WHERE duty_status <> 'off' ORDER BY created_at LIMIT 1`,
+      `SELECT d.id FROM drivers d
+        LEFT JOIN driver_qualification q ON q.driver_id = d.id
+       WHERE d.duty_status <> 'off' AND q.driver_id IS NULL
+       ORDER BY d.created_at LIMIT 1`,
     )).rows[0]
     if (!driver) return
 

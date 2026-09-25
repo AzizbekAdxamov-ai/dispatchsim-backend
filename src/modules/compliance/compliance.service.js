@@ -59,6 +59,11 @@ export async function listUnassignedHos(opts = {}) {
         return {
           ...s,
           minutes,
+          // The annotation IS the review (395.32(c): the carrier notes the
+          // reason on the record). Under 038's original CHECK unidentified
+          // rows were born annotated, so this flag never mattered at
+          // birth; since 042 a record is born without the note, and the
+          // review is what writes it (assign writes a replacement).
           awaitingReview: !s.annotation,
         }
       }),

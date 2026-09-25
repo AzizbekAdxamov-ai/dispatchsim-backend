@@ -55,7 +55,16 @@ export const TIRE_WEAR_NOTE_THRESHOLD_PCT = 35
 // gauges prove, or they are fine -- a random brake failure would be a
 // die roll wearing a regulation's clothes.
 export function seedReport({ rng, truck, hadBreakdown = false }) {
+  // Two lists, and the difference between them is the whole rule: a DEFECT
+  // is a failed item -- it creates the correction duty and holds the truck;
+  // a NOTE is an observation the gauges or the road produced -- it travels
+  // with the report for the next service decision and holds nothing.
+  // Writing notes into the defect list made the database hold a legal
+  // truck on paperwork (and, with the CHECK that pairs corrected=true with
+  // a non-empty list, turned every defect-bearing delivery into a
+  // constraint violation -- found live in the tick log, 2026-09-25).
   const defects = []
+  const notes = []
 
   const items = {}
   for (const item of DVIR_ITEM_KEYS) items[item] = true
@@ -70,7 +79,7 @@ export function seedReport({ rng, truck, hadBreakdown = false }) {
         : `Drive tread below ${TIRE_DEFECT_THRESHOLD_PCT}%`,
     })
   } else if (truck.tireFrontPct < TIRE_WEAR_NOTE_THRESHOLD_PCT || truck.tireRearPct < TIRE_WEAR_NOTE_THRESHOLD_PCT) {
-    defects.push({
+    notes.push({
       item: 'tires',
       detail: `Tread below ${TIRE_WEAR_NOTE_THRESHOLD_PCT}% -- schedule replacement`,
     })
@@ -89,18 +98,17 @@ export function seedReport({ rng, truck, hadBreakdown = false }) {
   // A breakdown the run actually met is a note the driver would write --
   // a fact that happened, never a new failure invented at inspection.
   if (hadBreakdown) {
-    defects.push({ item: 'steering', detail: 'Steering felt stiff after the roadside repair -- watched' })
+    notes.push({ item: 'steering', detail: 'Steering felt stiff after the roadside repair -- watched' })
   }
 
   // 396.11(a): a report with DEFECTS stays with the vehicle until they
-  // are fixed. The distinction is the model's own, and it is real: a
-  // FAILED item creates the correction duty; a wear NOTE (tread between
-  // the note and defect thresholds) travels on the report so the next
-  // service decision sees it coming, but it does not hold the truck.
-  // Counting notes as defects would park a legal truck on paperwork.
+  // are fixed. A FAILED item creates the correction duty; a wear NOTE
+  // (tread between the note and defect thresholds) rides in its own list
+  // so the next service decision sees it coming, but it neither holds the
+  // truck nor counts toward the certification pair.
   const hasDefects = Object.values(items).some((ok) => !ok)
 
-  return { items, defects, hasDefects }
+  return { items, defects, notes, hasDefects }
 }
 
 // 396.13(b)(2): the next driver reviews the last report. If it lists

@@ -568,6 +568,27 @@ test('driverHosSnapshot with no events is a full, rested clock', () => {
   )
 })
 
+// Kills: the snapshot writing past migration 005's column bounds
+// (drivers_hours_today 840, drivers_hours_week 4200) -- an open-ended wait
+// row (eventBlocks.js openWaitEndMs, written by replan.service.js's
+// logOpenEventWait while the dispatcher is deciding) stretches real seconds
+// into days of literal on-duty time, and the drivers_hours_today CHECK
+// rejected the tick's write outright (found live, 2026-09-25). The law
+// saturates the log at the window that bounds it; the columns do too.
+test('driverHosSnapshot saturates at the 14h/70h column bounds on an open-ended wait', () => {
+  const anchor = Date.UTC(2026, 8, 21)
+  const evs = [rev(DUTY_STATUS.ON_DUTY_NOT_DRIVING, 0, null, anchor)]
+  // Thirty compressed DAYS into an on-duty wait nobody has ended -- 720
+  // literal HOS hours on duty, far past every bound. The columns
+  // saturate; the reason travels with the snapshot.
+  const snap = driverHosSnapshot(evs, anchor + 30 * REAL_MS_PER_SIM_DAY)
+  assert.equal(snap.hoursTodayMin, DUTY_WINDOW_HOURS * 60)
+  assert.equal(snap.hoursWeekMin, WEEKLY_LIMIT_HOURS_8DAY * 60)
+  assert.equal(snap.hosRemainingMin, 0)
+  assert.equal(snap.mayDrive, false)
+  assert.ok(snap.limits.some((l) => l.code === 'DUTY_WINDOW'), 'the reason travels with the snapshot')
+})
+
 // Kills: the ELD status vocabulary and migration 037's CHECK drifting apart.
 test('duty_events status CHECK (037) allows exactly the four ELD statuses', () => {
   const sql = readFileSync(join(here, '../src/db/migrations/037_duty_events.sql'), 'utf8')

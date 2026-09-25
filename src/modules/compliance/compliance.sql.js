@@ -128,6 +128,7 @@ export const UNASSIGNED_HOS_SQL = `
                    'endedAt', e.ended_at,
                    'loadId', e.load_id,
                    'origin', e.origin,
+                   'recordStatus', e.record_status,
                    'annotation', e.annotation
                  ) ORDER BY e.started_at)
             FROM duty_events e

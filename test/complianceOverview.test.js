@@ -28,31 +28,41 @@ test('the overview counts DQ states and lists open documents soonest-first', { s
   const service = await import('../src/modules/stats/stats.service.js')
 
   await inRollback(pool, async (client) => {
-    // The fixture: two drivers with DQ rows -- one clean, one whose
-    // medical has already lapsed -- and one working driver with NO DQ
-    // row (the fact the screen must show, not hide).
+    // The fixture: the demo seed writes a DQ row for every driver, so
+    // the two fixture drivers are UPSERTED into a known state -- one
+    // clean, one whose medical has already lapsed. The composition this
+    // test proves is that the overview reads these exact rows back out.
     const d = (await client.query(
-      `SELECT id FROM drivers WHERE duty_status <> 'off' ORDER BY created_at LIMIT 3`,
+      `SELECT id FROM drivers WHERE duty_status <> 'off' ORDER BY created_at LIMIT 2`,
     )).rows
-    if (d.length < 3) return // seed-dependent fixture; nothing to prove here
+    if (d.length < 2) return // seed-dependent fixture; nothing to prove here
 
     await client.query(
       `INSERT INTO driver_qualification (driver_id, cdl_status, medical_expires_on, medical_status, mvr_checked_on, mvr_violations, mvr_status, da_status)
        VALUES
-         ($1, 'valid', now() + interval '300 days', 'valid', now() - interval '30 days', 0, 'valid', 'valid'),
-         ($2, 'valid', NULL, 'missing', now() - interval '30 days', 0, 'valid', 'valid')`,
+         ($1, 'valid', now() + interval '300 days', 'valid', now() - interval '5 hours', 0, 'valid', 'valid'),
+         ($2, 'valid', NULL, 'missing', now() - interval '5 hours', 0, 'valid', 'valid')
+       ON CONFLICT (driver_id) DO UPDATE SET
+         cdl_status = EXCLUDED.cdl_status, medical_expires_on = EXCLUDED.medical_expires_on,
+         medical_status = EXCLUDED.medical_status, mvr_checked_on = EXCLUDED.mvr_checked_on,
+         mvr_violations = EXCLUDED.mvr_violations, mvr_status = EXCLUDED.mvr_status,
+         da_status = EXCLUDED.da_status`,
       [d[0].id, d[1].id],
     )
-    // d[2] gets no row on purpose.
 
     const overview = await service.getComplianceOverview({ client })
 
-    // The tile counts: one clear, one action (missing medical), one whose
-    // file is absent (also action -- a missing file is the missing
-    // document, not a pass).
-    assert.equal(overview.drivers.total, 3)
-    assert.equal(overview.drivers.clear, 1)
-    assert.equal(overview.drivers.action, 2)
+    // The tile counts every working driver the qualification reader
+    // lists, and the states partition it exactly.
+    const working = (await client.query(
+      `SELECT count(*)::int AS n FROM drivers WHERE duty_status <> 'off'`,
+    )).rows[0].n
+    assert.equal(overview.drivers.total, working)
+    assert.equal(overview.drivers.total,
+      overview.drivers.clear + overview.drivers.attention + overview.drivers.action)
+    // The clean file is clear; the lapsed medical is an action.
+    assert.ok(overview.drivers.clear >= 1, 'the all-valid fixture file counts clear')
+    assert.ok(overview.drivers.action >= 1, 'the missing-medical fixture file counts action')
 
     // The open-document list carries the lapsed medical, the missing one,
     // and one entry for the absent file's driver (readDocumentStatus is
