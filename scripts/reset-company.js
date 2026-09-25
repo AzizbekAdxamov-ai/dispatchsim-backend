@@ -77,6 +77,11 @@ const WIPE = [
   // reasoning as stop_visits directly above; facility_id is a plain
   // reference into facilities (KEEP), which is never wiped.
   ['duty_events',          'DELETE FROM duty_events'],
+  // driver_qualification (039): the DQ file belongs to the driver it
+  // names, so it dies with them on a reset. Named before drivers, like
+  // every other child -- though the FK CASCADEs, the named DELETE is
+  // this script's own promise, not some migration's old one.
+  ['driver_qualification', 'DELETE FROM driver_qualification'],
   ['loads',                'DELETE FROM loads'],
   ['trucks',               'DELETE FROM trucks'],
   ['drivers',              'DELETE FROM drivers'],

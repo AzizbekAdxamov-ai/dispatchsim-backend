@@ -13,6 +13,10 @@ import { withTransaction } from '../../db/pool.js'
 import { REAL_SEC_PER_SIM_DAY, REAL_MS_PER_SIM_DAY, simDaysToMs } from '../../constants/simClock.js'
 import { driverHosClocks, findViolationsReal, VIOLATION_TYPES, HOS_LOOKBACK_HOURS, HOS_TIME_SCALE } from '../../constants/hosClock.js'
 import * as repo from './compliance.repository.js'
+import {
+  readDocumentStatus, fileState, dispatchClear, daysUntil,
+  MEDICAL_EXPIRING_DAYS, MVR_EXPIRING_DAYS, MVR_MAX_AGE_DAYS, DQ_DOCUMENT_TYPES,
+} from '../../constants/driverQualification.js'
 
 // Compliance > Unassigned HOS. The screen the 30-minute rule makes
 // necessary: repositioning.js writes a driving record with no driver
@@ -123,6 +127,61 @@ export async function annotateUnassignedHos({ eventId, annotation }, opts = {}) 
   const updated = await inTx((client) => repo.annotateEvent(client, { eventId: event.id, annotation }))
   if (!updated) throw new AppError('EVENT_ALREADY_REVIEWED')
   return { annotated: true }
+}
+
+// Compliance > Driver Qualification. The carrier's paperwork duty (49 CFR
+// 391 Subpart E) read as it actually ages: each document's stored status is
+// re-timed against the sim clock, so an expiry the seed wrote as future
+// becomes 'expiring' and then 'expired' as the calendar moves. The worst
+// document names the file's state; nothing here blocks anything -- the
+// fact travels, the dispatcher decides (dispatchClear() says the same in
+// the constants module, for the places that do check).
+export async function listDriverQualification(opts = {}) {
+  const rows = await repo.driverQualification(opts.client ?? null)
+  const todayMs = Date.now()
+  const drivers = rows.map((r) => {
+    // 005's own expiry column, timed by the same reading as 039's.
+    const cdlStatus = readDocumentStatus(r.cdlStatus ?? 'valid', r.licenseExpiresOn, todayMs)
+    const medicalStatus = readDocumentStatus(r.medicalStatus ?? 'valid', r.medicalExpiresOn, todayMs)
+    // MVR is dated by WHEN IT WAS PULLED, not when it expires: the review
+    // goes stale (MVR_MAX_AGE_DAYS), the violations count is its payload.
+    const mvrAgeDays = daysUntil(r.mvrCheckedOn, todayMs) == null
+      ? null
+      : Math.ceil((todayMs - new Date(r.mvrCheckedOn).getTime()) / REAL_MS_PER_SIM_DAY)
+    const mvrStatus = mvrAgeDays == null
+      ? (r.mvrStatus ?? 'valid')
+      : (mvrAgeDays > MVR_MAX_AGE_DAYS ? 'expired' : (mvrAgeDays > MVR_MAX_AGE_DAYS - MVR_EXPIRING_DAYS ? 'expiring' : 'valid'))
+    const daStatus = r.daStatus ?? 'missing'
+
+    const documents = [
+      { type: 'cdl', status: cdlStatus, expiresOn: r.licenseExpiresOn, daysLeft: daysUntil(r.licenseExpiresOn, todayMs) },
+      { type: 'medical', status: medicalStatus, expiresOn: r.medicalExpiresOn, daysLeft: daysUntil(r.medicalExpiresOn, todayMs) },
+      { type: 'mvr', status: mvrStatus, expiresOn: null, daysLeft: mvrAgeDays == null ? null : MVR_MAX_AGE_DAYS - mvrAgeDays, violations: r.mvrViolations ?? 0 },
+      { type: 'drugAlcohol', status: daStatus, expiresOn: null, daysLeft: null },
+    ]
+    const statuses = documents.map((d) => d.status)
+    return {
+      driver: { id: r.driverId, name: r.driverName },
+      dutyStatus: r.dutyStatus,
+      cdlClass: r.cdlClass,
+      hosRemainingMin: r.hosRemainingMin,
+      currentLoadId: r.currentLoadId,
+      fileMissing: r.dqRowExists === 0,
+      documents,
+      fileState: fileState(statuses),
+      dispatchClear: dispatchClear(statuses),
+    }
+  })
+  return {
+    asOf: new Date(todayMs).toISOString(),
+    windows: {
+      medicalExpiringDays: MEDICAL_EXPIRING_DAYS,
+      mvrExpiringDays: MVR_EXPIRING_DAYS,
+      mvrMaxAgeDays: MVR_MAX_AGE_DAYS,
+    },
+    documentTypes: DQ_DOCUMENT_TYPES,
+    drivers,
+  }
 }
 
 export async function listDriverHos() {

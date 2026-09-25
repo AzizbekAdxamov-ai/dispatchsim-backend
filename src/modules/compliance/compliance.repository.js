@@ -38,6 +38,12 @@ export async function unassignedHos({ realSecPerSimDay, daysBack }, client = nul
   return result.rows
 }
 
+// Every working driver's DQ file (039), raw -- the service times it.
+export async function driverQualification(client = null) {
+  const result = await (client ?? pool).query(SQL.DRIVER_QUALIFICATION_SQL)
+  return result.rows
+}
+
 export async function findDutyEvent(eventId, client = null) {
   const result = await (client ?? pool).query(SQL.UNIDENTIFIED_EVENT_SQL, [eventId])
   return result.rows[0] ?? null

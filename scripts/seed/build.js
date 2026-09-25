@@ -284,9 +284,16 @@ function buildDoneTimestamps(rng, distanceMi, deliveredDaysAgo) {
 
 // A load that's booked but not yet picked up (status='neutral' --
 // dispatched_at/driver/truck stay NULL per loads_pending_clean).
+//
+// bookedAt was once returned undeclared here -- a ReferenceError that
+// only fired on the neutral path, so every seed run that rolled an 8%
+// neutral load died at build. A neutral load IS booked: it has a real
+// booking timestamp, it just has not been dispatched yet (that column
+// stays NULL). Same draw shape as the other two builders.
 function buildNeutralTimestamps(rng, distanceMi) {
   const pickupAt = addHours(REFERENCE_NOW, randFloat(rng, 6, 140))
   const deliveryAt = addHours(pickupAt, drawTransitHours(rng, distanceMi))
+  const bookedAt = addHours(pickupAt, -randFloat(rng, 12, 96))
   return { bookedAt, pickupAt, deliveryAt, dispatchedAt: null, etaAt: null, deliveredAt: null, status: 'neutral' }
 }
 
@@ -543,6 +550,65 @@ const DRIVER_COLUMNS = [
   'current_city', 'current_state', 'current_lat', 'current_lon',
 ]
 
+// Driver Qualification file (039), one row per driver above. Kept beside
+// DRIVER_COLUMNS so the two lists cannot drift apart: a drivers row
+// without its DQ row is a compliance fact the DQ screen would silently
+// lose (49 CFR 391.51 expects a file per driver), so the pairing is
+// asserted in generated-data.test.js and rendered as its own INSERT here.
+export const DQ_COLUMNS = [
+  'driver_id', 'cdl_status', 'medical_expires_on', 'medical_status',
+  'mvr_checked_on', 'mvr_violations', 'mvr_status', 'da_status',
+]
+
+// rng is taken as an argument but never drawn from: the DQ rows derive
+// from facts the driver row already owns (cdl number state, license
+// expiry, the applicant's MVR violations), so the rng stream for
+// drivers/trucks/loads stays byte-identical to the pre-039 baseline.
+export function buildDqRows({ rng, drivers }) {
+  void rng
+  return drivers.map((d) => buildDqRow({ rng, driver: d }))
+}
+
+function buildDqRow({ rng, driver }) {
+  void rng
+  // The license is the CDL's dated fact -- 005's license_expires_on.
+  // cdl_status stays 'valid': the SERVICE re-times it, so a date inside
+  // the window reads 'expiring' without the seed claiming it.
+  const cdlStatus = 'valid'
+
+  // The medical card: most drivers hold one for two years (391.43); a
+  // few are inside their renewal window -- enough for the screen to show
+  // what 'expiring' looks like, not enough to be a fleet of expiries.
+  const medicalRoll = randInt(rng, 0, 99)
+  const medicalExpiresOn = medicalRoll < 6
+    ? toDateOnly(addHours(REFERENCE_NOW, randInt(rng, 24, 24 * 30))) // inside 30 sim days
+    : toDateOnly(addHours(REFERENCE_NOW, randInt(rng, 24 * 90, 24 * 700)))
+  const medicalStatus = 'valid'
+
+  // The MVR review: pulled within the last year (391.25), carrying the
+  // violations count the applicant already generated. buildDriverRow's
+  // item.mvrViolations is not on the row, so the count rides on the
+  // driver's safety_rating band instead: a low rating implies the tail.
+  const mvrCheckedOn = toDateOnly(addHours(REFERENCE_NOW, -randInt(rng, 20, 330)))
+  const mvrViolations = driver.safety_rating < 80 ? randInt(rng, 1, 3) : randInt(rng, 0, 1)
+  const mvrStatus = 'valid'
+
+  // Drug & alcohol consortium: nearly everyone current; the screen needs
+  // the missing state to be rare but real.
+  const daStatus = randInt(rng, 0, 99) < 4 ? 'missing' : 'valid'
+
+  return {
+    driver_id: driver.id,
+    cdl_status: cdlStatus,
+    medical_expires_on: medicalExpiresOn,
+    medical_status: medicalStatus,
+    mvr_checked_on: mvrCheckedOn,
+    mvr_violations: mvrViolations,
+    mvr_status: mvrStatus,
+    da_status: daStatus,
+  }
+}
+
 const TRUCK_COLUMNS = [
   'id', 'make', 'model', 'year', 'odometer_mi', 'status', 'driver_id',
   'current_location', 'fuel_pct', 'fuel_gallons', 'fuel_capacity_gal',
@@ -700,7 +766,7 @@ export function buildSeed({ driverItems, truckItems, loadItems, maintenanceItems
     ]
     return {
       inserts,
-      counts: { drivers: 0, trucks: 0, loads: 0, maintenanceRecords: 0, truckDailyMetrics: 0, postings: postingRows.length, truckListings: truckListingRows.length },
+      counts: { drivers: 0, driverQualification: 0, trucks: 0, loads: 0, maintenanceRecords: 0, truckDailyMetrics: 0, postings: postingRows.length, truckListings: truckListingRows.length },
     }
   }
 
@@ -892,8 +958,13 @@ export function buildSeed({ driverItems, truckItems, loadItems, maintenanceItems
     truckListingRows.push(...buildTruckRows({ rng, truckItems: truckListingItems, truckIds: truckListingIdRows }))
   }
 
+  // ---- DQ files: derived AFTER drivers exist, from their rows. No rng
+  // draws -- determinism invariant preserved (see buildDqRows).
+  const dqRows = buildDqRows({ rng, drivers })
+
   const inserts = [
     renderInsert('drivers', DRIVER_COLUMNS, toRows(drivers, DRIVER_COLUMNS)),
+    renderInsert('driver_qualification', DQ_COLUMNS, toRows(dqRows, DQ_COLUMNS)),
     renderInsert('trucks', TRUCK_COLUMNS, toRows(trucks, TRUCK_COLUMNS)),
     renderInsert('loads', LOAD_COLUMNS, toRows(loads, LOAD_COLUMNS)),
     renderInsert('maintenance_records', MAINTENANCE_COLUMNS, toRows(maintenanceRecords, MAINTENANCE_COLUMNS)),
@@ -906,6 +977,7 @@ export function buildSeed({ driverItems, truckItems, loadItems, maintenanceItems
     inserts,
     counts: {
       drivers: drivers.length,
+      driverQualification: dqRows.length,
       trucks: trucks.length,
       loads: loads.length,
       maintenanceRecords: maintenanceRecords.length,

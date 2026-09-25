@@ -68,6 +68,36 @@ export const DRIVER_DAY_LOG_SQL = `
 export const DRIVER_EXISTS_SQL = `
   SELECT id, name FROM drivers WHERE id = $1`
 
+// Compliance > Driver Qualification: every working driver's DQ file
+// (039) beside the facts the drivers table already owns -- CDL class,
+// license expiry, HOS clocks' raw inputs, and the load they are on right
+// now. The date columns come back raw; the service times them against
+// the sim clock (driverQualification.js), because an expiry is a moving
+// reading, not a stored verdict.
+export const DRIVER_QUALIFICATION_SQL = `
+  SELECT d.id AS "driverId", d.name AS "driverName",
+         d.duty_status AS "dutyStatus",
+         d.cdl_class AS "cdlClass",
+         d.license_expires_on AS "licenseExpiresOn",
+         d.hos_remaining_min AS "hosRemainingMin",
+         dq.cdl_status AS "cdlStatus",
+         dq.medical_expires_on AS "medicalExpiresOn",
+         dq.medical_status AS "medicalStatus",
+         dq.mvr_checked_on AS "mvrCheckedOn",
+         dq.mvr_violations AS "mvrViolations",
+         dq.mvr_status AS "mvrStatus",
+         dq.da_status AS "daStatus",
+         dq.updated_at AS "updatedAt",
+         (SELECT l.id FROM loads l
+           WHERE l.driver_id = d.id AND l.status IN ('ontime','warn','crit')
+           ORDER BY l.dispatched_at DESC LIMIT 1) AS "currentLoadId",
+         (SELECT count(*) FROM driver_qualification x
+           WHERE x.driver_id = d.id) AS "dqRowExists"
+    FROM drivers d
+    LEFT JOIN driver_qualification dq ON dq.driver_id = d.id
+   WHERE d.duty_status <> 'off'
+   ORDER BY d.name`
+
 // Compliance > Unassigned HOS: every ACTIVE unidentified driving record
 // (038) -- the ELD's "who was driving?" queue. Grouped by truck and
 // simulated day, the way the platform's own review screen groups them:

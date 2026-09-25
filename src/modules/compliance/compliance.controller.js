@@ -24,6 +24,11 @@ export async function violations(req, res) {
   res.status(200).json(await service.listViolations({ days }))
 }
 
+// GET /compliance/driver-qualification
+export async function driverQualification(req, res) {
+  res.status(200).json(await service.listDriverQualification())
+}
+
 // GET /compliance/unassigned-hos
 export async function unassignedHos(req, res) {
   res.status(200).json(await service.listUnassignedHos())
