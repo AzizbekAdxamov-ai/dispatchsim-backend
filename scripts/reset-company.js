@@ -82,6 +82,10 @@ const WIPE = [
   // every other child -- though the FK CASCADEs, the named DELETE is
   // this script's own promise, not some migration's old one.
   ['driver_qualification', 'DELETE FROM driver_qualification'],
+  // dvir_reports (040): inspection reports name the truck and the load
+  // they came from -- both company property, both wiped. CASCADE off
+  // truck_id would carry them, but the named DELETE is the promise.
+  ['dvir_reports',         'DELETE FROM dvir_reports'],
   ['loads',                'DELETE FROM loads'],
   ['trucks',               'DELETE FROM trucks'],
   ['drivers',              'DELETE FROM drivers'],

@@ -45,6 +45,30 @@ import * as routingRepo from '../routing/routing.repository.js'
 import * as stopVisitsRepo from '../facilities/stopVisits.repository.js'
 import * as dutyEventsRepo from '../hos/dutyEvents.repository.js'
 import { repositioningBlock } from '../hos/repositioning.js'
+import { buildReportRow } from '../fleet/dvir.service.js'
+import * as dvirRepo from '../fleet/dvir.repository.js'
+
+// The DVIR seed rolls which of the small inspection items failed this
+// run. A tick must be REPRODUCIBLE: the same delivery retried after a
+// crash must write the same report, so the seed is the load id hashed
+// (FNV-1a) -- not Math.random, which would make the log depend on when
+// the process restarted, and not a shared counter, which would make
+// report N depend on report N-1.
+function dvirRngFor(loadId) {
+  let h = 0x811c9dc5
+  for (let i = 0; i < loadId.length; i += 1) {
+    h ^= loadId.charCodeAt(i)
+    h = Math.imul(h, 0x01000193)
+  }
+  let a = h >>> 0
+  return function rng() {
+    a = (a + 0x6d2b79f5) >>> 0
+    let t = a
+    t = Math.imul(t ^ (t >>> 15), t | 1)
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+}
 import { fromHosDomain, driverHosSnapshot, HOS_LOOKBACK_HOURS } from '../../constants/hosClock.js'
 import * as complianceService from '../compliance/compliance.service.js'
 
@@ -804,6 +828,27 @@ export async function deliverArrivedLoads() {
             netUsd: pay.net,
             dueSeconds: simDaysToSeconds(SETTLEMENT_TERM_SIM_DAYS),
           })
+        }
+
+        // The post-trip inspection (49 CFR 396.11) rides the same
+        // transaction: the report speaks about the truck AS IT ARRIVED --
+        // the odometer and tread gauges applyRunToTruck just wrote -- so
+        // the report and the truck state it describes are one fact. The
+        // row shape comes from dvir.service.js's builder (pure seed), the
+        // write from dvir.repository.js (the table's one writer).
+        if (load.truckId) {
+          const truckNow = await trucksRepo.getTruckById(load.truckId)
+          if (truckNow) {
+            const dvirRow = buildReportRow({
+              rng: dvirRngFor(load.id),
+              truck: { id: truckNow.id, odometerMi: truckNow.odometerMi, tireFrontPct: truckNow.tireFrontPct, tireRearPct: truckNow.tireRearPct },
+              driverId: load.driverId,
+              loadId: load.id,
+              locationLabel: truckNow.currentLocation,
+              hadBreakdown: false, // the run's open event was resolved before delivery; unresolved ones block claimArrivedLoads
+            })
+            await dvirRepo.insertReport(client, dvirRow)
+          }
         }
 
         await loadsRepo.releaseDriver(client, { driverId: load.driverId })

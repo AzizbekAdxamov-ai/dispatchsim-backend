@@ -18,6 +18,12 @@ router.get('/trucks', fleetController.listTrucks)
 router.get('/trucks/:id', fleetController.getTruck)
 router.get('/maintenance', fleetController.listMaintenance)
 
+// Daily vehicle inspection reports (49 CFR 396.11), written by the
+// delivery transaction; the certify write is 396.13(b)(2)'s next-driver
+// sign-off.
+router.get('/dvir', fleetController.listDvir)
+router.post('/dvir/:id/certify', fleetController.certifyDvir)
+
 // The two decisions that keep a fleet on the road. Both cost money and both
 // are the fleet manager's call -- consequences, not blocks: a low tank and
 // an open service record never disable anything, they just cost.

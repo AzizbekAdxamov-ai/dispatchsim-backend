@@ -5,9 +5,10 @@
 
 import {
   truckIdSchema, trucksQuerySchema, maintenanceQuerySchema,
-  refuelSchema, serviceIdSchema,
+  refuelSchema, serviceIdSchema, dvirIdSchema, dvirCertifySchema,
 } from './fleet.schemas.js'
 import * as fleetService from './fleet.service.js'
+import * as dvirService from './dvir.service.js'
 
 export async function listTrucks(req, res) {
   const input = trucksQuerySchema.parse(req.query)
@@ -37,5 +38,22 @@ export async function refuel(req, res) {
 export async function completeService(req, res) {
   const id = serviceIdSchema.parse(req.params.id)
   const result = await fleetService.performService({ recordId: id, userId: req.auth.userId })
+  res.status(200).json(result)
+}
+
+// GET /fleet/dvir -- the inspection reports, newest first, each carrying
+// the 396.13 certification decision the next driver's sign-off answers to.
+export async function listDvir(req, res) {
+  const result = await dvirService.listReports()
+  res.status(200).json(result)
+}
+
+// POST /fleet/dvir/:id/certify -- 396.13(b)(2): the next driver signs the
+// last report's defects off as fixed. The rule lives in the constants
+// module; this endpoint is the write.
+export async function certifyDvir(req, res) {
+  const id = dvirIdSchema.parse(req.params.id)
+  const { driverId } = dvirCertifySchema.parse(req.body)
+  const result = await dvirService.certifyReport({ reportId: id, driverId })
   res.status(200).json(result)
 }

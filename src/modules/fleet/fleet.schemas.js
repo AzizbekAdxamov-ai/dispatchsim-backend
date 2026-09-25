@@ -29,3 +29,16 @@ export const refuelSchema = z.object({
 // the cost is the sourced constant; a body would be an invitation to price
 // the work by hand.
 export const serviceIdSchema = z.string().uuid()
+
+// dvir_reports.id is a bigserial, like duty_events -- the same regex the
+// compliance review uses, for the same reason an unvalidated 'abc' would
+// surface as a 500 where a 400 belongs.
+export const dvirIdSchema = z.string().trim().regex(/^[0-9]{1,19}$/, 'id must be a number')
+
+// POST /fleet/dvir/:id/certify -- the next driver's 396.13(b)(2) sign-off.
+// The certifying driver is the truck's CURRENT driver, resolved
+// server-side from the assignment; the body's driverId is who claims to
+// certify, checked against the assignment in the service.
+export const dvirCertifySchema = z.object({
+  driverId: z.string().trim().min(1).max(32),
+}).strict()
