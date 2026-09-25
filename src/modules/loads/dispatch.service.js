@@ -44,7 +44,9 @@ import * as facilitiesService from '../facilities/facilities.service.js'
 import * as routingRepo from '../routing/routing.repository.js'
 import * as stopVisitsRepo from '../facilities/stopVisits.repository.js'
 import * as dutyEventsRepo from '../hos/dutyEvents.repository.js'
+import { repositioningBlock } from '../hos/repositioning.js'
 import { fromHosDomain, driverHosSnapshot, HOS_LOOKBACK_HOURS } from '../../constants/hosClock.js'
+import * as complianceService from '../compliance/compliance.service.js'
 
 // How long the run takes, in simulated days, from the window the broker
 // promised. Floored at half a day so a short local run still has a
@@ -89,6 +91,154 @@ export function transitDaysFor({ pickupAt, deliveryAt }) {
 
 export function fuelCostFor(distanceMi) {
   return Math.round((distanceMi / AVG_MPG) * FUEL_PRICE_PER_GAL)
+}
+
+// ---------------------------------------------------------------------
+// Pre-dispatch compliance check -- what the confirm window shows
+// ---------------------------------------------------------------------
+
+// GET /loads/:id/dispatch-check?driverId=... -- the facts a dispatcher
+// sees BEFORE dispatching, gathered from the same sources the dispatch
+// itself will read. Nothing here blocks: expired paperwork, an empty
+// drive clock and an empty truck all appear as named lines, and the
+// student decides (the refusal, if the driver then says no, still comes
+// from the driver -- see dispatchLoadInner). Rows the reader could not
+// produce travel as degraded entries, never as all-clear.
+export async function dispatchCheck({ loadId, driverId }) {
+  const degraded = []
+  async function collect(label, fn) {
+    try {
+      return await fn()
+    } catch (err) {
+      console.error(`[dispatch-check] ${label} failed:`, err.message)
+      degraded.push(label)
+      return null
+    }
+  }
+
+  const load = await loadsRepo.getLoadById(loadId)
+  if (!load) throw new AppError('LOAD_NOT_FOUND')
+  if (load.status !== 'neutral') throw new AppError('LOAD_NOT_DISPATCHABLE')
+
+  const [driverRow, dq, availability] = await Promise.all([
+    collect('driver', () => pool.query(
+      `SELECT d.id, d.name,
+              t.id AS "truckId", t.make AS "truckMake", t.model AS "truckModel",
+              d.hos_remaining_min AS "hosRemainingMin"
+         FROM drivers d
+         LEFT JOIN trucks t ON t.driver_id = d.id
+        WHERE d.id = $1`,
+      [driverId],
+    ).then((r) => r.rows[0] ?? null)),
+    collect('driverQualification', () =>
+      (driverId
+        ? complianceService.listDriverQualification().then((r) =>
+            r.drivers.find((d) => d.driver.id === driverId) ?? null)
+        : Promise.resolve(null))),
+    collect('availability', () =>
+      (driverId ? availabilityService.driverAvailability(pool, driverId) : Promise.resolve(null))),
+  ])
+
+  if (driverId && !driverRow) throw new AppError('DRIVER_NOT_FOUND')
+
+  // The transit estimate the broker's window implies -- the same number
+  // dispatchLoadInner will start from. The stop planner may move the legal
+  // arrival later; this line is the promise side only, labelled as such.
+  // pickup_at/delivery_at come from the posting on the real calendar and
+  // exist from the moment the load is booked, dispatched or not.
+  const transitDays = load.pickupAt == null || load.deliveryAt == null
+    ? null
+    : transitDaysFor({ pickupAt: load.pickupAt, deliveryAt: load.deliveryAt })
+
+  const checks = []
+
+  // CDL + medical + MVR + drug & alcohol, one line per document, each
+  // already timed by the qualification reader (the SAME reading the
+  // Qualification screen shows -- the check never has a second opinion).
+  for (const doc of dq?.documents ?? []) {
+    const def = dq.documentTypes.find((t) => t.key === doc.type)
+    checks.push({
+      key: `dq.${doc.type}`,
+      state: doc.status === 'valid' ? 'ok' : (doc.status === 'expiring' ? 'warn' : 'fail'),
+      label: def?.label ?? doc.type,
+      detail: doc.status === 'expiring'
+        ? `Renewal due in ${doc.daysLeft} simulated days`
+        : doc.status === 'valid' ? null : 'Not current -- the next audit asks about this',
+      cfr: def?.cfr ?? null,
+    })
+  }
+  if (dq == null) {
+    checks.push({ key: 'dq', state: 'unknown', label: 'Driver qualification', detail: 'Could not be read', cfr: null })
+  }
+
+  // Truck: dispatch cannot run without one (the dispatch will refuse with
+  // DRIVER_HAS_NO_TRUCK; here it is a visible line before the click).
+  checks.push({
+    key: 'truck',
+    state: driverRow?.truckId ? 'ok' : 'fail',
+    label: 'Truck',
+    detail: driverRow?.truckId
+      ? `${driverRow.truckMake ?? ''} ${driverRow.truckModel ?? ''}`.trim() || driverRow.truckId
+      : 'No truck assigned -- buy one on the truck market, then assign it',
+    cfr: null,
+  })
+
+  // Workload: one active load per driver is a database rule (007), not a
+  // policy -- it fails before the confirm click for the same reason.
+  checks.push({
+    key: 'workload',
+    state: driverRow && driverRow.activeLoads == null ? 'unknown' : (driverRow && driverRow.activeLoads > 0 ? 'fail' : 'ok'),
+    label: 'Current workload',
+    detail: driverRow && driverRow.activeLoads > 0 ? 'Already running a load' : null,
+    cfr: null,
+  })
+
+  // The driver's willingness, asked the way dispatch will ask it. A refusal
+  // here is the driver's own decision, not a compliance failure -- the line
+  // says what the driver says, the check does not vote on it.
+  if (availability && !availability.available) {
+    checks.push({
+      key: 'willingness',
+      state: 'fail',
+      label: 'Driver status',
+      detail: availability.reason === REASONS.QUIT
+        ? 'This driver no longer works here'
+        : `Not accepting new loads -- owed $${(availability.standing?.owedUsd ?? 0).toLocaleString('en-US')}`,
+      cfr: null,
+    })
+  } else if (availability) {
+    checks.push({ key: 'willingness', state: 'ok', label: 'Driver status', detail: null, cfr: null })
+  }
+
+  // HOS: the raw clock the driver brings to the run. The planner decides
+  // what fits; the dispatcher reads the number against the trip estimate.
+  checks.push({
+    key: 'hos',
+    state: driverRow?.hosRemainingMin == null ? 'unknown' : (driverRow.hosRemainingMin <= 0 ? 'warn' : 'ok'),
+    label: 'Drive time available',
+    detail: driverRow?.hosRemainingMin == null
+      ? null
+      : `${Math.floor(driverRow.hosRemainingMin / 60)}h ${driverRow.hosRemainingMin % 60}m on the 11-hour clock`,
+    cfr: '49 CFR 395.3(a)(3)',
+  })
+
+  const canDispatch = checks.every((c) => c.state !== 'fail')
+
+  return {
+    load: {
+      id: load.id,
+      originLabel: `${load.originCity}, ${load.originState}`,
+      destinationLabel: `${load.destinationCity}, ${load.destinationState}`,
+      distanceMi: load.distanceMi,
+      rateUsd: load.rateUsd,
+    },
+    driver: driverRow ? { id: driverRow.id, name: driverRow.name } : null,
+    transitDays,
+    transitSource: 'promised',
+    checks,
+    canDispatch,
+    degraded,
+  }
 }
 
 // ---------------------------------------------------------------------
@@ -355,8 +505,34 @@ async function planAndSaveStops({ load, driver, truckId }) {
     facilityId: e.facilityId,
   }))
 
+  // Getting the empty truck here. The planner's log starts at the ORIGIN,
+  // so if the truck finished its last run somewhere else, the drive in
+  // between is in nobody's log -- which on a real ELD is exactly what an
+  // unidentified driving record is (49 CFR 395.32). It is written with no
+  // driver and the truck's id; Compliance > Unassigned HOS is where a
+  // person decides whose time it was. hos/repositioning.js has the
+  // reasoning and the numbers.
+  //
+  // Computed outside the transaction (pure), written inside it: a
+  // dispatch whose log is saved but whose repositioning is not would be
+  // the same half-fact the plan/eta pair is careful to avoid.
+  const reposition = repositioningBlock({
+    truckLocationLabel: truck.currentLocation,
+    originCity: load.originCity,
+    originState: load.originState,
+    dispatchedAt: load.dispatchedAt,
+  })
+
   await withTransaction(async (client) => {
     await dutyEventsRepo.insertMany(client, dutyRows)
+    if (reposition) {
+      await dutyEventsRepo.insertUnidentified(client, {
+        loadId: load.id,
+        truckId,
+        startedAt: reposition.startedAt,
+        endedAt: reposition.endedAt,
+      })
+    }
     if (stops.length > 0) {
       await stopVisitsRepo.insertMany(client, stops.map((s) => ({
         loadId: load.id,
@@ -437,6 +613,9 @@ export async function applyRunToTruck(client, load) {
     gallonsFromTank: fromTank,
     frontTirePoints,
     rearTirePoints,
+    // Where the truck now is. Written here and nowhere else: the delivery
+    // is the one moment the program knows the answer.
+    endedAtLabel: `${load.destinationCity}, ${load.destinationState}`,
   })
   if (!run) return null
 

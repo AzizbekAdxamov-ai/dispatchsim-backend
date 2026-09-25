@@ -15,6 +15,16 @@ export const dispatchLoadSchema = z
   })
   .strict()
 
+// GET /loads/:id/dispatch-check — the same driver id, as a query param.
+// Optional: the check screen also renders the load-only view (documents
+// lines need a driver, the transit line does not), and an empty string
+// from an unset select must read as "no driver picked", not a 400.
+export const dispatchCheckQuerySchema = z
+  .object({
+    driverId: z.string().trim().max(32).optional().default(''),
+  })
+  .strict()
+
 export const listQuerySchema = z
   .object({
     status: z.enum(LOAD_STATUSES).optional(),

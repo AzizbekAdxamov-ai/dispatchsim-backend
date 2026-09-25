@@ -2,7 +2,7 @@
 // loads.service.js and loads.repository.js. Every route is already behind
 // requireAuth + requireRole() (see loads.routes.js).
 
-import { listQuerySchema, loadIdSchema, dispatchLoadSchema, resolveEventSchema, eventIdSchema } from './loads.schemas.js'
+import { listQuerySchema, loadIdSchema, dispatchLoadSchema, dispatchCheckQuerySchema, resolveEventSchema, eventIdSchema } from './loads.schemas.js'
 import * as loadsService from './loads.service.js'
 import * as loadEventsService from '../loadEvents/loadEvents.service.js'
 import * as dispatchService from './dispatch.service.js'
@@ -17,6 +17,15 @@ export async function getLoad(req, res) {
   const id = loadIdSchema.parse(req.params.id)
   const load = await loadsService.getLoadById(id)
   res.status(200).json(load)
+}
+
+// GET /loads/:id/dispatch-check?driverId=... — the compliance lines the
+// confirm window shows BEFORE the click. Read-only: nothing here blocks,
+// the dispatch endpoint keeps its own guards.
+export async function dispatchCheck(req, res) {
+  const id = loadIdSchema.parse(req.params.id)
+  const { driverId } = dispatchCheckQuerySchema.parse(req.query)
+  res.status(200).json(await dispatchService.dispatchCheck({ loadId: id, driverId }))
 }
 
 // POST /loads/:id/dispatch — put a driver on it and start the clock.

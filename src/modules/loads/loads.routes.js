@@ -20,6 +20,9 @@ router.get('/:id', loadsController.getLoad)
 
 // Dispatch is dispatcher work, unlike the reads above which every role
 // can see.
+// The pre-flight check travels with the same gating: it shows the facts
+// the dispatcher weighs, so it is dispatcher work too.
+router.get('/:id/dispatch-check', requireRole('dispatcher'), loadsController.dispatchCheck)
 router.post('/:id/dispatch', requireRole('dispatcher'), loadsController.dispatchLoad)
 router.post('/:id/cancel', requireRole('dispatcher'), loadsController.cancelDispatch)
 
