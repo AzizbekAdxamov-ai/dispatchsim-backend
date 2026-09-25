@@ -68,6 +68,97 @@ export const DRIVER_DAY_LOG_SQL = `
 export const DRIVER_EXISTS_SQL = `
   SELECT id, name FROM drivers WHERE id = $1`
 
+// Compliance > Unassigned HOS: every ACTIVE unidentified driving record
+// (038) -- the ELD's "who was driving?" queue. Grouped by truck and
+// simulated day, the way the platform's own review screen groups them:
+// a carrier reviews a day's records together (395.32(b) is a 24-hour
+// rule). One row per truck per day; the segments come back as a JSON
+// array carrying each record's id (assign/annotate act on these ids),
+// its times, the load it was logged against, and what the original
+// review said. No identified record is here -- only rows still waiting
+// for a decision.
+export const UNASSIGNED_HOS_SQL = `
+  WITH day AS (
+    SELECT sim_epoch()
+             + (floor(EXTRACT(EPOCH FROM (now() - sim_epoch())) / $1::numeric) - gs)
+               * ($1::numeric * interval '1 second') AS start
+      FROM generate_series(0, $2::int) AS gs
+  ),
+  win AS (
+    SELECT start, start + ($1::numeric * interval '1 second') AS "end",
+           (sim_day(start))::text AS "day"
+      FROM day
+  )
+  SELECT t.id AS "truckId", t.make AS "truckMake", t.model AS "truckModel",
+         win.day AS "day", win.start AS "dayStart", win."end" AS "dayEnd",
+         (SELECT json_agg(json_build_object(
+                   'id', e.id,
+                   'status', e.status,
+                   'startedAt', e.started_at,
+                   'endedAt', e.ended_at,
+                   'loadId', e.load_id,
+                   'origin', e.origin,
+                   'annotation', e.annotation
+                 ) ORDER BY e.started_at)
+            FROM duty_events e
+           WHERE e.truck_id = t.id AND e.driver_id IS NULL
+             AND e.record_status = 'active' AND e.origin = 'unidentified'
+             AND e.started_at < win."end" AND e.ended_at > win.start)
+         AS segments
+    FROM trucks t
+    CROSS JOIN win
+   WHERE EXISTS (
+     SELECT 1 FROM duty_events e
+      WHERE e.truck_id = t.id AND e.driver_id IS NULL
+        AND e.record_status = 'active' AND e.origin = 'unidentified')
+   ORDER BY win.start DESC, t.id`
+
+// The one record a review acts on, with its truck -- the assign flow
+// (395.32(d): the carrier names the driver) checks who the record
+// belongs to before writing anything.
+export const UNIDENTIFIED_EVENT_SQL = `
+  SELECT e.id, e.driver_id AS "driverId", e.truck_id AS "truckId",
+         e.status, e.started_at AS "startedAt", e.ended_at AS "endedAt",
+         e.load_id AS "loadId", e.origin, e.record_status AS "recordStatus",
+         t.id IS NOT NULL AS "hasTruck"
+    FROM duty_events e
+    LEFT JOIN trucks t ON t.id = e.truck_id
+   WHERE e.id = $1`
+
+// 395.32(d), the edit itself: the original record is NOT deleted -- it is
+// marked 'inactive-changed', and a replacement in the driver's name is
+// added with the carrier's note explaining the change. Two statements on
+// purpose: the UPDATE must be tried first, so a record already marked
+// inactive conflicts here (409) instead of inserting a phantom copy of
+// someone's time (duty_events_one_active_start, 037, then guards the new
+// row the same way it guards every other driver log).
+export const ASSIGN_UNIDENTIFIED_EVENT_SQL = `
+  UPDATE duty_events
+     SET record_status = 'inactive-changed'
+   WHERE id = $1 AND driver_id IS NULL AND origin = 'unidentified'
+     AND record_status = 'active'
+  RETURNING id`
+
+export const ASSIGN_REPLACEMENT_EVENT_SQL = `
+  INSERT INTO duty_events (
+    driver_id, load_id, truck_id, status, started_at, ended_at,
+    origin, annotation
+  ) VALUES ($1, $2, $3, $4, $5, $6, 'carrier', $7)
+  ON CONFLICT (driver_id, started_at) WHERE record_status = 'active' DO NOTHING
+  RETURNING id`
+
+// The other branch of the review: the record is explained, not owned. The
+// original stays active as the record of the drive; a duplicate active
+// unidentified row would be two records for one drive, so the annotation
+// rides on the original and an empty result means it was already marked
+// -- 409, like a second assign.
+export const ANNOTATE_UNIDENTIFIED_EVENT_SQL = `
+  UPDATE duty_events
+     SET annotation = $2
+   WHERE id = $1 AND driver_id IS NULL AND origin = 'unidentified'
+     AND record_status = 'active'
+  RETURNING id`
+
 // HOS Violations: every working driver's active log since $1, plus the
 // start of today's simulated day (the date range is counted in those
 // days, the same days sim_day() names).

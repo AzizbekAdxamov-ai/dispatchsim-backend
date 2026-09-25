@@ -99,6 +99,10 @@ export const ERROR_CODES = {
   COMPANY_INSOLVENT:      { status: 409, message: 'The company is insolvent' },
   EVENT_NOT_FOUND:        { status: 404, message: 'That road event is no longer open' },
   EVENT_OPTION_INVALID:   { status: 400, message: 'That is not one of the options for this event' },
+  // Compliance > Unassigned HOS: the record was already assigned or
+  // annotated, so a second review would rewrite a decision already made.
+  // 409, not 404: the record exists and the conflict is with that review.
+  EVENT_ALREADY_REVIEWED: { status: 409, message: 'This record has already been reviewed' },
   // POST /fleet/maintenance/:id/complete targeted an id that doesn't exist.
   SERVICE_NOT_FOUND:      { status: 404, message: 'Service record not found' },
   // ...or one that is already 'done'. 409, not 404: the record exists and

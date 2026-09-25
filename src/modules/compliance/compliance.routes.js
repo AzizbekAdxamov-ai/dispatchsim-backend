@@ -14,4 +14,11 @@ router.get('/hos', controller.driverHos)
 router.get('/hos/:driverId/log', controller.driverLog)
 router.get('/violations', controller.violations)
 
+// Compliance > Unassigned HOS -- the carrier's 49 CFR 395.32 review of
+// the records the ELD wrote while nobody was signed in (see
+// hos/repositioning.js for where those records come from).
+router.get('/unassigned-hos', controller.unassignedHos)
+router.post('/unassigned-hos/:id/assign', controller.assignUnassignedHos)
+router.post('/unassigned-hos/:id/annotate', controller.annotateUnassignedHos)
+
 export default router
