@@ -19,6 +19,14 @@ export async function getLoad(req, res) {
   res.status(200).json(load)
 }
 
+// GET /loads/board — the dispatch board, four columns. Board BEFORE :id:
+// express matches in registration order, and 'board' must never be read
+// as a load id.
+export async function getBoard(req, res) {
+  const board = await loadsService.getBoard()
+  res.status(200).json(board)
+}
+
 // GET /loads/:id/dispatch-check?driverId=... — the compliance lines the
 // confirm window shows BEFORE the click. Read-only: nothing here blocks,
 // the dispatch endpoint keeps its own guards.

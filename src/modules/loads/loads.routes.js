@@ -16,6 +16,10 @@ const router = Router()
 router.use(requireAuth, requireRole())
 
 router.get('/', loadsController.listLoads)
+// The dispatch board, before :id — express matches in order, and 'board'
+// must never be read as a 4-6 digit load id (loadIdSchema would 400 it,
+// but the intent reads wrong; registration order is the guard).
+router.get('/board', loadsController.getBoard)
 router.get('/:id', loadsController.getLoad)
 
 // Dispatch is dispatcher work, unlike the reads above which every role

@@ -26,7 +26,10 @@
 
 import { query } from '../../db/pool.js'
 
-const LOAD_COLUMNS = `
+// Exported for the dispatch board's column queries (loads.service.js):
+// one projection, shared, so the board's cards and the list's rows are
+// the same shape by construction rather than by promise.
+export const LOAD_COLUMNS = `
   l.id, l.origin_city AS "originCity", l.origin_state AS "originState",
   l.destination_city AS "destinationCity", l.destination_state AS "destinationState",
   l.broker, l.commodity,
@@ -46,7 +49,10 @@ const LOAD_COLUMNS = `
 // lives behind GET /drivers/:id and GET /fleet/trucks/:id — this is just
 // enough for a load list row or a load detail header to render without a
 // second request.
-const DRIVER_TRUCK_LATERAL = `
+// Exported since the dispatch board: loads.service.js composes its four
+// column queries from the SAME projection, so a card can never disagree
+// with the list about what a load row carries.
+export const DRIVER_TRUCK_LATERAL = `
   LEFT JOIN LATERAL (
     SELECT jsonb_build_object(
       'id', d.id, 'name', d.name, 'phone', d.phone,
@@ -61,7 +67,7 @@ const DRIVER_TRUCK_LATERAL = `
   ) truck_row ON true
 `
 
-const ROW_SELECT = `
+export const ROW_SELECT = `
   SELECT ${LOAD_COLUMNS}, driver_row.driver AS driver, truck_row.truck AS truck
   FROM loads l
   ${DRIVER_TRUCK_LATERAL}
