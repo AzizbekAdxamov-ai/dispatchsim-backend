@@ -8,3 +8,9 @@ export async function getDashboard(req, res) {
   const result = await statsService.getDashboard()
   res.status(200).json(result)
 }
+
+// GET /stats/compliance -- Compliance > Overview
+export async function getComplianceOverview(req, res) {
+  const result = await statsService.getComplianceOverview()
+  res.status(200).json(result)
+}

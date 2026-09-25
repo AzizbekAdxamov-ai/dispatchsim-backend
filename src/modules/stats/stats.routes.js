@@ -14,4 +14,9 @@ router.use(requireAuth, requireRole())
 
 router.get('/dashboard', statsController.getDashboard)
 
+// Compliance > Overview: the operation's cleanliness, composed from the
+// readings each compliance module already owns. Nulls for a failed source
+// travel as `degraded`, so a missing tile never reads as all-clear.
+router.get('/compliance', statsController.getComplianceOverview)
+
 export default router
