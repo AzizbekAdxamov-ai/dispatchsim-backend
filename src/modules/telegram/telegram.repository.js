@@ -104,3 +104,45 @@ export async function threadDeliveries(conversationId, client = null) {
   const result = await run(client, SQL.THREAD_DELIVERY_SQL, [conversationId])
   return result.rows
 }
+
+// -- Incoming: name lookup, roster, job bookkeeping -----------------------
+
+// ALL drivers sharing the name -- two matches is a question back to the
+// person typing, never a coin flip in the code.
+export async function driversByName(name, client = null) {
+  const result = await run(client, SQL.DRIVERS_BY_NAME_SQL, [name])
+  return result.rows
+}
+
+export async function driversList(client = null) {
+  const result = await run(client, SQL.DRIVERS_LIST_SQL, [])
+  return result.rows
+}
+
+export async function driverById(driverId, client = null) {
+  const result = await run(client, SQL.DRIVER_BY_ID_SQL, [driverId])
+  return result.rows[0] ?? null
+}
+
+export async function getPollOffset(client = null) {
+  const result = await run(client, SQL.GET_OFFSET_SQL, [])
+  const raw = result.rows[0]?.offset
+  const offset = Number(raw)
+  return Number.isSafeInteger(offset) && offset > 0 ? offset : 0
+}
+
+export async function setPollOffset(offset, client = null) {
+  await run(client, SQL.SET_OFFSET_SQL, [offset])
+}
+
+// The "not linked" notice map lives in sim_state as one jsonb object
+// ({ "<chatId>": isoDate }), read and written by the poll loop only.
+export async function getNoticeMap(client = null) {
+  const result = await run(client, SQL.GET_NOTICE_MAP_SQL, [])
+  const value = result.rows[0]?.value
+  return value && typeof value === 'object' ? value : {}
+}
+
+export async function setNoticeMap(map, client = null) {
+  await run(client, SQL.SET_NOTICE_MAP_SQL, [JSON.stringify(map)])
+}

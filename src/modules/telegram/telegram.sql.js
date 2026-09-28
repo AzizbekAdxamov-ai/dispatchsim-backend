@@ -152,6 +152,42 @@ export const REPLY_TARGET_SQL = `
    ORDER BY td.claimed_at DESC
    LIMIT 1`
 
+// /d <ism> -- exact, case-insensitive name match. ALL matches come back:
+// two drivers with one name is a question for the person typing, not a
+// coin flip for the code. The bridge never guesses.
+export const DRIVERS_BY_NAME_SQL = `
+  SELECT id, name FROM drivers WHERE lower(name) = lower($1) ORDER BY id`
+
+// The standing /d choice re-checked: the driver still exists (a driver
+// who quit must not silently catch messages).
+export const DRIVER_BY_ID_SQL = `
+  SELECT id, name FROM drivers WHERE id = $1`
+
+// The roster /drivers and ask-who print. Cheap, small, and read often
+// enough that keeping it to two columns matters.
+export const DRIVERS_LIST_SQL = `
+  SELECT id, name, duty_status AS "dutyStatus" FROM drivers ORDER BY name`
+
+// -- Job bookkeeping (sim_state: "when did this last happen" facts) -------
+
+// The poll loop's getUpdates offset, so a restart does not replay old
+// messages into the threads. jsonb, like every sim_state value.
+export const GET_OFFSET_SQL = `
+  SELECT value ->> 'offset' AS offset FROM sim_state WHERE key = 'telegram_offset'`
+
+export const SET_OFFSET_SQL = `
+  INSERT INTO sim_state (key, value, updated_at) VALUES ('telegram_offset', jsonb_build_object('offset', $1::bigint), now())
+  ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`
+
+// The "this chat is not linked" notice bookkeeping: when each chat was
+// last told. One jsonb map, not a table -- a courtesy, not a fact.
+export const GET_NOTICE_MAP_SQL = `
+  SELECT value FROM sim_state WHERE key = 'telegram_not_linked'`
+
+export const SET_NOTICE_MAP_SQL = `
+  INSERT INTO sim_state (key, value, updated_at) VALUES ('telegram_not_linked', $1::jsonb, now())
+  ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`
+
 // The thread's delivery facts, for the badge on undeliverable messages:
 // nothing about delivery lives on driver_messages, so the read joins.
 export const THREAD_DELIVERY_SQL = `
