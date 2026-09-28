@@ -23,7 +23,6 @@ import { DASHBOARD_COUNTS_SQL } from '../src/modules/loads/loads.repository.js'
 import * as alertSql from '../src/modules/alerts/alerts.sql.js'
 import * as payrollSql from '../src/modules/payroll/payroll.sql.js'
 import * as driverChatSql from '../src/modules/driverChat/driverChat.sql.js'
-import * as availabilitySql from '../src/modules/availability/availability.sql.js'
 import * as loadEventsSql from '../src/modules/loadEvents/loadEvents.sql.js'
 import * as fleetSql from '../src/modules/fleet/fleet.sql.js'
 import * as trackingSql from '../src/modules/tracking/tracking.repository.js'
@@ -36,6 +35,8 @@ import * as routingSql from '../src/modules/routing/routing.sql.js'
 import * as facilitiesSql from '../src/modules/facilities/facilities.sql.js'
 import * as stopVisitsSql from '../src/modules/facilities/stopVisits.sql.js'
 import * as dutyEventsSql from '../src/modules/hos/dutyEvents.sql.js'
+import * as dvirSql from '../src/modules/fleet/dvir.sql.js'
+import * as preTripSql from '../src/modules/fleet/preTrip.sql.js'
 import * as complianceSql from '../src/modules/compliance/compliance.sql.js'
 import { REACHABLE_SQL } from '../src/db/companyTables.js'
 
@@ -406,7 +407,7 @@ const STATEMENTS = [
 // that does not name its statements by hand, and it exists because the
 // hand-written list is the part that rots: someone adds a query, forgets
 // this file, and the checker keeps reporting a clean run it never earned.
-for (const [label, mod] of [['alerts', alertSql], ['payroll', payrollSql], ['driverChat', driverChatSql], ['availability', availabilitySql], ['loadEvents', loadEventsSql], ['fleet', fleetSql], ['tracking', trackingSql], ['documents', documentsSql], ['solvency', solvencySql], ['chatBudget', chatBudgetSql], ['routing', routingSql], ['facilities', facilitiesSql], ['stopVisits', stopVisitsSql], ['dutyEvents', dutyEventsSql], ['compliance', complianceSql]]) {
+for (const [label, mod] of [['alerts', alertSql], ['payroll', payrollSql], ['driverChat', driverChatSql], ['loadEvents', loadEventsSql], ['fleet', fleetSql], ['tracking', trackingSql], ['documents', documentsSql], ['solvency', solvencySql], ['chatBudget', chatBudgetSql], ['routing', routingSql], ['facilities', facilitiesSql], ['stopVisits', stopVisitsSql], ['dutyEvents', dutyEventsSql], ['compliance', complianceSql], ['dvir', dvirSql], ['preTrip', preTripSql]]) {
   for (const [name, sql] of Object.entries(mod)) {
     if (typeof sql === 'string' && /^\s*(SELECT|INSERT|UPDATE|DELETE|WITH)/i.test(sql)) {
       STATEMENTS.push([`${label}: ${name}`, sql])
