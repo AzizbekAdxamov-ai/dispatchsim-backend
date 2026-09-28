@@ -86,6 +86,11 @@ const WIPE = [
   // they came from -- both company property, both wiped. CASCADE off
   // truck_id would carry them, but the named DELETE is the promise.
   ['dvir_reports',         'DELETE FROM dvir_reports'],
+  // pre_trip_inspections (045): the pre-trip walk-around names the truck
+  // and the load it preceded -- both wiped. Reviewed_dvir_id dies with the
+  // report it names (SET NULL keeps the inspection row), the inspection
+  // row itself dies here, by name, before loads.
+  ['pre_trip_inspections', 'DELETE FROM pre_trip_inspections'],
   ['loads',                'DELETE FROM loads'],
   ['trucks',               'DELETE FROM trucks'],
   ['drivers',              'DELETE FROM drivers'],
