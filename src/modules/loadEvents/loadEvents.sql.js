@@ -10,6 +10,15 @@
 // mileage). A truck in that state is taken out of the normal event mix and
 // always meets a breakdown -- see rollEvents. NOT EXISTS so one overdue
 // record is read once per load, not once per row of the join.
+//
+// uncertifiedDefect: the truck's MOST RECENT report still lists defects
+// nobody has certified as fixed (040/041 -- 396.13(b)(2), which reads the
+// LAST report, not the file's history). The dispatch-check line and the
+// walk-around both decide from the last report, so the consequence does
+// too -- one opinion, not three. id is bigserial, so max(id) is the
+// newest row a truck has; a truck with no reports reads clean. Same mix
+// change as serviceOverdue: the state always meets a breakdown, see
+// rollEvents.
 export const IN_TRANSIT_LOADS_SQL = `
   SELECT l.id, l.driver_id AS "driverId", l.distance_mi AS "distanceMi",
          l.origin_city AS "originCity", l.origin_state AS "originState",
@@ -24,6 +33,14 @@ export const IN_TRANSIT_LOADS_SQL = `
               AND m.due_mileage IS NOT NULL
               AND t.odometer_mi >= m.due_mileage
          ) AS "serviceOverdue",
+         EXISTS (
+           SELECT 1
+             FROM dvir_reports r
+            WHERE r.truck_id = l.truck_id
+              AND jsonb_array_length(r.defects) > 0
+              AND r.defects_corrected = false
+              AND r.id = (SELECT max(r2.id) FROM dvir_reports r2 WHERE r2.truck_id = l.truck_id)
+         ) AS "uncertifiedDefect",
          EXTRACT(EPOCH FROM (now() - l.dispatched_at))
            / NULLIF(EXTRACT(EPOCH FROM (l.eta_at - l.dispatched_at)), 0) AS "elapsedFraction",
          -- How much of the run has passed SINCE THIS LOAD WAS LAST ROLLED.

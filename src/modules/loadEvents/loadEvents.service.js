@@ -59,13 +59,13 @@ export async function rollEvents({ rng = Math.random, limit = 50 } = {}) {
     if (!(fraction > 0)) continue
     if (rng() >= chanceForFraction(fraction)) continue
 
-    // A truck sent out past its service interval does not roll the dice on
-    // WHAT it meets -- only on WHEN. The chance above is unchanged (Q5 in
-    // the plan: no new probability, a changed outcome); the overdue truck's
-    // event is always a breakdown, the one failure mode an unserviced truck
-    // actually produces. No blocking, no disabled dispatch: the consequence
-    // is the shoulder.
-    const eventType = load.serviceOverdue ? 'breakdown' : pickEventType(rng)
+    // A truck sent out in a state the law or the wrench already named does
+    // not roll the dice on WHAT it meets -- only on WHEN. The chance above
+    // is unchanged (Q5 in the plan: no new probability, a changed outcome);
+    // the state's event is always a breakdown, the one failure mode that
+    // state actually produces. No blocking, no disabled dispatch: the
+    // consequence is the shoulder.
+    const eventType = eventTypeFor(load, rng)
     const place = placeFor(load, Number(load.elapsedFraction))
 
     try {
@@ -101,6 +101,17 @@ export async function rollEvents({ rng = Math.random, limit = 50 } = {}) {
   }
 
   return raised
+}
+
+// Which road event this load meets. The overdue-service flag keeps the
+// rule it already had; the uncertified-defect flag joins it with the same
+// shape -- 396.13(b)(2) named the state (defects listed, nobody certified
+// them fixed), the road just produces its failure mode. A small die-roll
+// item the seed failed on the PRE-TRIP side rides this flag too: that is
+// the whole point, the walk-around finding was real and the run paid for
+// it. Exported for the tests; the SQL keeps both flags booleans.
+export function eventTypeFor(load, rng = Math.random) {
+  return (load.serviceOverdue || load.uncertifiedDefect) ? 'breakdown' : pickEventType(rng)
 }
 
 // The driver's own words, composed from the event rather than generated.
