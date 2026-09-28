@@ -8,6 +8,7 @@
 import { AppError } from '../../lib/errors.js'
 import { seedReport, certificationDecision, DVIR_ITEMS } from '../../constants/dvir.js'
 import * as repo from './dvir.repository.js'
+import * as preTripRepo from './preTrip.repository.js'
 import { query } from '../../db/pool.js'
 
 // The row the delivery transaction writes, from the post-delivery truck
@@ -40,14 +41,23 @@ export function buildReportRow({ rng, truck, driverId, loadId, locationLabel, ha
 // The list the Fleet screen reads. `client` (optional) lets a caller read
 // inside its own transaction -- the schema-backed test inserts a row and
 // reads it back before the runner's rollback, on the same connection.
+//
+// Alongside the reports rides each truck's most recent WALK-AROUND
+// (392.7, written at dispatch) -- the cycle's other end, and the thing
+// 396.13(b)(2)'s review duty connects the report to. Keyed by truck
+// because 392.7 inspects the vehicle; one row per truck, the newest.
 export async function listReports({ limit = 100 } = {}, client = null) {
-  const reports = await repo.listReports({ limit }, client)
+  const [reports, walkArounds] = await Promise.all([
+    repo.listReports({ limit }, client),
+    preTripRepo.listInspections({ limit: 200 }, client),
+  ])
   return {
     items: DVIR_ITEMS,
     reports: reports.map((r) => ({
       ...r,
       certification: certificationDecision(r),
     })),
+    lastWalkAround: walkArounds,
   }
 }
 
