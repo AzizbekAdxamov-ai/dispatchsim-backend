@@ -399,9 +399,12 @@ export async function appendStopPlanFacts(client, { loadId, facts }) {
 // The partial unique index loads_one_active_per_driver is the real guard;
 // this is the readable pre-flight that produces a decent error.
 export async function getDriverForDispatch(client, driverId) {
+  // The truck's make/model ride along so the pre-dispatch check's truck
+  // line can name the unit without running a second query -- the check
+  // and the write read the SAME shape, one opinion about the driver.
   const result = await client.query(
     `SELECT d.id, d.name, d.hos_remaining_min AS "hosRemainingMin",
-            t.id AS "truckId",
+            t.id AS "truckId", t.make AS "truckMake", t.model AS "truckModel",
             (SELECT count(*) FROM loads l
               WHERE l.driver_id = d.id AND l.status <> 'done')::int AS "activeLoads"
        FROM drivers d

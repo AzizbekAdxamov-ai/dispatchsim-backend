@@ -58,8 +58,11 @@ export async function listTrucks({ limit = 100, offset = 0 } = {}) {
   return result.rows
 }
 
-export async function getTruckById(id) {
-  const result = await query(`${ROW_SELECT} WHERE t.id = $1`, [id])
+export async function getTruckById(id, client = null) {
+  // client: the same opts.client seam every reader takes -- a test's
+  // rollback transaction reads its own uncommitted fixture through it.
+  const runner = client ?? { query }
+  const result = await runner.query(`${ROW_SELECT} WHERE t.id = $1`, [id])
   return result.rows[0] ?? null
 }
 
@@ -102,10 +105,10 @@ export async function lockTruckForRun(client, truckId) {
 // and the cap keeps a long-lived company from wedging every future
 // delivery on a CHECK violation.
 export async function applyRunToTruck(client, {
-  truckId, roadMiles, gallonsFromTank, frontTirePoints, rearTirePoints,
+  truckId, roadMiles, gallonsFromTank, frontTirePoints, rearTirePoints, endedAtLabel = null,
 }) {
   const result = await client.query(APPLY_RUN_TO_TRUCK_SQL, [
-    truckId, roadMiles, gallonsFromTank, frontTirePoints, rearTirePoints,
+    truckId, roadMiles, gallonsFromTank, frontTirePoints, rearTirePoints, endedAtLabel,
   ])
   return result.rows[0] ?? null
 }

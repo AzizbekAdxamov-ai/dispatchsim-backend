@@ -23,7 +23,7 @@ test('dispatchCheck exists on the dispatch module beside the write', () => {
   })
 })
 
-const hasDb = Boolean(process.env.DATABASE_URL)
+const { hasDb } = await import('./helpers/db.js')
 
 test('the check composes real lines for a real load and driver', { skip: !hasDb }, async () => {
   const { pool } = await import('../src/db/pool.js')
@@ -31,38 +31,19 @@ test('the check composes real lines for a real load and driver', { skip: !hasDb 
   const service = await import('../src/modules/loads/dispatch.service.js')
 
   await inRollback(pool, async (client) => {
-    // A neutral load -- the only state a dispatch can start from. The
-    // fixture needs no writes when the seed left one; otherwise skip.
-    const load = (await client.query(
-      `SELECT id FROM loads WHERE status = 'neutral' ORDER BY booked_at DESC LIMIT 1`,
-    )).rows[0]
-    if (!load) return // no neutral load in this database; nothing to ask about
+    // The fixture: a neutral load and a driver whose qualification file the
+    // check can read and this test can write. Both are created in the
+    // rollback -- a seed that happens to satisfy neither was still a
+    // fixture, and 'no rows' skipped the assertions instead of proving
+    // them (the pre-trip work found this: both old tests were passing on
+    // an empty read).
+    const { makeCheckFixture } = await import('./helpers/dispatchFixture.js')
+    const fx = await makeCheckFixture(client)
 
-    // The qualification reader reads EVERY driver (LEFT JOIN on the DQ
-    // row), so the fixture driver must not have one already -- pick a
-    // driver the demo fleet left out of the DQ table, and let the insert
-    // below write the row the check will read.
-    const driver = (await client.query(
-      `SELECT d.id FROM drivers d
-        LEFT JOIN driver_qualification q ON q.driver_id = d.id
-       WHERE d.duty_status <> 'off' AND q.driver_id IS NULL
-       ORDER BY d.created_at LIMIT 1`,
-    )).rows[0]
-    if (!driver) return
-
-    // DQ rows for the driver, so the document lines are the reader's
-    // real output rather than defaults.
-    await client.query(
-      `INSERT INTO driver_qualification (driver_id, cdl_status, medical_expires_on, medical_status, mvr_checked_on, mvr_violations, mvr_status, da_status)
-       VALUES ($1, 'valid', now() + interval '200 days', 'valid', now() - interval '10 days', 0, 'valid', 'valid')
-       ON CONFLICT (driver_id) DO UPDATE SET medical_expires_on = EXCLUDED.medical_expires_on, medical_status = 'valid'`,
-      [driver.id],
-    )
-
-    const check = await service.dispatchCheck({ loadId: load.id, driverId: driver.id })
+    const check = await service.dispatchCheck({ loadId: fx.loadId, driverId: fx.driverId }, { client })
 
     // The load travels with its lane and rate -- the window's header.
-    assert.equal(check.load.id, load.id)
+    assert.equal(check.load.id, fx.loadId)
     assert.ok(check.load.originLabel.includes(','))
     assert.ok(check.load.rateUsd > 0)
 
@@ -71,10 +52,14 @@ test('the check composes real lines for a real load and driver', { skip: !hasDb 
     const docLines = check.checks.filter((c) => c.key.startsWith('dq.'))
     assert.equal(docLines.length, 4, 'four documents, four lines')
     for (const line of docLines) assert.equal(line.state, 'ok')
+    assert.ok(docLines[0].label, 'each document line is named, not keyed')
+    assert.ok(docLines.every((l) => l.cfr), 'each document line carries its CFR')
     const hos = check.checks.find((c) => c.key === 'hos')
     assert.equal(hos.cfr, '49 CFR 395.3(a)(3)')
 
-    // Truck and workload lines exist and are ok for this fixture.
+    // Truck and workload lines exist and are ok for this fixture -- a
+    // truckless workload row would read 'unknown' forever and nobody
+    // would have noticed.
     assert.equal(check.checks.find((c) => c.key === 'truck')?.state, 'ok')
     assert.equal(check.checks.find((c) => c.key === 'workload')?.state, 'ok')
 
@@ -95,13 +80,11 @@ test('an unknown driver is DRIVER_NOT_FOUND, never a silent all-clear', { skip: 
   const service = await import('../src/modules/loads/dispatch.service.js')
 
   await inRollback(pool, async (client) => {
-    const load = (await client.query(
-      `SELECT id FROM loads WHERE status = 'neutral' ORDER BY booked_at DESC LIMIT 1`,
-    )).rows[0]
-    if (!load) return
+    const { makeCheckFixture } = await import('./helpers/dispatchFixture.js')
+    const fx = await makeCheckFixture(client)
 
     await assert.rejects(
-      () => service.dispatchCheck({ loadId: load.id, driverId: 'no-such-driver' }),
+      () => service.dispatchCheck({ loadId: fx.loadId, driverId: 'no-such-driver' }, { client }),
       (err) => err instanceof AppError && err.code === 'DRIVER_NOT_FOUND',
     )
   })
@@ -111,4 +94,55 @@ test('the ELD review line and the check share repositioning\'s threshold', () =>
   // Kills: a second 30 typed into the check -- the same pattern the
   // overview and the qualification work refused.
   assert.equal(REVIEW_THRESHOLD_MIN, 30)
+})
+
+test('the check carries a pre-trip line when the driver has a truck', { skip: !hasDb }, async () => {
+  // Kills: the PTI line reading a different truck than the dispatch will
+  // write, or a second opinion about the tire gauges -- the line's rule
+  // is constants/preTrip.js's inspectionOutcome, the SAME call the
+  // dispatch transaction makes.
+  const { pool } = await import('../src/db/pool.js')
+  const { inRollback } = await import('./helpers/rollback.js')
+  const service = await import('../src/modules/loads/dispatch.service.js')
+  const preTrip = await import('../src/constants/preTrip.js')
+
+  await inRollback(pool, async (client) => {
+    const { makeCheckFixture } = await import('./helpers/dispatchFixture.js')
+    const fx = await makeCheckFixture(client, { withTruck: true })
+
+    const check = await service.dispatchCheck({ loadId: fx.loadId, driverId: fx.driverId }, { client })
+    const line = check.checks.find((c) => c.key === 'preTrip')
+    assert.ok(line, 'the walk-around line rides the check for a trucked driver')
+    assert.equal(line.cfr, '49 CFR 392.7', 'a pass names 392.7')
+    assert.equal(line.state, 'ok', 'the fixture truck\'s gauges are clean')
+
+    // The line's verdict is the model's verdict for the same truck state
+    // -- the gauge read the line shows is the one the write will record.
+    const truck = (await client.query(`SELECT * FROM trucks WHERE id = $1`, [fx.truckId])).rows[0]
+    const outcome = preTrip.inspectionOutcome({
+      truck: { odometerMi: truck.odometer_mi, tireFrontPct: truck.tire_front_pct, tireRearPct: truck.tire_rear_pct },
+      lastDvir: null, rng: null,
+    })
+    const hasDefect = Object.values(outcome.items).some((ok) => !ok)
+    assert.equal(line.state, hasDefect ? 'fail' : 'ok')
+  })
+})
+
+test('a truckless driver has no pre-trip line, never a guessed one', { skip: !hasDb }, async () => {
+  // Kills: a line invented for a driver who cannot walk around anything.
+  // The fixture driver is written WITHOUT a truck in the rollback, so the
+  // read can never come back empty -- a seed change used to skip this
+  // whole test as a silent pass.
+  const { pool } = await import('../src/db/pool.js')
+  const { inRollback } = await import('./helpers/rollback.js')
+  const service = await import('../src/modules/loads/dispatch.service.js')
+
+  await inRollback(pool, async (client) => {
+    const { makeCheckFixture } = await import('./helpers/dispatchFixture.js')
+    const fx = await makeCheckFixture(client, { withTruck: false })
+
+    const check = await service.dispatchCheck({ loadId: fx.loadId, driverId: fx.driverId }, { client })
+    assert.equal(check.checks.find((c) => c.key === 'preTrip'), undefined,
+      'no truck, no walk-around line')
+  })
 })

@@ -6,6 +6,7 @@
 // cash could only ever drain. These two pieces close the loop --
 // dispatch starts the clock, the tick finishes the run and pays for it.
 import { withTransaction, pool } from '../../db/pool.js'
+import config from '../../config.js'
 import { AppError } from '../../lib/errors.js'
 import * as loadsRepo from './loads.repository.js'
 import * as cash from '../cash/cash.service.js'
@@ -47,6 +48,8 @@ import * as dutyEventsRepo from '../hos/dutyEvents.repository.js'
 import { repositioningBlock } from '../hos/repositioning.js'
 import { buildReportRow } from '../fleet/dvir.service.js'
 import * as dvirRepo from '../fleet/dvir.repository.js'
+import { inspectionOutcome, preTripBlock, buildInspectionRow } from '../../constants/preTrip.js'
+import * as preTripRepo from '../fleet/preTrip.repository.js'
 
 // The DVIR seed rolls which of the small inspection items failed this
 // run. A tick must be REPRODUCIBLE: the same delivery retried after a
@@ -128,7 +131,11 @@ export function fuelCostFor(distanceMi) {
 // student decides (the refusal, if the driver then says no, still comes
 // from the driver -- see dispatchLoadInner). Rows the reader could not
 // produce travel as degraded entries, never as all-clear.
-export async function dispatchCheck({ loadId, driverId }) {
+export async function dispatchCheck({ loadId, driverId }, opts = {}) {
+  // opts.client: the same seam stats.service.js's overview takes -- a test's
+  // rollback transaction reads its own uncommitted fixture through it, the
+  // pool path stays the one-shot default every route hits.
+  const client = opts.client ?? null
   const degraded = []
   async function collect(label, fn) {
     try {
@@ -140,27 +147,28 @@ export async function dispatchCheck({ loadId, driverId }) {
     }
   }
 
-  const load = await loadsRepo.getLoadById(loadId)
+  const load = await loadsRepo.getLoadById(loadId, client)
   if (!load) throw new AppError('LOAD_NOT_FOUND')
   if (load.status !== 'neutral') throw new AppError('LOAD_NOT_DISPATCHABLE')
 
   const [driverRow, dq, availability] = await Promise.all([
-    collect('driver', () => pool.query(
-      `SELECT d.id, d.name,
-              t.id AS "truckId", t.make AS "truckMake", t.model AS "truckModel",
-              d.hos_remaining_min AS "hosRemainingMin"
-         FROM drivers d
-         LEFT JOIN trucks t ON t.driver_id = d.id
-        WHERE d.id = $1`,
-      [driverId],
-    ).then((r) => r.rows[0] ?? null)),
+    // The SAME read the dispatch write makes (getDriverForDispatch) --
+    // truck, drive clock and active-load count in one shape. A hand-rolled
+    // SELECT here once forgot the active-load count and the workload line
+    // read 'unknown' forever.
+    collect('driver', () => loadsRepo.getDriverForDispatch(client ?? pool, driverId)),
     collect('driverQualification', () =>
       (driverId
-        ? complianceService.listDriverQualification().then((r) =>
-            r.drivers.find((d) => d.driver.id === driverId) ?? null)
+        ? complianceService.listDriverQualification({ client }).then((r) => {
+            // The driver's file travels WITH the shared document-type
+            // catalogue -- the line reader below names each document from
+            // the same list the Qualification screen does, not its own.
+            const found = r.drivers.find((d) => d.driver.id === driverId) ?? null
+            return found ? { ...found, documentTypes: r.documentTypes } : null
+          })
         : Promise.resolve(null))),
     collect('availability', () =>
-      (driverId ? availabilityService.driverAvailability(pool, driverId) : Promise.resolve(null))),
+      (driverId ? availabilityService.driverAvailability(client, driverId) : Promise.resolve(null))),
   ])
 
   if (driverId && !driverRow) throw new AppError('DRIVER_NOT_FOUND')
@@ -245,6 +253,42 @@ export async function dispatchCheck({ loadId, driverId }) {
       : `${Math.floor(driverRow.hosRemainingMin / 60)}h ${driverRow.hosRemainingMin % 60}m on the 11-hour clock`,
     cfr: '49 CFR 395.3(a)(3)',
   })
+
+  // Pre-trip inspection (49 CFR 392.7 + 396.13): the walk-around the
+  // driver is ABOUT to perform, shown as the facts it will start from.
+  // The outcome comes from the SAME rule the dispatch transaction will
+  // write -- one opinion, not two. A truck with no assigned driver has no
+  // walk-around to speak of: no line, not a guessed one. The line never
+  // blocks: the walk-around itself will find what it finds, and the
+  // last-DVIR review (396.13(b)(2)) is a fact the dispatcher weighs.
+  if (driverRow?.truckId) {
+    const [truck, lastDvir] = await Promise.all([
+      collect('preTripTruck', () => trucksRepo.getTruckById(driverRow.truckId, client)),
+      collect('preTripDvir', () => dvirRepo.latestForTruck(driverRow.truckId, client)),
+    ])
+    if (truck) {
+      const outcome = inspectionOutcome({
+        truck: { odometerMi: truck.odometerMi, tireFrontPct: truck.tireFrontPct, tireRearPct: truck.tireRearPct },
+        lastDvir,
+        // No rng here: the check is a READ and must not spend the seed
+        // the dispatch write will roll -- and the deterministic parts
+        // (the gauges) are exactly the parts worth showing.
+        rng: null,
+      })
+      const hasDefect = Object.values(outcome.items).some((ok) => !ok)
+      checks.push({
+        key: 'preTrip',
+        state: hasDefect ? 'fail' : (outcome.dvirReview.allowed ? 'ok' : 'warn'),
+        label: 'Pre-trip inspection',
+        detail: hasDefect
+          ? outcome.defects.map((d) => d.detail).join('; ')
+          : outcome.dvirReview.allowed
+            ? 'Walk-around checks out from the truck\'s gauges'
+            : outcome.dvirReview.reason,
+        cfr: outcome.dvirReview.allowed ? '49 CFR 392.7' : '49 CFR 396.13(b)(2)',
+      })
+    }
+  }
 
   const canDispatch = checks.every((c) => c.state !== 'fail')
 
@@ -547,6 +591,38 @@ async function planAndSaveStops({ load, driver, truckId }) {
     dispatchedAt: load.dispatchedAt,
   })
 
+  // The walk-around the driver performs BEFORE the wheels move (49 CFR
+  // 392.7 -- pre-trip is on-duty-not-driving time). The repositioning
+  // drive, when there is one, IS the wheels moving: the walk-around ends
+  // where that drive begins, never overlapping it on the same truck.
+  // Without one it ends at the dispatch, where the load's own log begins.
+  // Computed pure from the truck as it stands at dispatch, written inside
+  // the same transaction as everything else this planning writes. The
+  // reviewed DVIR rides the row as 396.13(b)(1)'s proof: the walk-around
+  // begins with the last report, and the row says which one was read.
+  const ptiRng = dvirRngFor(`pti:${load.id}`)
+  const lastDvir = await dvirRepo.latestForTruck(truckId)
+  const ptiOutcome = inspectionOutcome({
+    truck: { odometerMi: truck.odometerMi, tireFrontPct: truck.tireFrontPct, tireRearPct: truck.tireRearPct },
+    lastDvir,
+    rng: ptiRng,
+  })
+  const ptiBlock = preTripBlock({
+    dispatchedAt: load.dispatchedAt,
+    defectCount: ptiOutcome.defects.length,
+    endsAt: reposition ? reposition.startedAt : load.dispatchedAt,
+  })
+  // The row shape the transaction writes -- built here, next to the
+  // outcome it comes from, so the transaction only does the writing.
+  const ptiRow = buildInspectionRow({
+    truckId,
+    driverId: driver.id,
+    loadId: load.id,
+    odometerMi: truck.odometerMi,
+    outcome: ptiOutcome,
+    reviewedDvirId: lastDvir?.id ?? null,
+  })
+
   await withTransaction(async (client) => {
     await dutyEventsRepo.insertMany(client, dutyRows)
     if (reposition) {
@@ -556,6 +632,48 @@ async function planAndSaveStops({ load, driver, truckId }) {
         startedAt: reposition.startedAt,
         endedAt: reposition.endedAt,
       })
+    }
+    // The walk-around block: ends where the driving it precedes begins
+    // (the repositioning's start, or the dispatch itself) -- never
+    // overlapping the drive on the same truck. The unique index
+    // duty_events_one_active_start makes a re-dispatch's duplicate a
+    // no-op, not a second copy of the log.
+    if (ptiBlock) {
+      await dutyEventsRepo.insertMany(client, [{
+        driverId: driver.id,
+        loadId: load.id,
+        truckId,
+        status: ptiBlock.status,
+        startedAt: ptiBlock.startedAt,
+        endedAt: ptiBlock.endedAt,
+      }])
+    }
+    if (ptiOutcome.defects.length > 0 || !ptiOutcome.dvirReview.allowed) {
+      // The facts the dispatcher will read on the load (stop_plan_facts,
+      // 037): a finding the walk-around made, and the 396.13 review that
+      // refused. No AppError, no block -- the dispatch stands, the
+      // consequence is written where it can be read.
+      const ptiFacts = []
+      if (ptiOutcome.defects.length > 0) {
+        ptiFacts.push({
+          code: 'PRE_TRIP_DEFECTS',
+          cfr: '49 CFR 392.7',
+          detail: `The pre-trip walk-around found ${ptiOutcome.defects.length} defect${ptiOutcome.defects.length === 1 ? '' : 's'}: `
+            + ptiOutcome.defects.map((d) => d.detail).join('; '),
+        })
+      }
+      if (!ptiOutcome.dvirReview.allowed) {
+        ptiFacts.push({
+          code: 'PRE_TRIP_DVIR_REVIEW',
+          cfr: ptiOutcome.dvirReview.cfr,
+          detail: `${ptiOutcome.dvirReview.reason} -- certify it on Fleet > DVIR before this truck runs.`,
+        })
+      }
+      await loadsRepo.appendStopPlanFacts(client, { loadId: load.id, facts: ptiFacts })
+    }
+    // The inspection row itself, through the table's one writer.
+    if (ptiRow) {
+      await preTripRepo.insertInspection(client, ptiRow)
     }
     if (stops.length > 0) {
       await stopVisitsRepo.insertMany(client, stops.map((s) => ({
@@ -985,9 +1103,18 @@ export async function settleArrivedStops() {
 // Fractions are carried in sim_state rather than rounded away each tick.
 // Thirty seconds at -$10,000 is $1.23; rounding that up every tick would
 // bill about 20% more than the rate says.
-export async function chargeInterest() {
+//
+// `enabled` and `run` are seams, not options any caller sets: the tick
+// calls this with no arguments. They exist so a test can prove that
+// FINANCE=off opens no transaction at all, on a machine with or without a
+// database behind it.
+export async function chargeInterest({ enabled = config.financeEnabled, run = withTransaction } = {}) {
+  // FINANCE=off. Nothing accrues, and the watermark is deliberately NOT
+  // advanced: switching finance back on bills from where it left off
+  // rather than pretending the period was paid. See config.js.
+  if (!enabled) return null
   let charged = null
-  await withTransaction(async (client) => {
+  await run(async (client) => {
     const state = await cashRepo.readInterestState(client)
     if (!state) return
 
@@ -1039,9 +1166,12 @@ export async function chargeInterest() {
 // Billed in whole simulated days rather than monthly, for the same reason
 // interest is: a monthly cycle is sixty real minutes and a student would
 // meet it once. Daily, it is visible without being loud.
-export async function chargeInsurance() {
+// Same two seams as chargeInterest, for the same reason.
+export async function chargeInsurance({ enabled = config.financeEnabled, run = withTransaction } = {}) {
+  // FINANCE=off: the premium does not accrue and the watermark stands.
+  if (!enabled) return null
   let charged = null
-  await withTransaction(async (client) => {
+  await run(async (client) => {
     const state = await cashRepo.readInsuranceState(client)
     if (!state) return
 
