@@ -56,6 +56,15 @@ export const KEEP = Object.freeze(new Set([
   // listed here anyway so companyTables.test.js's "every table is
   // classified" check has an explicit answer instead of an accidental one.
   'facilities',
+  // telegram_links (046) -- the people side of the bridge. A link binds a
+  // CHAT to a user account (FK into users, ON DELETE CASCADE), and the
+  // user is kept by a reset: un-deleting the person must not sever the
+  // chat they proved they own with a code. The bridge outlives the
+  // company the same way the login does.
+  'telegram_links',
+  // telegram_link_codes (046) -- codes belong to users for the same
+  // reason; a reset must not turn a live code into a dangling one.
+  'telegram_link_codes',
 ]))
 
 // Tables that are neither the company's nor the world's -- they are the
@@ -73,6 +82,15 @@ export const INFRASTRUCTURE = Object.freeze(new Set([
   'sim_state',
   'user_roles',
   'schema_migrations',
+  // telegram_deliveries (046), telegram_attachments (047) -- the bridge's
+  // own bookkeeping. Deliveries are the OUTBOX: rows are claims on a
+  // send, and their message_id FK (ON DELETE CASCADE) already dies with
+  // the driver_messages a reset clears. Attachments hold file references
+  // the same way. Wiping them on top of the cascade would race the push
+  // job mid-reset; classifying them here says "infrastructure, not the
+  // company's to delete" and lets the FK do the work.
+  'telegram_deliveries',
+  'telegram_attachments',
 ]))
 
 // Walk the foreign keys outward from the roots and return every table the

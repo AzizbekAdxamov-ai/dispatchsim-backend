@@ -19,6 +19,7 @@ import cashRoutes from './modules/cash/cash.routes.js'
 import alertsRoutes from './modules/alerts/alerts.routes.js'
 import payrollRoutes from './modules/payroll/payroll.routes.js'
 import driverChatRoutes from './modules/driverChat/driverChat.routes.js'
+import telegramRoutes from './modules/telegram/telegram.routes.js'
 import opsRoutes from './modules/ops/ops.routes.js'
 import hrRoutes from './modules/hr/hr.routes.js'
 import trackingRoutes from './modules/tracking/tracking.routes.js'
@@ -39,7 +40,26 @@ app.set('trust proxy', 1)
 // `credentials` is intentionally omitted: the API is authenticated with a
 // Bearer token in the Authorization header, not cookies, so there is no
 // need to allow credentialed cross-origin requests.
-app.use(cors({ origin: config.corsOrigin }))
+//
+// In development the allowed origin is any port on localhost, not one
+// hardcoded port. Vite takes the next free port when 5173 is busy -- two
+// dev servers running at once is ordinary -- and the page served on 5174
+// then had EVERY request refused by this line. The browser hides a CORS
+// refusal from the page (that is the point of it), so the app saw a
+// generic network failure and told the user "Cannot reach the server. Is
+// the API running?" while the API was answering /health perfectly well.
+// An error that names the wrong cause costs more than the bug it reports.
+//
+// Production is unchanged: one origin, from CORS_ORIGIN, and no wildcard.
+// A localhost origin is only reachable from the developer's own machine,
+// so widening it there grants nobody anything they did not already have.
+const LOCALHOST_ORIGIN = /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/
+
+app.use(cors({
+  origin: config.isProd
+    ? config.corsOrigin
+    : (origin, cb) => cb(null, !origin || origin === config.corsOrigin || LOCALHOST_ORIGIN.test(origin)),
+}))
 
 app.use(express.json({ limit: '100kb' }))
 
@@ -58,6 +78,7 @@ app.use('/finance', financeRoutes)
 app.use('/alerts', alertsRoutes)
 app.use('/payroll', payrollRoutes)
 app.use('/driver-chat', driverChatRoutes)
+app.use('/telegram', telegramRoutes)
 app.use('/load-board', loadBoardRoutes)
 app.use('/broker-chat', brokerChatRoutes)
 app.use('/broker-check', brokerCheckRoutes)

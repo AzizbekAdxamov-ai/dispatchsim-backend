@@ -16,6 +16,7 @@
 import { Router } from 'express'
 import { runTick } from '../loads/dispatch.service.js'
 import { refreshIfNeeded, OUTCOME } from '../../jobs/dailyRefresh.js'
+import { pushOnce } from '../../jobs/telegramPush.js'
 import config from '../../config.js'
 import { AppError } from '../../lib/errors.js'
 
@@ -95,9 +96,31 @@ async function handleRefresh(req, res, next) {
   }
 }
 
+// The Telegram bridge's outgoing pass, reachable the same way. On Vercel
+// no cron exists that could run it, and the job's own guard means a
+// scheduler calling it more often than needed only ever claims what is
+// owed -- the same idempotency that makes the local cron safe.
+async function handleTelegramPush(req, res, next) {
+  try {
+    const expected = config.opsTickSecret
+    if (!expected) throw new AppError('TICK_NOT_CONFIGURED')
+    const bearer = (req.get('authorization') || '').replace(/^Bearer\s+/i, '')
+    if (req.get('x-ops-secret') !== expected && bearer !== expected) {
+      throw new AppError('UNAUTHORIZED')
+    }
+
+    const result = await pushOnce('http')
+    res.status(200).json(result)
+  } catch (err) {
+    next(err)
+  }
+}
+
 router.get('/tick', handleTick)
 router.post('/tick', handleTick)
 router.get('/refresh', handleRefresh)
 router.post('/refresh', handleRefresh)
+router.get('/telegram-push', handleTelegramPush)
+router.post('/telegram-push', handleTelegramPush)
 
 export default router

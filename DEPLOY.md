@@ -8,6 +8,7 @@ Ilovada vaqtga bog'liq ikkita ish bor, va ular butunlay boshqa tezlikda ishlaydi
 |---|---|---|
 | `/ops/tick` | har daqiqada | **tashqi rejalashtiruvchi** |
 | `/ops/refresh` | kuniga bir | Vercel cron (`vercel.json`) |
+| `/ops/telegram-push` | Telegram ishlatilsa — tashqi rejalashtuvchi (lokalda cron 15s) | tashqi rejalashtuvchi |
 
 Tick har daqiqada kerak, chunki kompaniya soati siqilgan: **1 simulyatsiya kuni = 2 real
 daqiqa** (`src/constants/simClock.js`). Tick yuklarni yetkazadi, hisob-fakturalarni

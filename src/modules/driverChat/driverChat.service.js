@@ -21,6 +21,7 @@ import { chatConfigFor } from '../chat/chatProvider.js'
 import { AppError } from '../../lib/errors.js'
 import { withTransaction } from '../../db/pool.js'
 import * as repo from './driverChat.repository.js'
+import * as telegramRepo from '../telegram/telegram.repository.js'
 import * as payrollService from '../payroll/payroll.service.js'
 import { driverReplyDelaySec } from './driverChat.replyTiming.js'
 import {
@@ -65,9 +66,26 @@ export async function getThread({ conversationId, userId }) {
       stage: standing.stage,
       willWork: standing.willWork,
     },
-    messages: await repo.listMessages(conversationId),
+    messages: await withDeliveryFlags(
+      conversationId,
+      await repo.listMessages(conversationId),
+    ),
     awaitingReply: await repo.hasPendingReply(conversationId),
   }
+}
+
+// The outbox is the only place "did this reach Telegram" is written --
+// driver_messages carries no delivery column on purpose. Messages past
+// five attempts get a flag the thread renders next to the words, so a
+// lost send is visible instead of silently missing from the group.
+async function withDeliveryFlags(conversationId, messages) {
+  const deliveries = await telegramRepo.threadDeliveries(conversationId)
+  const capped = new Map(
+    deliveries
+      .filter((d) => d.sentAt == null && d.attempts >= 5)
+      .map((d) => [d.messageId, true]),
+  )
+  return messages.map((m) => (capped.has(m.id) ? { ...m, notDelivered: true } : m))
 }
 
 export async function listThreads({ userId }) {

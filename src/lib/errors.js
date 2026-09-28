@@ -118,6 +118,11 @@ export const ERROR_CODES = {
   // server, not this app's own outage -- src/modules/routing/osrm.js never
   // swallows this into a null/empty route, it always throws.
   ROUTE_UNAVAILABLE:       { status: 503, message: 'Could not fetch a route right now' },
+  // The Telegram bridge switch is off on this deployment (no bot token in
+  // .env). A settings panel asking for a link code is told the fact rather
+  // than getting a code that could never work.
+  TELEGRAM_DISABLED:   { status: 409, message: 'The Telegram bridge is not configured on this deployment' },
+  TELEGRAM_NOT_LINKED: { status: 404, message: 'No Telegram chat is linked to this account' },
 }
 
 export class AppError extends Error {

@@ -87,10 +87,13 @@ test('both scheduler endpoints exist and accept GET', () => {
 
 test('neither endpoint runs without a secret', () => {
   // An open tick endpoint lets anyone drive the company's clock; an open
-  // refresh endpoint lets anyone rebuild the board.
+  // refresh endpoint lets anyone rebuild the board; an open telegram-push
+  // lets anyone spend the group's rate budget. Every handler the ops
+  // routes expose obeys the same two-line rule: no secret configured ->
+  // refuse, secret mismatched -> refuse.
   const routes = src('src/modules/ops/ops.routes.js')
   const handlers = routes.split(/async function handle/).slice(1)
-  assert.equal(handlers.length, 2, `${handlers.length} ta handler topildi, 2 ta kutilgandi`)
+  assert.equal(handlers.length, 3, `${handlers.length} ta handler topildi, 3 ta kutilgandi`)
   for (const h of handlers) {
     assert.match(h, /if \(!expected\) throw new AppError\('TICK_NOT_CONFIGURED'\)/,
       'sirsiz ishlayapti')
