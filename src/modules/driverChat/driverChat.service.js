@@ -74,7 +74,7 @@ export async function listThreads({ userId }) {
   return { threads: await repo.listThreads(userId) }
 }
 
-export async function sendMessage({ conversationId, userId, text }) {
+export async function sendMessage({ conversationId, userId, text, images }) {
   const conversation = await repo.getConversation(conversationId, userId)
   if (!conversation) throw new AppError('CONVERSATION_NOT_FOUND')
 
@@ -109,7 +109,7 @@ export async function sendMessage({ conversationId, userId, text }) {
   let reply
   try {
     reply = await chatText({
-      messages: buildMessages({ systemPrompt, history, newMessage: text }),
+      messages: buildMessages({ systemPrompt, history, newMessage: text, images }),
       config,
     })
 
@@ -137,6 +137,7 @@ export async function sendMessage({ conversationId, userId, text }) {
           systemPrompt: `${systemPrompt}\n\nYour last reply ${why}. Reply again as the driver, in character, one to three sentences only.`,
           history,
           newMessage: text,
+          images,
         }),
         config,
       })

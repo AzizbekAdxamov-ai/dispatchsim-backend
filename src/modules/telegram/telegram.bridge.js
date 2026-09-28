@@ -19,6 +19,7 @@ import { routeUpdate } from './telegram.router.js'
 import { openConversation, sendMessage } from '../driverChat/driverChat.service.js'
 import { createTelegramClient } from './telegram.client.js'
 import config from '../../config.js'
+import { photoDecision, buildUserContent, BLIND_PHOTO_NOTICE } from './telegram.vision.js'
 
 // The chat service entry, held in a let so tests can point it at a spy.
 // Production always uses the real one -- the bridge has exactly one door
@@ -155,7 +156,7 @@ export async function handleUpdate(update, telegram = null, client = null) {
         await botSend(chatId, "I can't tell who that reply was for. Pick a driver with /d <name>.")
         return {}
       }
-      return deliverToThread({ conversationId: target.conversationId, userId: target.userId, text, chatId })
+      return deliverToThread({ conversationId: target.conversationId, userId: target.userId, text, chatId, update })
     }
 
     case 'to-current': {
@@ -171,8 +172,7 @@ export async function handleUpdate(update, telegram = null, client = null) {
         await botSend(chatId, 'That driver is gone. Pick another with /d <name>.')
         return {}
       }
-      const conversation = await chatBackend.openConversation({ driverId: driver.id, userId: link.userId })
-      return deliverToThread({ conversationId: conversation.conversation.id, userId: link.userId, text, chatId })
+      return deliverToThread({ conversationId: await ensureConversation(driver.id, link.userId), userId: link.userId, text, chatId, update })
     }
 
     case 'ask-who': {
@@ -191,11 +191,40 @@ export async function handleUpdate(update, telegram = null, client = null) {
   }
 }
 
-// -- The one door into the chat -------------------------------------------
+// The thread, opened if it does not exist yet. The chat backend owns the
+// real one; tests stub this through chatBackend like everything else.
+async function ensureConversation(driverId, userId) {
+  const conversation = await chatBackend.openConversation({ driverId, userId })
+  return conversation.conversation.id
+}
 
-async function deliverToThread({ conversationId, userId, text, chatId }) {
+// -- The one door into the chat -------------------------------------------
+//
+// `update` rides along only for the photo facts. The TEXT always goes to
+// the door as a string; the IMAGE goes only when the vision switch says
+// the model can see -- and the chat service builds the content parts.
+
+async function deliverToThread({ conversationId, userId, text, chatId, update }) {
   try {
-    await chatBackend.sendMessage({ conversationId, userId, text })
+    const payload = { conversationId, userId, text }
+    if (update?.photos?.length > 0) {
+      const decision = photoDecision({ enabled: config.chatDriverVision, photoCount: update.photos.length })
+      if (decision.photo) {
+        // The bytes come from the same client the poll loop uses; the
+        // base64 data URL is the OpenAI-compatible shape, built inline so
+        // aiClient stays untouched.
+        const tg = botTelegram ?? createTelegramClient({ token: config.telegramToken })
+        const photo = update.photos[0]
+        const file = await tg.getFile(photo.fileId)
+        const bytes = await tg.downloadFile(file.file_path)
+        payload.images = [`data:image/jpeg;base64,${bytes.toString('base64')}`]
+      } else if (decision.blind) {
+        await botSend(chatId, BLIND_PHOTO_NOTICE())
+      }
+      // Either way the thread records what arrived.
+      payload.text = `[photo] ${text}`
+    }
+    await chatBackend.sendMessage(payload)
   } catch (err) {
     if (err instanceof AppError && err.code === 'CHAT_DAILY_LIMIT') {
       // The budget fact, in the group's own words. Saying "the driver is

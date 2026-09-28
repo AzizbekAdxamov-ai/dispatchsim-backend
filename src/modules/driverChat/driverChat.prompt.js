@@ -142,14 +142,25 @@ export function buildDriverSystemPrompt({ driver, standing, load }) {
 }
 
 // The conversation as the model sees it. `driver` rows are the assistant.
-export function buildMessages({ systemPrompt, history, newMessage }) {
+//
+// `images` (optional, base64 data URLs) turns the user turn into the
+// OpenAI-compatible content-parts shape. aiClient passes `messages`
+// through untouched, so vision rides the same request without the client
+// knowing a picture exists. No images -> the plain string, as always.
+export function buildMessages({ systemPrompt, history, newMessage, images }) {
+  const userContent = Array.isArray(images) && images.length > 0
+    ? [
+        { type: 'text', text: newMessage },
+        ...images.map((url) => ({ type: 'image_url', image_url: { url } })),
+      ]
+    : newMessage
   return [
     { role: 'system', content: systemPrompt },
     ...history.map((m) => ({
       role: m.role === 'driver' ? 'assistant' : 'user',
       content: m.content,
     })),
-    { role: 'user', content: newMessage },
+    { role: 'user', content: userContent },
   ]
 }
 
