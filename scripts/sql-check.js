@@ -37,7 +37,13 @@ import * as stopVisitsSql from '../src/modules/facilities/stopVisits.sql.js'
 import * as dutyEventsSql from '../src/modules/hos/dutyEvents.sql.js'
 import * as dvirSql from '../src/modules/fleet/dvir.sql.js'
 import * as preTripSql from '../src/modules/fleet/preTrip.sql.js'
+import * as telegramSql from '../src/modules/telegram/telegram.sql.js'
 import * as complianceSql from '../src/modules/compliance/compliance.sql.js'
+// The board's search is assembled from a dozen optional pieces, so there
+// is no string to copy here -- the builders are imported and asked for the
+// exact statements the module runs. test/loadBoardSearch.test.js checks
+// how they are built; this checks that PostgreSQL accepts the result.
+import { buildListPostingsSql, buildCountPostingsSql } from '../src/modules/loadBoard/loadBoard.repository.js'
 import { REACHABLE_SQL } from '../src/db/companyTables.js'
 
 const STATEMENTS = [
@@ -381,17 +387,8 @@ const STATEMENTS = [
   // both read it.
   ['INVOICE_CTE (sim-day aging)', `${INVOICE_CTE} SELECT * FROM invoice_status`],
 
-  // --- migration 030. rate_usd is suppressed in the SELECT, excluded from
-  // the rate filter, and sorted last -- three places, because ordering and
-  // filtering leak a number just as surely as printing it does.
-  ['loadBoard: hidden rate is suppressed', `
-    SELECT p.id,
-           CASE WHEN p.rate_hidden THEN NULL ELSE p.rate_usd END AS "rateUsd",
-           p.rate_hidden AS "rateHidden"
-      FROM load_postings p
-     WHERE p.status = 'open'
-       AND (p.rate_hidden = false AND (p.rate_usd::numeric / p.distance_mi) >= $1)
-     ORDER BY p.rate_hidden ASC, (p.rate_usd::numeric / p.distance_mi) DESC`],
+  // (The load board's own statements are built by the module and pushed in
+  // below -- migration 030's rate suppression travels with them.)
 
   ['brokerChat: the broker still knows the rate', `
     SELECT p.rate_usd AS "rateUsd", p.rate_hidden AS "rateHidden"
@@ -407,12 +404,38 @@ const STATEMENTS = [
 // that does not name its statements by hand, and it exists because the
 // hand-written list is the part that rots: someone adds a query, forgets
 // this file, and the checker keeps reporting a clean run it never earned.
-for (const [label, mod] of [['alerts', alertSql], ['payroll', payrollSql], ['driverChat', driverChatSql], ['loadEvents', loadEventsSql], ['fleet', fleetSql], ['tracking', trackingSql], ['documents', documentsSql], ['solvency', solvencySql], ['chatBudget', chatBudgetSql], ['routing', routingSql], ['facilities', facilitiesSql], ['stopVisits', stopVisitsSql], ['dutyEvents', dutyEventsSql], ['compliance', complianceSql], ['dvir', dvirSql], ['preTrip', preTripSql]]) {
+for (const [label, mod] of [['alerts', alertSql], ['payroll', payrollSql], ['driverChat', driverChatSql], ['loadEvents', loadEventsSql], ['fleet', fleetSql], ['tracking', trackingSql], ['documents', documentsSql], ['solvency', solvencySql], ['chatBudget', chatBudgetSql], ['routing', routingSql], ['facilities', facilitiesSql], ['stopVisits', stopVisitsSql], ['dutyEvents', dutyEventsSql], ['compliance', complianceSql], ['dvir', dvirSql], ['preTrip', preTripSql], ['telegram', telegramSql]]) {
   for (const [name, sql] of Object.entries(mod)) {
     if (typeof sql === 'string' && /^\s*(SELECT|INSERT|UPDATE|DELETE|WITH)/i.test(sql)) {
       STATEMENTS.push([`${label}: ${name}`, sql])
     }
   }
+}
+
+// The board's search, as the module builds it. Four combinations, because
+// the shape of the statement changes with the filters: the CTE is a
+// different one when an origin city is given, DH-D appears only with a
+// destination, and the count query moves the radii into a FILTER. A
+// renamed column or a mis-numbered placeholder in any of them fails here
+// rather than in a chat window.
+const BOARD_SEARCHES = [
+  ['no filters', {}],
+  ['origin point + DH-O radius', { fromCity: 'Dallas', fromState: 'TX', maxDeadheadMi: 150 }],
+  ['destination point + DH-D radius', { toCity: 'Atlanta', toState: 'GA', maxDeadheadDestMi: 150 }],
+  ['everything at once', {
+    fromCity: 'Dallas', fromState: 'TX', toCity: 'Atlanta', toState: 'GA',
+    maxDeadheadMi: 150, maxDeadheadDestMi: 150,
+    equipmentType: ['reefer', 'dry-van'], originState: 'TX', destinationState: 'GA',
+    originZone: 'south-central', destinationZone: 'southeast',
+    minRatePerMile: 2, maxLengthFt: 53, maxWeightLbs: 44000,
+    pickupFrom: new Date(), pickupBefore: new Date(),
+  }],
+]
+
+for (const [name, filters] of BOARD_SEARCHES) {
+  const full = { sort: 'rate', limit: 25, offset: 0, ...filters }
+  STATEMENTS.push([`loadBoard: search -- ${name}`, buildListPostingsSql(full).text])
+  STATEMENTS.push([`loadBoard: count -- ${name}`, buildCountPostingsSql(full).text])
 }
 
 const client = await pool.connect()
