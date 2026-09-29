@@ -122,6 +122,9 @@ export const ERROR_CODES = {
   // .env). A settings panel asking for a link code is told the fact rather
   // than getting a code that could never work.
   TELEGRAM_DISABLED:   { status: 409, message: 'The Telegram bridge is not configured on this deployment' },
+  // 048 seeds the carrier row; its absence means an un-migrated database,
+  // not a company that chose to have no name.
+  CARRIER_NOT_SET:     { status: 500, message: 'The carrier row is missing — run the migrations' },
   TELEGRAM_NOT_LINKED: { status: 404, message: 'No Telegram chat is linked to this account' },
 }
 

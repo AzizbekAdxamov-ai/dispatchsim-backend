@@ -19,7 +19,7 @@ import cashRoutes from './modules/cash/cash.routes.js'
 import alertsRoutes from './modules/alerts/alerts.routes.js'
 import payrollRoutes from './modules/payroll/payroll.routes.js'
 import driverChatRoutes from './modules/driverChat/driverChat.routes.js'
-import telegramRoutes from './modules/telegram/telegram.routes.js'
+import carrierRoutes from './modules/carrier/carrier.routes.js'
 import opsRoutes from './modules/ops/ops.routes.js'
 import hrRoutes from './modules/hr/hr.routes.js'
 import trackingRoutes from './modules/tracking/tracking.routes.js'
@@ -61,6 +61,10 @@ app.use(cors({
     : (origin, cb) => cb(null, !origin || origin === config.corsOrigin || LOCALHOST_ORIGIN.test(origin)),
 }))
 
+// The bot process (src/bot, `npm run bot`) reaches the chat logic as a
+// function call in the same process -- there is no internal HTTP surface
+// and no separate bot process to authenticate.
+
 app.use(express.json({ limit: '100kb' }))
 
 // Unauthenticated, unrated liveness check for load balancers/uptime checks.
@@ -78,7 +82,7 @@ app.use('/finance', financeRoutes)
 app.use('/alerts', alertsRoutes)
 app.use('/payroll', payrollRoutes)
 app.use('/driver-chat', driverChatRoutes)
-app.use('/telegram', telegramRoutes)
+app.use('/carrier', carrierRoutes)
 app.use('/load-board', loadBoardRoutes)
 app.use('/broker-chat', brokerChatRoutes)
 app.use('/broker-check', brokerCheckRoutes)

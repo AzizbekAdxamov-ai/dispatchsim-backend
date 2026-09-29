@@ -1,20 +1,19 @@
-// The one seam between this codebase and Telegram's HTTP API.
+// The one seam between this process and Telegram's HTTP API.
 //
-// Everything the bridge does with the network goes through the object
-// this factory returns, and every test hands in a fake -- the same
-// arrangement chargeInterest({ run }) uses: the test never opens a
-// connection, so it cannot be broken by one.
+// Every network call the bot makes goes through the object this factory
+// returns, and every test hands in a fake -- so a test never opens a
+// connection and cannot be broken by one.
 //
-// The four methods are exactly the Bot API calls this app needs:
+// The five methods are exactly the Bot API calls this bot needs:
+//   getMe          who this token belongs to, and what it may read
 //   sendMessage    push a line into the group
 //   getUpdates     long-poll for what people typed
 //   getFile        resolve an incoming photo's file_id into a path
-//   downloadFile   fetch that path's bytes (vision, stage 5)
+//   downloadFile   fetch that path's bytes
 //
 // Errors come back as plain Errors with a `status` attached (the HTTP
-// status when there was one) -- callers name the consequence, the seam
-// names the fact. Nothing here knows about the outbox, the links or the
-// router; those live above and inject this factory where they need it.
+// status when there was one): the seam names the fact, the caller names
+// the consequence.
 
 const API_BASE = 'https://api.telegram.org'
 
@@ -47,6 +46,11 @@ export function createTelegramClient({ token, fetchImpl = fetch } = {}) {
   }
 
   return {
+    // Answers two questions at once: is the token good, and is privacy
+    // mode off. A bot with privacy ON is handed only commands addressed
+    // to it -- it sits in the group and never sees a word of an ordinary
+    // message, which looks exactly like a broken bridge.
+    getMe: () => call('getMe'),
     sendMessage: (chatId, text) => call('sendMessage', { chat_id: chatId, text }),
     getUpdates: (offset, timeoutSec) => call('getUpdates', { offset, timeout: timeoutSec }),
     getFile: (fileId) => call('getFile', { file_id: fileId }),

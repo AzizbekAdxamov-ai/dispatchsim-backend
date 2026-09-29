@@ -10,28 +10,15 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import 'dotenv/config'
 
-import { collectPhotos, photoDecision, buildUserContent, incomingRecordText, BLIND_PHOTO_NOTICE } from '../src/modules/telegram/telegram.vision.js'
+import { photoDecision, incomingRecordText, BLIND_PHOTO_NOTICE } from '../src/bot/vision.js'
 import { buildMessages } from '../src/modules/driverChat/driverChat.prompt.js'
 
 const { hasDb } = await import('./helpers/db.js')
 
-test('collectPhotos folds an album into one fact and keeps the caption', () => {
-  const updates = [
-    { message: { photo: [{ file_id: 'small' }, { file_id: 'big1', width: 1280, height: 720 }], caption: 'BOL from the shipper' } },
-    { message: { photo: [{ file_id: 'big2', width: 1280, height: 720 }] } },
-  ]
-  const { photos, caption } = collectPhotos(updates)
-  assert.equal(photos.length, 2)
-  assert.equal(photos[0].fileId, 'big1')
-  assert.equal(photos[1].fileId, 'big2')
-  assert.equal(caption, 'BOL from the shipper')
-})
-
-test('collectPhotos with no photos is a text-only fact', () => {
-  const { photos, caption } = collectPhotos([{ message: { text: 'hello' } }])
-  assert.equal(photos.length, 0)
-  assert.equal(caption, null)
-})
+// (The two collectPhotos tests moved with the function, to
+// ../../telegram_bot/test/parse.test.js: folding what Telegram sent is
+// the bot process's work now. What stays here is the half that needs to
+// know about the model.)
 
 test('photoDecision: vision on hands the photo over', () => {
   assert.deepEqual(photoDecision({ enabled: true, photoCount: 1 }), { photo: true, textOnly: false })
@@ -50,17 +37,10 @@ test('photoDecision: no photos is a plain text turn', () => {
   assert.deepEqual(photoDecision({ enabled: true, photoCount: 0 }), { photo: false, textOnly: true })
 })
 
-test('buildUserContent without an image is the plain string (old shape preserved)', () => {
-  assert.equal(buildUserContent({ text: 'hello' }), 'hello')
-})
-
-test('buildUserContent with an image is the OpenAI-compatible parts shape', () => {
-  const content = buildUserContent({ text: 'look', dataUrl: 'data:image/jpeg;base64,AAAA' })
-  assert.deepEqual(content, [
-    { type: 'text', text: 'look' },
-    { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,AAAA' } },
-  ])
-})
+// (The two buildUserContent tests that were here are gone with the
+// function. It built the content-parts shape a second time and nothing
+// called it -- buildMessages, tested just below, builds it on the path
+// that actually runs.)
 
 test('buildMessages carries images as content parts; aiClient stays untouched', () => {
   // Kills: someone "fixing" vision by teaching aiClient about images --
@@ -84,9 +64,19 @@ test('buildMessages carries images as content parts; aiClient stays untouched', 
   assert.equal(plain[1].content, 'hi')
 })
 
-test('the thread records an incoming photo as a bracketed fact', () => {
-  assert.equal(incomingRecordText({ caption: 'BOL', blind: true }), '[photo] BOL')
+// Kills: collapsing the two cases into one line again. Both branches
+// used to return the same string, so `blind` decided nothing and this
+// test could not tell the cases apart -- it passed on a function with a
+// parameter that did not work. The thread is the dispatcher's own
+// record: when the model could not look at the picture, it says so.
+test('the thread records whether the photo was actually seen', () => {
+  assert.equal(incomingRecordText({ caption: 'BOL', blind: false }), '[photo] BOL')
+  assert.equal(incomingRecordText({ caption: 'BOL', blind: true }), '[photo, not seen] BOL')
   assert.equal(incomingRecordText({ caption: null, blind: false }), '[photo] (photo)')
+  assert.notEqual(
+    incomingRecordText({ caption: 'BOL', blind: true }),
+    incomingRecordText({ caption: 'BOL', blind: false }),
+  )
 })
 
 test('an attachment row lands in 047\'s table and dies with its message', { skip: !hasDb }, async () => {

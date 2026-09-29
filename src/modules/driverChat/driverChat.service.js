@@ -21,8 +21,8 @@ import { chatConfigFor } from '../chat/chatProvider.js'
 import { AppError } from '../../lib/errors.js'
 import { withTransaction } from '../../db/pool.js'
 import * as repo from './driverChat.repository.js'
-import * as telegramRepo from '../telegram/telegram.repository.js'
 import * as payrollService from '../payroll/payroll.service.js'
+import { getCarrier } from '../carrier/carrier.repository.js'
 import { driverReplyDelaySec } from './driverChat.replyTiming.js'
 import {
   buildDriverSystemPrompt,
@@ -66,26 +66,9 @@ export async function getThread({ conversationId, userId }) {
       stage: standing.stage,
       willWork: standing.willWork,
     },
-    messages: await withDeliveryFlags(
-      conversationId,
-      await repo.listMessages(conversationId),
-    ),
+    messages: await repo.listMessages(conversationId),
     awaitingReply: await repo.hasPendingReply(conversationId),
   }
-}
-
-// The outbox is the only place "did this reach Telegram" is written --
-// driver_messages carries no delivery column on purpose. Messages past
-// five attempts get a flag the thread renders next to the words, so a
-// lost send is visible instead of silently missing from the group.
-async function withDeliveryFlags(conversationId, messages) {
-  const deliveries = await telegramRepo.threadDeliveries(conversationId)
-  const capped = new Map(
-    deliveries
-      .filter((d) => d.sentAt == null && d.attempts >= 5)
-      .map((d) => [d.messageId, true]),
-  )
-  return messages.map((m) => (capped.has(m.id) ? { ...m, notDelivered: true } : m))
 }
 
 export async function listThreads({ userId }) {
@@ -118,10 +101,15 @@ export async function sendMessage({ conversationId, userId, text, images }) {
   const standing = await payrollService.driverStanding(null, conversation.driverId)
 
   const history = (await repo.listMessages(conversationId)).slice(-HISTORY_TURNS - 1, -1)
+  // Who they work for (048). Read here rather than baked into the
+  // prompt: renaming the company must not mean re-deploying it.
+  const carrier = await getCarrier()
+
   const systemPrompt = buildDriverSystemPrompt({
     driver: context.driver,
     standing,
     load: context.load,
+    carrier,
   })
 
   let reply

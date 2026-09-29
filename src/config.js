@@ -71,38 +71,46 @@ if (finance !== 'on' && finance !== 'off') {
 }
 const financeEnabled = finance === 'on'
 
-// The Telegram bridge, on one switch shaped like FINANCE's.
+// Telegram. Only `npm run bot` reads any of this -- the API server runs
+// exactly as it did before the bot existed, and starts with all three
+// blank.
 //
-// The driver chat also answers in Telegram -- but only when a bot token
-// exists. An empty TELEGRAM_BOT_TOKEN is not an error: it is the module
-// being OFF, and the app must run exactly as it did before the bridge
-// existed. A token is the one thing that turns it on; nothing else gates it.
-//
-// A wrong MODE is a different kind of mistake -- not whether the bridge
-// runs but HOW it listens -- and silently polling when webhook was meant
-// (or the reverse) looks like a dead bot with no explanation anywhere.
-// So it is validated whenever a value is present, token or no token.
-const rawTelegramToken = process.env.TELEGRAM_BOT_TOKEN
-const telegramToken = rawTelegramToken && rawTelegramToken.trim() !== '' ? rawTelegramToken.trim() : ''
+// It used to be the other way round: the bot was a second process with
+// its own .env, and what stood here was a URL and a shared key so the
+// two could believe each other over HTTP. That was one moving part more
+// than the job has -- the bot needs the database and the model client,
+// both of which are here -- so on 2026-09-29 it moved in. The token
+// moved with it. That is the one real cost of the merge: this process
+// now holds the bot token, where before it could not have leaked it if
+// it tried. It is never logged (src/constants/telegramMeta.js prints a
+// fingerprint), and nothing outside src/bot reads it.
+const telegramBotToken = (process.env.TELEGRAM_BOT_TOKEN ?? '').trim()
 
-const rawTelegramMode = process.env.TELEGRAM_MODE
-const telegramMode = rawTelegramMode && rawTelegramMode.trim() !== '' ? rawTelegramMode.trim().toLowerCase() : 'poll'
-if (telegramMode !== 'poll' && telegramMode !== 'webhook') {
-  errors.push(`TELEGRAM_MODE must be 'poll' or 'webhook' (or left blank, which means poll) (got: ${rawTelegramMode})`)
+// Which group the bot answers. Required when the token is set, and the
+// whole of what /link used to do: a code bound a chat to one of many
+// student accounts, and there is one dispatcher and one group now.
+const rawTelegramChatId = (process.env.TELEGRAM_CHAT_ID ?? '').trim()
+const telegramChatId = rawTelegramChatId === '' ? null : Number(rawTelegramChatId)
+if (rawTelegramChatId !== '' && (!Number.isSafeInteger(telegramChatId) || telegramChatId === 0)) {
+  errors.push(`TELEGRAM_CHAT_ID must be a chat id -- a whole number, negative for a group (got: ${rawTelegramChatId})`)
 }
 
-// Optional extra lock: when set, the bridge only works in these chats
-// (comma-separated ids; group ids are negative). Blank means the bot
-// answers whichever chat finds it -- the normal arrangement for a class.
-// A malformed entry is an error rather than a number nobody meant, because
-// a lock that half-applies is worse than a lock that refuses to start.
-const telegramAllowedChatIds = (process.env.TELEGRAM_ALLOWED_CHAT_IDS ?? '')
-  .split(',')
-  .map((part) => part.trim())
-  .filter((part) => part !== '')
-  .map(Number)
-if (telegramAllowedChatIds.some((id) => !Number.isSafeInteger(id) || id === 0)) {
-  errors.push('TELEGRAM_ALLOWED_CHAT_IDS must be a comma-separated list of chat ids (or left blank, which allows any chat)')
+// Whose threads the group is. The conversations the bot writes belong to
+// a user account, the same ones the app's Driver chat shows.
+const telegramDispatcherEmail = (process.env.TELEGRAM_DISPATCHER_EMAIL ?? '').trim().toLowerCase()
+
+// All three or none. A half-configured bot fails at the first message
+// with nothing in the boot log to explain it, which is the failure this
+// check exists to make impossible.
+const telegramParts = [
+  ['TELEGRAM_BOT_TOKEN', telegramBotToken !== ''],
+  ['TELEGRAM_CHAT_ID', rawTelegramChatId !== ''],
+  ['TELEGRAM_DISPATCHER_EMAIL', telegramDispatcherEmail !== ''],
+]
+const telegramSet = telegramParts.filter(([, present]) => present)
+if (telegramSet.length > 0 && telegramSet.length < telegramParts.length) {
+  const missing = telegramParts.filter(([, present]) => !present).map(([name]) => name)
+  errors.push(`the bot needs all of TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID and TELEGRAM_DISPATCHER_EMAIL, or none of them (missing: ${missing.join(', ')})`)
 }
 
 // Whether the driver model may SEE an incoming photo. The honest default
@@ -146,9 +154,9 @@ export default {
   isProd,
   defaultRole,
   financeEnabled,
-  telegramEnabled: telegramToken !== '',
-  telegramToken,
-  telegramMode,
-  telegramAllowedChatIds,
+  telegramEnabled: telegramSet.length === telegramParts.length,
+  telegramBotToken,
+  telegramChatId,
+  telegramDispatcherEmail,
   chatDriverVision: chatDriverVision === 'on',
 }

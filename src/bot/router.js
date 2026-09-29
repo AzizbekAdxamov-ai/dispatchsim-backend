@@ -13,6 +13,10 @@
 // Command grammar (everything else is a message):
 //   /link <code>   bind this chat to a dispatcher account
 //   /d <ism>       set who the chat is talking to
+//
+// The two that take an argument have a third outcome besides "did it"
+// and "cannot": typed without the argument. That is 'usage' -- one
+// sentence naming the missing word, not the whole list.
 //   /drivers       print the roster
 //   /help          print the commands
 //
@@ -35,15 +39,20 @@ export function routeUpdate({ text, replyToTelegramMessageId, currentDriverId })
   if (command) {
     switch (command.command) {
       case 'link':
-        // Missing code: ask again rather than guess. The code's format is
-        // the DB's CHECK; the router only routes.
+        // Missing code: say what is missing rather than guess. This used
+        // to route to 'help', and help is a LIST -- the whole command
+        // grammar printed back at someone who typed one command slightly
+        // wrong, with no line saying which part was wrong. Azizbek sent
+        // a bare /link on 2026-09-29 and got four commands and no idea
+        // what had happened. The code's format is the DB's CHECK; the
+        // router only says which word is absent.
         return command.args
           ? { kind: 'link', code: command.args.toUpperCase() }
-          : { kind: 'help' }
+          : { kind: 'usage', command: 'link' }
       case 'd':
         return command.args
           ? { kind: 'set-driver', name: command.args }
-          : { kind: 'help' }
+          : { kind: 'usage', command: 'd' }
       case 'drivers':
         return { kind: 'drivers' }
       case 'help':

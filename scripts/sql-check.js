@@ -37,14 +37,20 @@ import * as stopVisitsSql from '../src/modules/facilities/stopVisits.sql.js'
 import * as dutyEventsSql from '../src/modules/hos/dutyEvents.sql.js'
 import * as dvirSql from '../src/modules/fleet/dvir.sql.js'
 import * as preTripSql from '../src/modules/fleet/preTrip.sql.js'
-import * as telegramSql from '../src/modules/telegram/telegram.sql.js'
+import * as botSql from '../src/bot/bot.sql.js'
 import * as complianceSql from '../src/modules/compliance/compliance.sql.js'
 // The board's search is assembled from a dozen optional pieces, so there
 // is no string to copy here -- the builders are imported and asked for the
 // exact statements the module runs. test/loadBoardSearch.test.js checks
 // how they are built; this checks that PostgreSQL accepts the result.
 import { buildListPostingsSql, buildCountPostingsSql } from '../src/modules/loadBoard/loadBoard.repository.js'
+import * as carrierSql from '../src/modules/carrier/carrier.sql.js'
 import { REACHABLE_SQL } from '../src/db/companyTables.js'
+// fresh-start.js deletes on import for the same reason reset-company.js
+// does, so its statements live in a module. These are the ones that run
+// against a live company database with nothing to undo them -- the last
+// place a wrong column name should be discovered is halfway through.
+import { RELEASE as FRESH_RELEASE, WIPE as FRESH_WIPE, RESET_KEPT_DRIVER } from '../src/db/freshStart.sql.js'
 
 const STATEMENTS = [
   ['replacePendingReply', `
@@ -404,7 +410,7 @@ const STATEMENTS = [
 // that does not name its statements by hand, and it exists because the
 // hand-written list is the part that rots: someone adds a query, forgets
 // this file, and the checker keeps reporting a clean run it never earned.
-for (const [label, mod] of [['alerts', alertSql], ['payroll', payrollSql], ['driverChat', driverChatSql], ['loadEvents', loadEventsSql], ['fleet', fleetSql], ['tracking', trackingSql], ['documents', documentsSql], ['solvency', solvencySql], ['chatBudget', chatBudgetSql], ['routing', routingSql], ['facilities', facilitiesSql], ['stopVisits', stopVisitsSql], ['dutyEvents', dutyEventsSql], ['compliance', complianceSql], ['dvir', dvirSql], ['preTrip', preTripSql], ['telegram', telegramSql]]) {
+for (const [label, mod] of [['alerts', alertSql], ['payroll', payrollSql], ['driverChat', driverChatSql], ['loadEvents', loadEventsSql], ['fleet', fleetSql], ['tracking', trackingSql], ['documents', documentsSql], ['solvency', solvencySql], ['chatBudget', chatBudgetSql], ['routing', routingSql], ['facilities', facilitiesSql], ['stopVisits', stopVisitsSql], ['dutyEvents', dutyEventsSql], ['compliance', complianceSql], ['dvir', dvirSql], ['preTrip', preTripSql], ['telegram', botSql], ['carrier', carrierSql]]) {
   for (const [name, sql] of Object.entries(mod)) {
     if (typeof sql === 'string' && /^\s*(SELECT|INSERT|UPDATE|DELETE|WITH)/i.test(sql)) {
       STATEMENTS.push([`${label}: ${name}`, sql])
@@ -437,6 +443,10 @@ for (const [name, filters] of BOARD_SEARCHES) {
   STATEMENTS.push([`loadBoard: search -- ${name}`, buildListPostingsSql(full).text])
   STATEMENTS.push([`loadBoard: count -- ${name}`, buildCountPostingsSql(full).text])
 }
+
+for (const [name, sql] of FRESH_RELEASE) STATEMENTS.push([`fresh-start: release ${name}`, sql])
+for (const [name, sql] of FRESH_WIPE) STATEMENTS.push([`fresh-start: delete ${name}`, sql])
+STATEMENTS.push(['fresh-start: reset kept driver', RESET_KEPT_DRIVER])
 
 const client = await pool.connect()
 let failed = 0

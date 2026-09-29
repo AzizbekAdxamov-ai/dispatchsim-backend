@@ -19,7 +19,7 @@ import assert from 'node:assert/strict'
 import { readdirSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { KEEP, INFRASTRUCTURE, COMPANY_ROOTS } from '../src/db/companyTables.js'
+import { KEEP, INFRASTRUCTURE, COMPANY_ROOTS, unknownTables } from '../src/db/companyTables.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const migrationsDir = join(here, '..', 'src', 'db', 'migrations')
@@ -30,10 +30,19 @@ const migrationsDir = join(here, '..', 'src', 'db', 'migrations')
 // the regex matches the first string of each WIPE entry, and the assertion
 // below on the count is what notices if the shape of that list changes and
 // this stops finding anything.
-function wipeList() {
-  const src = readFileSync(join(here, '..', 'scripts', 'reset-company.js'), 'utf8')
+// Two WIPE lists exist now. reset-company.js keeps its own inline --
+// nothing else needs it. fresh-start.js keeps its statements in
+// src/db/freshStart.sql.js so sql-check.js can PREPARE them, which is
+// also why one of these paths does not end in scripts/.
+const WIPE_SOURCES = [
+  ['reset-company.js', ['scripts', 'reset-company.js']],
+  ['freshStart.sql.js', ['src', 'db', 'freshStart.sql.js']],
+]
+
+function wipeList(parts = ['scripts', 'reset-company.js']) {
+  const src = readFileSync(join(here, '..', ...parts), 'utf8')
   const block = src.match(/const WIPE = \[([\s\S]*?)\n\]/)
-  assert.ok(block, 'WIPE ro\'yxati reset-company.js ichida topilmadi')
+  assert.ok(block, `WIPE ro'yxati ${parts.join('/')} ichida topilmadi`)
   return [...block[1].matchAll(/\['([a-z_]+)',/g)].map((m) => m[1])
 }
 
@@ -70,8 +79,8 @@ test('every table in the schema is classified exactly once', () => {
     `bu jadvallar bir vaqtda ham o'chiriladi ham saqlanadi: ${doubled.join(', ')}`)
 })
 
-test('the wipe deletes children before their parents', () => {
-  const order = wipeList()
+for (const [label, parts] of WIPE_SOURCES) test(`${label} deletes children before their parents`, () => {
+  const order = wipeList(parts)
   const pos = new Map(order.map((t, i) => [t, i]))
 
   // Read the real foreign keys out of the migrations rather than listing
@@ -102,9 +111,47 @@ test('the wipe deletes children before their parents', () => {
     `bola jadval ota-onasidan keyin o'chirilyapti: ${wrong.join(', ')}`)
 })
 
-test('the company roots are tables the wipe actually empties', () => {
-  const wiped = new Set(wipeList())
+for (const [label, parts] of WIPE_SOURCES) test(`${label} empties every company root`, () => {
+  const wiped = new Set(wipeList(parts))
   for (const root of COMPANY_ROOTS) {
     assert.ok(wiped.has(root), `${root} kompaniya ildizi, lekin WIPE ichida yo'q`)
   }
+})
+
+// The audit that runs inside both wipe scripts asks the database which
+// tables the company can reach, then asks itself which of those it has
+// never heard of. For a year it asked that question against KEEP alone.
+//
+// Migration 046 added telegram_deliveries, 047 telegram_attachments. Both
+// hang off driver_messages, so the walk reaches them; both are classified
+// as INFRASTRUCTURE, because the cascade off the messages clears them and
+// no named DELETE should. Against KEEP alone they read as unclassified,
+// and the audit aborted -- rolling back a wipe that had just succeeded --
+// with a message telling whoever ran it to add two tables to a list they
+// already belonged to another one of.
+//
+// Delete `!INFRASTRUCTURE.has(t)` from unknownTables and the first
+// assertion here fails. Delete `!KEEP.has(t)` and the second does.
+// Delete the whole filter and the third does.
+test('a table classified as infrastructure is not an unknown table', () => {
+  const wiped = new Set(['loads', 'drivers'])
+
+  assert.deepEqual(
+    unknownTables(['telegram_deliveries', 'telegram_attachments'], wiped), [],
+    'ko\'prikning o\'z jadvallari "noma\'lum" deb o\'qilyapti',
+  )
+  assert.deepEqual(unknownTables(['load_postings', 'users'], wiped), [],
+    'KEEP ro\'yxatidagi jadval "noma\'lum" deb o\'qilyapti')
+  assert.deepEqual(unknownTables(['loads', 'drivers'], wiped), [],
+    'skript o\'zi o\'chiradigan jadval "noma\'lum" deb o\'qilyapti')
+})
+
+test('a table nobody has classified is still reported', () => {
+  // The other half of the same function: widening the filter until
+  // nothing is ever unknown would pass every assertion above and make the
+  // audit useless. This is the table migration 049 has not written yet.
+  assert.deepEqual(
+    unknownTables(['loads', 'trailer_leases'], new Set(['loads'])),
+    ['trailer_leases'],
+  )
 })

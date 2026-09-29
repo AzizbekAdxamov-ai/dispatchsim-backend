@@ -33,6 +33,12 @@ export const KEEP = Object.freeze(new Set([
   'users',
   'invite_codes',
   'brokers',
+  // carrier (048) -- who this company IS, as opposed to what it has done.
+  // A reset clears the loads, the trucks, the drivers and the money; it
+  // does not rename the company or take away its operating authority.
+  // Wiping this row would leave a carrier with no name on the next rate
+  // confirmation, which is the bug 048 exists to fix.
+  'carrier',
   // lane_routes (034) -- a road-geometry cache keyed by city PAIR
   // (origin/destination text columns), not by a foreign key into any
   // company table. The same Dallas -> Houston route is the same route
@@ -61,9 +67,13 @@ export const KEEP = Object.freeze(new Set([
   // user is kept by a reset: un-deleting the person must not sever the
   // chat they proved they own with a code. The bridge outlives the
   // company the same way the login does.
+  //
+  // Superseded 2026-09-29: the bot folded into this project (src/bot) and
+  // the group is named in .env now, so nothing writes links or codes any
+  // more. The tables are listed anyway -- they still exist in schemas
+  // migrated before the merge, and a table existing with no answer is
+  // exactly what this file exists to prevent.
   'telegram_links',
-  // telegram_link_codes (046) -- codes belong to users for the same
-  // reason; a reset must not turn a live code into a dangling one.
   'telegram_link_codes',
 ]))
 
@@ -83,12 +93,12 @@ export const INFRASTRUCTURE = Object.freeze(new Set([
   'user_roles',
   'schema_migrations',
   // telegram_deliveries (046), telegram_attachments (047) -- the bridge's
-  // own bookkeeping. Deliveries are the OUTBOX: rows are claims on a
-  // send, and their message_id FK (ON DELETE CASCADE) already dies with
-  // the driver_messages a reset clears. Attachments hold file references
-  // the same way. Wiping them on top of the cascade would race the push
-  // job mid-reset; classifying them here says "infrastructure, not the
-  // company's to delete" and lets the FK do the work.
+  // own bookkeeping. Deliveries were the OUTBOX: rows were claims on a
+  // send. Since the 2026-09-29 merge nothing writes them -- the bot
+  // keeps its reply map in its own state file -- but the tables hang off
+  // driver_messages, so the cascade off the messages clears them and no
+  // named DELETE should. Classifying them here says "infrastructure, not
+  // the company's to delete" and lets the FK do the work.
   'telegram_deliveries',
   'telegram_attachments',
 ]))
@@ -128,4 +138,22 @@ export const REACHABLE_SQL = `
 // is forgotten.
 export function quoteIdent(name) {
   return `"${String(name).replace(/"/g, '""')}"`
+}
+
+// Which of the tables the walk reached is this script not accounting for.
+//
+// It lives here, next to the three lists, because it is the only place
+// that knows all three. Both wipe scripts used to ask this question with
+// an inline filter over KEEP alone, and both got the same wrong answer
+// after migration 046: telegram_deliveries and telegram_attachments hang
+// off driver_messages, so the walk reaches them, and they are classified
+// as INFRASTRUCTURE -- the bridge's own bookkeeping, cleared by the
+// cascade off the messages, not by a named DELETE. Reading them as
+// tables nobody has heard of aborted a wipe that had in fact finished.
+//
+// `wiped` is the set of tables the calling script deletes from by name;
+// it differs per script, which is why it is an argument and not a fourth
+// list in this file.
+export function unknownTables(reached, wiped) {
+  return reached.filter((t) => !wiped.has(t) && !KEEP.has(t) && !INFRASTRUCTURE.has(t))
 }

@@ -8,15 +8,20 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { routeUpdate } from '../src/modules/telegram/telegram.router.js'
+import { routeUpdate } from '../src/bot/router.js'
+// The words themselves live beside the help they replace.
+import { usageText } from '../src/bot/incoming.js'
 
 test('/link with a code routes to link, upper-cased', () => {
   assert.deepEqual(routeUpdate({ text: '/link ab12cd' }), { kind: 'link', code: 'AB12CD' })
 })
 
-test('/link without a code asks for help instead of guessing', () => {
-  assert.deepEqual(routeUpdate({ text: '/link' }), { kind: 'help' })
-  assert.deepEqual(routeUpdate({ text: '/link   ' }), { kind: 'help' })
+// Kills: answering a half-typed command with the command list. Both of
+// these used to return { kind: 'help' }, and help is four commands and a
+// paragraph -- everything except the one word that was missing.
+test('/link without a code says the code is missing, not the whole list', () => {
+  assert.deepEqual(routeUpdate({ text: '/link' }), { kind: 'usage', command: 'link' })
+  assert.deepEqual(routeUpdate({ text: '/link   ' }), { kind: 'usage', command: 'link' })
 })
 
 test('/d routes to set-driver with the name verbatim', () => {
@@ -24,8 +29,8 @@ test('/d routes to set-driver with the name verbatim', () => {
   assert.deepEqual(routeUpdate({ text: '/d    Marcus   ' }), { kind: 'set-driver', name: 'Marcus' })
 })
 
-test('/d without a name asks for help, not ask-who', () => {
-  assert.deepEqual(routeUpdate({ text: '/d' }), { kind: 'help' })
+test('/d without a name says the name is missing, and is never ask-who', () => {
+  assert.deepEqual(routeUpdate({ text: '/d' }), { kind: 'usage', command: 'd' })
 })
 
 test('/drivers and /help route to their kinds; case of the command word is irrelevant', () => {
@@ -75,4 +80,25 @@ test('commands are commands even as replies', () => {
     routeUpdate({ text: '/drivers', replyToTelegramMessageId: 99 }),
     { kind: 'drivers' },
   )
+})
+
+// Kills: a usage sentence that is the help list under another name. The
+// text the bot sends is the whole value of this change -- routing to a
+// different kind and then printing the same four commands would pass
+// every assertion above.
+test('the usage sentence names the missing word and nothing else', () => {
+  // /link survives as a courtesy: codes bound a chat to one of many
+  // student accounts, and there is one dispatcher and one group now,
+  // both named in .env. The honest answer is that there is nothing to
+  // bind -- not a stale instruction to fetch a code from a panel that no
+  // longer offers one.
+  const link = usageText('link')
+  assert.match(link, /No code needed/, 'yangi holat aytilmayapti')
+  assert.doesNotMatch(link, /\/link ABC123/, 'eskirgan kod namunasi qaytyapti')
+  assert.doesNotMatch(link, /\/help/, 'yana butun ro\'yxat chiqyapti')
+  assert.doesNotMatch(link, /\/drivers/, 'yana butun ro\'yxat chiqyapti')
+
+  const d = usageText('d')
+  assert.match(d, /\/d Marcus/, 'ism namunasi ko\'rsatilmayapti')
+  assert.match(d, /\/drivers/, 'ro\'yxatni qanday ko\'rishi aytilmayapti')
 })
