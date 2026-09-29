@@ -48,6 +48,19 @@ async function main() {
     process.exitCode = 1
     return
   }
+  // One fixed driver for the whole group, resolved at boot so a typo is
+  // named here and not at the first message.
+  let fixedDriverName = null
+  if (config.telegramDriverName) {
+    const matches = await repo.driversByName(config.telegramDriverName)
+    if (matches.length !== 1) {
+      console.error(`[bot] TELEGRAM_DRIVER_NAME "${config.telegramDriverName}" matched ${matches.length} drivers -- it must match exactly one.`)
+      process.exitCode = 1
+      return
+    }
+    fixedDriverName = config.telegramDriverName
+    console.log(`[bot] the group talks to ${matches[0].name} (fixed driver)`)
+  }
   console.log(`[bot] speaking for ${dispatcher.name} <${dispatcher.email}>, group ${config.telegramChatId}`)
 
   let state = readState()
@@ -81,6 +94,7 @@ async function main() {
         userId: dispatcher.id,
         chatId: config.telegramChatId,
         vision: config.chatDriverVision,
+        fixedDriverName,
       })
     } catch (err) {
       const fatal = fatalReason(err)

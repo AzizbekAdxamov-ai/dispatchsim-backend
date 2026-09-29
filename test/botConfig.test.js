@@ -162,3 +162,15 @@ test('vision defaults to off and rejects anything but on/off', () => {
   assert.ok(err)
   assert.match(err.stderr, /CHAT_DRIVER_VISION/)
 })
+
+// Kills: reading the fixed driver's name with surrounding whitespace or
+// turning a blank line into the string "null". The boot check resolves
+// this name against the roster, so what arrives here has to be exactly
+// what .env said -- or nothing at all.
+test('TELEGRAM_DRIVER_NAME trims to a name or to nothing', () => {
+  const named = configWith({ TELEGRAM_DRIVER_NAME: '  Grace Lindqvist  ' })
+  assert.equal(named.config.telegramDriverName, 'Grace Lindqvist')
+  const blank = configWith({ TELEGRAM_DRIVER_NAME: '   ' })
+  assert.equal(blank.config.telegramDriverName, null)
+  assert.equal(configWith().config.telegramDriverName, null)
+})

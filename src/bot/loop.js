@@ -50,7 +50,7 @@ export function isTransient(err) {
   return err?.status === 0 || err?.status >= 500 || err?.code === 'ECONNREFUSED' || err?.code === 'CHAT_UNAVAILABLE'
 }
 
-export async function pollOnce({ telegram, state, save, userId, chatId, vision, app = undefined }) {
+export async function pollOnce({ telegram, state, save, userId, chatId, vision, fixedDriverName = null, app = undefined }) {
   const updates = await telegram.getUpdates(state.offset, POLL_TIMEOUT_SEC)
   let next = state
 
@@ -64,7 +64,9 @@ export async function pollOnce({ telegram, state, save, userId, chatId, vision, 
     } else if (fact) {
       if (fact.photos?.length > 0) await attachPhotos(fact, telegram)
       try {
-        const result = await handleUpdate(fact, { state: next, userId, vision, ...(app ? { app } : {}) })
+        const result = await handleUpdate(fact, {
+          state: next, userId, vision, fixedDriverName, ...(app ? { app } : {}),
+        })
         next = result.state
         for (const line of result.replies) {
           await telegram.sendMessage(chatId, line)

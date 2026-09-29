@@ -63,7 +63,9 @@ test('plain text with no reply goes to the current driver', () => {
 
 test('nothing names a recipient: ask-who, never a guess', () => {
   // Kills: defaulting to the first driver, the last conversation, or any
-  // other silent choice.
+  // other silent choice. (The fixed-driver arrangement is not a guess:
+  // it is named in .env, resolved against the roster, and checked at
+  // boot -- see handleUpdate's ask-who branch.)
   assert.deepEqual(routeUpdate({ text: 'Ok, ketdim' }), { kind: 'ask-who' })
   assert.deepEqual(routeUpdate({ text: 'Ok, ketdim', replyToTelegramMessageId: null, currentDriverId: null }), { kind: 'ask-who' })
 })

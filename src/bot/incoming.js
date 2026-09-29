@@ -65,7 +65,13 @@ function rosterText(rows) {
 //
 // `state` is returned rather than mutated so the caller decides when it
 // is written to disk -- after the lines are said, never before.
-export async function handleUpdate(fact, { state, app = realApp, userId, vision = false }) {
+//
+// `fixedDriverName` collapses the routing to one person: when set, a
+// message that does not name a recipient goes to that driver without the
+// /d step and without the roster question. The one group talks to one
+// driver, which is the whole arrangement -- everything else (/d, /drivers,
+// replies) keeps working for anyone who wants the general case.
+export async function handleUpdate(fact, { state, app = realApp, userId, vision = false, fixedDriverName = null }) {
   const replies = []
   const say = (text) => { replies.push(text) }
   let next = state
@@ -143,6 +149,20 @@ export async function handleUpdate(fact, { state, app = realApp, userId, vision 
     }
 
     case 'ask-who': {
+      // One fixed driver short-circuits the question: the group talks, the
+      // driver answers. Resolved here rather than in the router because it
+      // needs the database (does the name still match anyone?), and the
+      // router is the one place that must stay pure.
+      if (fixedDriverName) {
+        const matches = await app.driversByName(fixedDriverName)
+        if (matches.length === 1) {
+          next = { ...next, currentDriverId: matches[0].id }
+          await deliver({ driverId: matches[0].id, fact, say, app, userId, vision })
+          break
+        }
+        say(`The configured driver "${fixedDriverName}" is not on the roster${matches.length > 1 ? ' (more than one by that name)' : ''}. Fix TELEGRAM_DRIVER_NAME in .env.`)
+        break
+      }
       const roster = await app.driversList()
       say(`Who is this for? Reply to one of my messages, or pick with /d <name>:\n${rosterText(roster)}`)
       break

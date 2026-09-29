@@ -99,6 +99,13 @@ if (rawTelegramChatId !== '' && (!Number.isSafeInteger(telegramChatId) || telegr
 // a user account, the same ones the app's Driver chat shows.
 const telegramDispatcherEmail = (process.env.TELEGRAM_DISPATCHER_EMAIL ?? '').trim().toLowerCase()
 
+// One fixed driver for the whole group. Set: every message that does not
+// name a recipient goes to this driver -- no /d, no roster question, the
+// group just talks and one person answers. Blank: the group picks with
+// /d or is asked who it means.
+const rawTelegramDriverName = (process.env.TELEGRAM_DRIVER_NAME ?? '').trim()
+const telegramDriverName = rawTelegramDriverName === '' ? null : rawTelegramDriverName
+
 // All three or none. A half-configured bot fails at the first message
 // with nothing in the boot log to explain it, which is the failure this
 // check exists to make impossible.
@@ -158,5 +165,6 @@ export default {
   telegramBotToken,
   telegramChatId,
   telegramDispatcherEmail,
+  telegramDriverName,
   chatDriverVision: chatDriverVision === 'on',
 }
