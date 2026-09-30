@@ -188,9 +188,52 @@ export function shapeBoard(rows, now = new Date()) {
   return { positioned, excluded }
 }
 
+// The idle trucks as map points. Pure: rows in, features out, no query --
+// testable without a database, the same reason shapeBoard is.
+//
+// A truck rides on its DRIVER's last-known coordinates; a truck with no
+// driver, or one whose driver has never been placed, has no position and
+// is dropped -- an invented lat/lon would be a fact this schema does not
+// have. A truck whose driver IS running a load never reaches this
+// function (the SQL's NOT EXISTS arms exclude it), so a working truck is
+// never drawn twice: its dot comes from its load, once.
+export function idleTrucksToBoard(trucks) {
+  return trucks
+    .map((t) => {
+      const lat = t.driver?.lat
+      const lon = t.driver?.lon
+      // Number.isFinite alone would let null through: Number(null) is 0,
+      // and a truck "parked" at lat 0, lon 0 is in the Gulf of Guinea.
+      // Nullish first, then finite.
+      if (lat == null || lon == null || !Number.isFinite(Number(lat)) || !Number.isFinite(Number(lon))) return null
+      return {
+        id: t.id,
+        // 'idle' is its own kind of row, not a load status -- the map and
+        // the list can tell the two apart without guessing from fields
+        // a parked truck does not have.
+        kind: 'idle',
+        truck: { id: t.id, make: t.make, model: t.model, year: t.year },
+        driver: t.driver
+          ? {
+            id: t.driver.id,
+            name: t.driver.name,
+            dutyStatus: t.driver.dutyStatus,
+            hosRemainingMin: t.driver.hosRemainingMin,
+          }
+          : null,
+        city: t.driver?.currentCity ?? t.locationCity ?? null,
+        state: t.driver?.currentState ?? t.locationState ?? null,
+        lat: Number(lat),
+        lon: Number(lon),
+      }
+    })
+    .filter(Boolean)
+}
+
 export async function inTransitBoard() {
   const rows = await repo.inTransitBoard()
   const { positioned, excluded } = shapeBoard(rows)
+  const idle = idleTrucksToBoard(await repo.idleTrucks())
 
   if (excluded.length > 0) {
     // One line per call, not one per row -- Tracking.jsx polls this every
@@ -210,6 +253,10 @@ export async function inTransitBoard() {
 
   return {
     loads: positioned,
+    // The trucks with nothing on them, as their own list: the map draws
+    // them in the idle style, the list can label them "No load assigned",
+    // and neither has to infer anything from a half-populated load row.
+    idleTrucks: idle,
     meta: {
       count: positioned.length,
       lateCount: positioned.filter((l) => l.late).length,
@@ -219,6 +266,7 @@ export async function inTransitBoard() {
       // unremarked.
       excludedCount: excluded.length,
       excludedReasons,
+      idleTruckCount: idle.length,
       // Server clock at compute time -- the page's poll freshness check
       // reads this instead of trusting the browser's clock, which is in a
       // different timezone and possibly wrong.

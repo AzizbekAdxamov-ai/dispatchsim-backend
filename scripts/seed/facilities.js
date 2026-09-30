@@ -12,6 +12,34 @@ import { CITIES, haversineMi } from './cities.js'
 import { DRIVING_LIMIT_HOURS } from '../../src/constants/hosClock.js'
 import { FUEL_PRICE_PER_GAL } from '../../src/modules/finance/finance.constants.js'
 
+// The US land mask, read ONCE at import from the frontend's generated map
+// data. NATION_RINGS is the continental US outer boundary as [lon, lat]
+// rings (scripts/build-us-map.mjs writes it from us-atlas's Census
+// geometry) -- the same land the app's own map draws. Reading a generated
+// frontend file from a seed script is deliberate: the coast the stops
+// must respect IS the coast the map draws, and a second copy of the
+// boundary would drift from the first the day either is regenerated.
+// The path is resolved from this file's own location, not the process
+// cwd, so the generator runs from any directory.
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { dirname, join } from 'node:path'
+
+function loadNationRings() {
+  const src = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'frontend', 'src', 'data', 'usMap.js'),
+    'utf8',
+  )
+  const marker = 'export const NATION_RINGS = '
+  const start = src.indexOf(marker)
+  if (start < 0) throw new Error('NATION_RINGS not found in usMap.js -- run the frontend\'s npm run build:map')
+  const end = src.indexOf('export const', start + marker.length)
+  if (end < 0) throw new Error('NATION_RINGS is not followed by another export in usMap.js -- the generator\'s layout changed')
+  return JSON.parse(src.slice(start + marker.length, end).trim().replace(/;$/, ''))
+}
+
+const NATION_RINGS = loadNationRings()
+
 // Deliberately imports NOTHING from vocabulary.js/vocabularySchema.js/
 // validate.js, even though vocabularySchema.js imports MAX_STOPS_PER_ROUTE
 // FROM this file below. Importing back would recreate the exact
@@ -333,10 +361,50 @@ export function offsetPoint(lat, lon, bearingRad, distanceMi) {
   return { lat: lat + dLat, lon: lon + dLon }
 }
 
+// Is (lat, lon) on US land? Ray-casting point-in-polygon over the
+// nation's outer rings -- the standard even-odd rule, crossings counted
+// along one meridian. Islands count (they are land); the Great Lakes do
+// not (their water is outside the dissolved outer boundary). Pure, and
+// exported for the tests: the coastal-city mutation lives or dies here.
+export function isOnLand(lat, lon, rings = NATION_RINGS) {
+  let inside = false
+  for (const ring of rings) {
+    // A cheap bounding check first: most candidate points are far from
+    // most rings, and the test below is O(points) per ring.
+    let minLon = Infinity
+    let maxLon = -Infinity
+    let minLat = Infinity
+    let maxLat = -Infinity
+    for (const [rlon, rlat] of ring) {
+      if (rlon < minLon) minLon = rlon
+      if (rlon > maxLon) maxLon = rlon
+      if (rlat < minLat) minLat = rlat
+      if (rlat > maxLat) maxLat = rlat
+    }
+    if (lon < minLon || lon > maxLon || lat < minLat || lat > maxLat) continue
+
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i, i += 1) {
+      const [xi, yi] = ring[i]
+      const [xj, yj] = ring[j]
+      const crosses = (yi > lat) !== (yj > lat)
+      if (!crosses) continue
+      const xAtLat = ((xj - xi) * (lat - yi)) / (yj - yi) + xi
+      if (lon < xAtLat) inside = !inside
+    }
+  }
+  return inside
+}
+
 // A ring of new stop points around one city. Deterministic: the rng is
 // seeded by the caller from the city's own key, so the same city always
 // produces the same ring. Points inside mergeRadiusMi of anything already
-// known (or of each other) are dropped, exactly as on a route.
+// known (or of each other) are dropped, exactly as on a route. A point in
+// the WATER is rejected and redrawn -- for a coastal city (Savannah,
+// Jacksonville, Mobile, ...) half the bearings point at the ocean, and a
+// truck stop a mile offshore is the bug Azizbek screenshotted on
+// 2026-09-30. Rejections are finite: each redraw burns one rng draw, and
+// the loop gives up after a generous multiple of the wanted count rather
+// than spinning forever on a city that is somehow all coast.
 export function placeAroundCity(city, {
   rng,
   mergeRadiusMi = MERGE_RADIUS_MI,
@@ -349,10 +417,18 @@ export function placeAroundCity(city, {
     || accepted.some((p) => haversineMi({ lat, lon }, p) <= mergeRadiusMi)
 
   const want = CITY_STOPS_MIN + Math.floor(rng() * (CITY_STOPS_MAX - CITY_STOPS_MIN + 1))
-  for (let i = 0; i < want; i += 1) {
+  const maxDraws = want * 12
+  let draws = 0
+  let rejected = 0
+  while (accepted.length < want && draws < maxDraws) {
+    draws += 1
     const bearing = rng() * 2 * Math.PI
     const distance = minMi + rng() * (maxMi - minMi)
     const p = offsetPoint(city.lat, city.lon, bearing, distance)
+    if (!isOnLand(p.lat, p.lon)) {
+      rejected += 1
+      continue
+    }
     if (isNear(p.lat, p.lon)) continue
     accepted.push({ lat: round4(p.lat), lon: round4(p.lon) })
   }

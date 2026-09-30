@@ -39,7 +39,8 @@
     "sim:check": "node scripts/sim-clock-check.js",
     "routes:warm": "node scripts/warm-routes.js",
     "facilities:generate": "node scripts/generate-facilities.js",
-    "prod": "node scripts/prod.js"
+    "prod": "node scripts/prod.js",
+    "check:facilities": "node scripts/check-facilities.js"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",

@@ -150,3 +150,45 @@ export async function openPostings() {
   const result = await query(OPEN_POSTINGS_SQL)
   return result.rows
 }
+
+// The trucks with nothing on them. A fresh start (Azizbek, 2026-09-30:
+// one driver, one truck) leaves the board with ZERO loads, and a board
+// built from loads alone would draw an empty map while a real truck sat
+// in a yard in Seattle. So the board also names the trucks that are not
+// running a load: the position shown is the DRIVER's own last-known spot
+// (drivers.current_lat/lon -- the trucks table keeps no coordinates, and
+// inventing a lat/lon for a parked unit would be a fact this schema does
+// not have). A truck with no driver, or a driver the tick has never
+// placed, carries no coordinates -- it is reported so the count is
+// honest, and the map skips it rather than guessing.
+//
+// Both NOT EXISTS arms are the same "has an undelivered load" shape
+// getAvailabilityCounts() (drivers.repository) already uses for the
+// dashboard tile -- one definition of "idle" across the app, not two.
+export const IDLE_TRUCKS_SQL = `
+  SELECT t.id,
+         t.make, t.model, t.year,
+         t.location_city AS "locationCity", t.location_state AS "locationState",
+         (SELECT jsonb_build_object(
+                   'id', d.id, 'name', d.name,
+                   'dutyStatus', d.duty_status,
+                   'hosRemainingMin', d.hos_remaining_min,
+                   'currentCity', d.current_city,
+                   'currentState', d.current_state,
+                   'lat', d.current_lat, 'lon', d.current_lon)
+            FROM drivers d WHERE d.id = t.driver_id) AS driver
+    FROM trucks t
+   WHERE NOT EXISTS (
+           SELECT 1 FROM loads l
+            WHERE l.truck_id = t.id AND l.status <> 'done'
+         )
+     AND NOT EXISTS (
+           SELECT 1 FROM loads l
+            WHERE l.driver_id = t.driver_id AND l.status <> 'done'
+         )
+   ORDER BY t.id`
+
+export async function idleTrucks() {
+  const result = await query(IDLE_TRUCKS_SQL)
+  return result.rows
+}
