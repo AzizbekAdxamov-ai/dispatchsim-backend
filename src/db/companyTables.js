@@ -62,19 +62,6 @@ export const KEEP = Object.freeze(new Set([
   // listed here anyway so companyTables.test.js's "every table is
   // classified" check has an explicit answer instead of an accidental one.
   'facilities',
-  // telegram_links (046) -- the people side of the bridge. A link binds a
-  // CHAT to a user account (FK into users, ON DELETE CASCADE), and the
-  // user is kept by a reset: un-deleting the person must not sever the
-  // chat they proved they own with a code. The bridge outlives the
-  // company the same way the login does.
-  //
-  // Superseded 2026-09-29: the bot folded into this project (src/bot) and
-  // the group is named in .env now, so nothing writes links or codes any
-  // more. The tables are listed anyway -- they still exist in schemas
-  // migrated before the merge, and a table existing with no answer is
-  // exactly what this file exists to prevent.
-  'telegram_links',
-  'telegram_link_codes',
 ]))
 
 // Tables that are neither the company's nor the world's -- they are the
@@ -83,24 +70,14 @@ export const KEEP = Object.freeze(new Set([
 // accounted for by exactly one of these three lists. A table added
 // tomorrow fails that test tomorrow, in `npm test`, instead of surviving
 // a reset in silence six weeks from now.
-//
 //   sim_state -- the tick's watermarks (interest clock, refresh cooldown).
-//     Wiping it would bill the next company for time it did not exist.
+//     Wiping it would bill the next company for time from before it existed.
 //   user_roles -- which hat a person is wearing. Not the company's.
 //   schema_migrations -- written by src/db/migrate.js, not by a migration.
 export const INFRASTRUCTURE = Object.freeze(new Set([
   'sim_state',
   'user_roles',
   'schema_migrations',
-  // telegram_deliveries (046), telegram_attachments (047) -- the bridge's
-  // own bookkeeping. Deliveries were the OUTBOX: rows were claims on a
-  // send. Since the 2026-09-29 merge nothing writes them -- the bot
-  // keeps its reply map in its own state file -- but the tables hang off
-  // driver_messages, so the cascade off the messages clears them and no
-  // named DELETE should. Classifying them here says "infrastructure, not
-  // the company's to delete" and lets the FK do the work.
-  'telegram_deliveries',
-  'telegram_attachments',
 ]))
 
 // Walk the foreign keys outward from the roots and return every table the

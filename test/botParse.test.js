@@ -6,7 +6,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { toFacts, factsForBatch, batchUpdates, lastUpdateId } from '../src/bot/parse.js'
+import { collectPhotos, toFacts, factsForBatch, batchUpdates, lastUpdateId } from '../src/bot/parse.js'
 
 function message(over = {}) {
   return {
@@ -98,4 +98,24 @@ test('an update with neither text nor a photo is not a message', () => {
   assert.equal(toFacts(message({ text: undefined })), null)
   assert.equal(toFacts({ update_id: 3 }), null)
   assert.equal(factsForBatch([{ update_id: 3 }]), null)
+})
+
+// Kills: assuming the caption always rides the album's first part.
+// Telegram puts it on the first part that HAS one; the turn's text is
+// whichever caption actually arrived, not the first photo's silence.
+test('a caption on a later album part still speaks', () => {
+  const fact = factsForBatch([
+    photoUpdate({ updateId: 5, groupId: 'g2', fileId: 'AAA' }),
+    photoUpdate({ updateId: 6, groupId: 'g2', caption: 'sealed load, doors ok', fileId: 'BBB' }),
+  ])
+  assert.equal(fact.text, 'sealed load, doors ok')
+  assert.deepEqual(fact.photos.map((p) => p.fileId), ['AAA', 'BBB'])
+})
+
+// Kills: a caption collector that returns '' for a photo-less batch and
+// has the caller treat the empty string as words someone typed.
+test('collectPhotos on a text-only batch finds nothing', () => {
+  const { photos, caption } = collectPhotos([message({ text: 'where are we' })])
+  assert.deepEqual(photos, [])
+  assert.equal(caption, null)
 })

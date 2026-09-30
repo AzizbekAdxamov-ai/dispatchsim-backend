@@ -57,9 +57,27 @@ function tablesInMigrations() {
   return names
 }
 
+// A migration may retire a table a later file once classified. 049 dropped
+// the 046/047 telegram bridge's own tables, and the classification entries
+// went with it -- the list of CREATE TABLEs alone would read those names
+// as unclassified forever. Asking each DROP here keeps that from being a
+// false alarm: a table is only exempt while some migration really does
+// drop it.
+function droppedInMigrations() {
+  const names = new Set()
+  for (const file of readdirSync(migrationsDir).filter((f) => f.endsWith('.sql'))) {
+    const sql = readFileSync(join(migrationsDir, file), 'utf8')
+    for (const m of sql.matchAll(/DROP TABLE (?:IF EXISTS )?([a-z_]+)/gi)) {
+      names.add(m[1])
+    }
+  }
+  return names
+}
+
 test('every table in the schema is classified exactly once', () => {
   const wiped = new Set(wipeList())
   const tables = tablesInMigrations()
+  const dropped = droppedInMigrations()
 
   // schema_migrations is created by migrate.js, not by a migration file,
   // so it never appears in the scan. It is classified anyway.
@@ -68,6 +86,7 @@ test('every table in the schema is classified exactly once', () => {
   const unclassified = []
   const doubled = []
   for (const t of tables) {
+    if (dropped.has(t)) continue
     const votes = [wiped.has(t), KEEP.has(t), INFRASTRUCTURE.has(t)].filter(Boolean).length
     if (votes === 0) unclassified.push(t)
     if (votes > 1) doubled.push(t)
@@ -122,23 +141,21 @@ for (const [label, parts] of WIPE_SOURCES) test(`${label} empties every company 
 // tables the company can reach, then asks itself which of those it has
 // never heard of. For a year it asked that question against KEEP alone.
 //
-// Migration 046 added telegram_deliveries, 047 telegram_attachments. Both
-// hang off driver_messages, so the walk reaches them; both are classified
-// as INFRASTRUCTURE, because the cascade off the messages clears them and
-// no named DELETE should. Against KEEP alone they read as unclassified,
-// and the audit aborted -- rolling back a wipe that had just succeeded --
-// with a message telling whoever ran it to add two tables to a list they
-// already belonged to another one of.
+// Its blind spot is the opposite one: widening the filter until nothing
+// is ever unknown would silence it forever. These two tests hold both
+// edges. The infrastructure table stands in for any table the company
+// reaches but must never delete; the wipe-list entry for any table the
+// script itself clears.
 //
 // Delete `!INFRASTRUCTURE.has(t)` from unknownTables and the first
-// assertion here fails. Delete `!KEEP.has(t)` and the second does.
+// assertion fails. Delete `!KEEP.has(t)` and the second does.
 // Delete the whole filter and the third does.
 test('a table classified as infrastructure is not an unknown table', () => {
   const wiped = new Set(['loads', 'drivers'])
 
   assert.deepEqual(
-    unknownTables(['telegram_deliveries', 'telegram_attachments'], wiped), [],
-    'ko\'prikning o\'z jadvallari "noma\'lum" deb o\'qilyapti',
+    unknownTables(['sim_state', 'user_roles'], wiped), [],
+    'infrastruktura jadvali "noma\'lum" deb o\'qilyapti',
   )
   assert.deepEqual(unknownTables(['load_postings', 'users'], wiped), [],
     'KEEP ro\'yxatidagi jadval "noma\'lum" deb o\'qilyapti')
@@ -149,7 +166,7 @@ test('a table classified as infrastructure is not an unknown table', () => {
 test('a table nobody has classified is still reported', () => {
   // The other half of the same function: widening the filter until
   // nothing is ever unknown would pass every assertion above and make the
-  // audit useless. This is the table migration 049 has not written yet.
+  // audit useless. This is the table migration 050 has not written yet.
   assert.deepEqual(
     unknownTables(['loads', 'trailer_leases'], new Set(['loads'])),
     ['trailer_leases'],
