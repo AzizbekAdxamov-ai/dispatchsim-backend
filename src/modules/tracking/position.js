@@ -237,12 +237,18 @@ export function positionFor(load, now = new Date(), routeGeometry = null) {
       : interpolateGreatCircle(origin, destination, f)
   const geometrySource = atFacility ? 'stop' : (hasRoute ? 'route' : 'arc')
 
-  // Great-circle miles for the trip, and the share of the lane's CONTRACT
-  // miles that share implies. distance_mi is the 1.18 road-factor figure;
-  // the great-circle number is lower by construction, so scaling
-  // distance_mi by f (not subtracting haversines) keeps "remaining" and
-  // "total" consistent with the number the broker was quoted.
-  const laneHaversineMi = haversineMi(origin, destination)
+  // The share of the lane's CONTRACT miles this trip has left.
+  // distance_mi is the 1.18 road-factor figure; the great-circle number
+  // is lower by construction, so scaling distance_mi by f (not
+  // subtracting haversines) keeps "remaining" and "total" consistent
+  // with the number the broker was quoted.
+  //
+  // The great-circle figure itself used to be returned beside it
+  // (laneHaversineMi) and shipped on every board row of every 10s poll.
+  // Nothing ever read it: no page, no test, no export. It is gone rather
+  // than kept "in case" -- an unread number on a payload is a number
+  // nobody is checking, which is how it becomes wrong without anyone
+  // finding out.
   const distanceRemainingMi = Math.max(0, Math.round(load.distanceMi * (1 - f)))
 
   return {
@@ -251,7 +257,6 @@ export function positionFor(load, now = new Date(), routeGeometry = null) {
     lat: Number(point.lat.toFixed(5)),
     lon: Number(point.lon.toFixed(5)),
     distanceRemainingMi,
-    laneHaversineMi: Math.round(laneHaversineMi),
     // 'route' when the marker walked the real OSRM polyline, 'arc' when it
     // fell back to the great-circle arc, 'stop' when it's pinned to a
     // facility the load is currently stopped at -- see the parameter doc

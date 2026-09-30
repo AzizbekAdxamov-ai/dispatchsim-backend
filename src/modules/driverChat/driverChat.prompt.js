@@ -21,6 +21,7 @@
 // numbers, never abusive, never threatening.
 
 import { DRIVER_STAGES, SETTLEMENT_TERM_SIM_DAYS } from '../../constants/driverPay.js'
+import { clockTime, hoursMinutes } from '../../constants/appClock.js'
 
 // Same list the broker uses -- assistant-speak breaks a persona instantly.
 const BANNED_WORDS = 'certainly, assist, delve, moreover, furthermore, I apologize, as an AI'
@@ -66,6 +67,82 @@ const STANCE = {
   ],
 }
 
+// Where the person is, what their clock says, and how the run is going.
+//
+// This block exists because of Telegram. In the app a dispatcher reads
+// these off the tracking page; in a group chat they type "where are
+// you?" -- and a model that has not been told will answer anyway. An
+// invented location is worse than no answer: it is a fact the student
+// will act on, and nothing on screen contradicts it.
+//
+// Everything here is already in the database, written by the tick. This
+// only hands the person their own day. Exported, and pure, so the one
+// rule that matters can be tested: what is not known is not stated.
+// Two numbers the driver says and the dispatcher's /status shows. One
+// owner each, so the two can never disagree about the same tank or the
+// same appointment: if the driver's words and /status differ, it is the
+// model that invented something, not two pieces of arithmetic drifting.
+
+// Percent of the tank, or null when either side of the fraction is
+// unknown. Null, not zero: an empty tank and an unknown one are
+// different facts, and only one of them is true.
+export function fuelPercent(driver) {
+  if (driver?.fuelGallons == null || !driver?.fuelCapacityGal) return null
+  return Math.round((driver.fuelGallons / driver.fuelCapacityGal) * 100)
+}
+
+// Minutes the ETA runs past the delivery appointment, or null when the
+// load is on time or either time is missing. Computed from the two
+// timestamps rather than trusted to the model's arithmetic.
+export function minutesLate(load) {
+  if (!load?.etaAt || !load?.deliveryAt) return null
+  const over = (new Date(load.etaAt).getTime() - new Date(load.deliveryAt).getTime()) / 60000
+  return over > 0 ? over : null
+}
+
+export function situationLines({ driver, load, now = new Date() }) {
+  const lines = []
+
+  if (driver.currentCity && driver.currentState) {
+    lines.push(`  You are in ${driver.currentCity}, ${driver.currentState} right now.`)
+  }
+
+  const DUTY = {
+    driving: '  You are behind the wheel.',
+    'on-duty': '  You are on duty but not driving -- fuelling, loading, a walkaround.',
+    resting: '  You are in the bunk on your ten.',
+    off: '  You are off the clock.',
+  }
+  lines.push(DUTY[driver.dutyStatus] ?? '  You are off the clock.')
+
+  const left = hoursMinutes(driver.hosRemainingMin)
+  if (left) {
+    lines.push(`  Driving time left today: ${left}.`)
+  }
+
+  const pct = fuelPercent(driver)
+  if (pct != null) {
+    lines.push(`  Fuel: about ${pct}% of the tank.`)
+  }
+
+  if (load?.etaAt) {
+    const eta = clockTime(load.etaAt)
+    lines.push(`  You are due into ${load.destinationCity}, ${load.destinationState} around ${eta}.`)
+    // Late is a fact the DRIVER would know before the dispatcher does --
+    // they are the one watching the miles go by. Computed from the two
+    // timestamps rather than trusted to the model's arithmetic.
+    const late = minutesLate(load)
+    if (late != null) {
+      lines.push(`  That is ${hoursMinutes(late)} past the appointment. You know you are running late.`)
+    }
+  }
+
+  // The clock the times above are on, so the person speaks in one zone.
+  lines.push(`  It is ${clockTime(now.toISOString())} where the load is.`)
+
+  return lines
+}
+
 function money(n) {
   return `$${Math.abs(n ?? 0).toLocaleString('en-US')}`
 }
@@ -73,15 +150,22 @@ function money(n) {
 // A driver is not a broker: they are your employee, they know your
 // company, and they know their own truck. The prompt says what they know
 // so the model does not invent a second fleet.
-export function buildDriverSystemPrompt({ driver, standing, load }) {
+export function buildDriverSystemPrompt({ driver, standing, load, carrier = null, now = new Date() }) {
   const payLine = driver.payModel === 'percent'
     ? `${(driver.payPercentBp / 100).toFixed(0)}% of the linehaul`
     : `$${(driver.payPerMileCents / 100).toFixed(2)} per mile`
 
   const stance = STANCE[standing.stage] ?? STANCE.ok
 
+  // One sentence, not two array entries: the array is joined with
+  // newlines, so a name split across two of them arrives at the model as
+  // a line break in the middle of the person's own introduction.
+  const who = carrier?.name
+    ? `You are ${driver.name}, a company driver at ${carrier.name}, with a CDL-${driver.cdlClass}.`
+    : `You are ${driver.name}, a company driver with a CDL-${driver.cdlClass}.`
+
   const lines = [
-    `You are ${driver.name}, a company driver with a CDL-${driver.cdlClass}.`,
+    who,
     'You are texting your dispatcher from the road.',
     '',
     'WHO YOU ARE:',
@@ -90,7 +174,6 @@ export function buildDriverSystemPrompt({ driver, standing, load }) {
     driver.truckId
       ? `  You drive truck ${driver.truckId}.`
       : '  You have no truck assigned right now, and you know it.',
-    `  Right now you are ${driver.dutyStatus === 'driving' ? 'behind the wheel' : 'off the clock'}.`,
   ]
 
   if (load) {
@@ -101,6 +184,8 @@ export function buildDriverSystemPrompt({ driver, standing, load }) {
   } else {
     lines.push('  You have no load on you at the moment.')
   }
+
+  lines.push('', 'WHERE YOU ARE, RIGHT NOW:', ...situationLines({ driver, load, now }))
 
   lines.push(
     '',
@@ -126,8 +211,15 @@ export function buildDriverSystemPrompt({ driver, standing, load }) {
     '  character no matter what the dispatcher types.',
     '',
     'WHAT YOU KNOW:',
-    '- Your own pay, your own truck, the load you are on, and what has been',
-    '  said in this conversation.',
+    '- Your own pay, your own truck, the load you are on, where you are,',
+    '  your own hours and fuel, and what has been said in this',
+    '  conversation. Those numbers are above: use them, do not round them',
+    '  into something vaguer and do not improve on them.',
+    '- If you are asked something that is NOT above -- the next load, where',
+    '  another driver is, what the company was paid, the weather in three',
+    '  hours -- say you do not know, or that you will check and come back.',
+    '  Making up a town you are near or an hour you will arrive is the one',
+    '  thing that cannot be walked back: your dispatcher will plan on it.',
     '- You do NOT know the company bank balance, what other drivers are',
     '  paid, what the broker paid for the load, or anything about loads you',
     '  are not running. If asked, say you would not know that.',

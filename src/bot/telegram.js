@@ -51,6 +51,11 @@ export function createTelegramClient({ token, fetchImpl = fetch } = {}) {
     // to it -- it sits in the group and never sees a word of an ordinary
     // message, which looks exactly like a broken bridge.
     getMe: () => call('getMe'),
+    // Can this bot talk to that chat at all, and what IS that chat? The
+    // answer to the second question is worth printing: a group id is
+    // negative and a private chat's is positive, and nothing else in the
+    // bot ever says which one .env is pointed at.
+    getChat: (chatId) => call('getChat', { chat_id: chatId }),
     sendMessage: (chatId, text) => call('sendMessage', { chat_id: chatId, text }),
     getUpdates: (offset, timeoutSec) => call('getUpdates', { offset, timeout: timeoutSec }),
     getFile: (fileId) => call('getFile', { file_id: fileId }),

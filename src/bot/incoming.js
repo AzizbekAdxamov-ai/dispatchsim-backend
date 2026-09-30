@@ -16,6 +16,8 @@ import { AppError } from '../lib/errors.js'
 import * as repo from './bot.repository.js'
 import * as driverChat from '../modules/driverChat/driverChat.service.js'
 import { getCarrier } from '../modules/carrier/carrier.repository.js'
+import { getDriverContext } from '../modules/driverChat/driverChat.repository.js'
+import { statusText } from './status.js'
 
 // The app, as the bot needs it. One object, so a test can replace it
 // whole: every call below goes through here and nothing reaches around
@@ -26,6 +28,7 @@ export const realApp = {
   driverById: repo.driverById,
   getCarrier,
   openConversation: driverChat.openConversation,
+  getDriverContext,
   sendMessage: driverChat.sendMessage,
 }
 
@@ -33,12 +36,28 @@ const HELP_LINES = [
   'Commands:',
   '/d <name> — set which driver this chat is talking to',
   '/drivers — list the drivers',
+  '/status — the current driver, from the dispatch system',
   '/help — this list',
   'Anything else is sent to the driver: reply to one of my messages, or pick a driver with /d first.',
 ]
 
-export function helpText(carrierName) {
-  return [carrierName ? `${carrierName} — driver dispatch` : 'Driver dispatch', '', ...HELP_LINES].join('\n')
+export function helpText(carrierName, driver = null) {
+  const title = carrierName ? `${carrierName} — driver dispatch` : 'Driver dispatch'
+  if (driver) {
+    // One driver: nothing to choose, so nothing to explain about
+    // choosing. /d and /drivers exist for the general case and would
+    // only be two ways to be confused here.
+    return [
+      title,
+      '',
+      `You are talking to ${driver.truckId ? `${driver.name} · ${driver.truckId}` : driver.name}.`,
+      'Just type. They answer when they can — a driver behind the wheel does not text back at once.',
+      '',
+      '/status — where they are right now, from the dispatch system',
+      '/help — this',
+    ].join('\n')
+  }
+  return [title, '', ...HELP_LINES].join('\n')
 }
 
 // One command, one missing word, one sentence -- not the whole list.
@@ -52,10 +71,18 @@ export function usageText(command) {
     // Kept because the habit outlives the feature. Codes bound a chat to
     // one of many student accounts; there is one dispatcher and one
     // group now, both named in .env, and nothing to bind.
-    return 'No code needed any more — this group is already the dispatch group.'
+    return 'No code needed any more — this chat is already connected.'
   }
   return HELP_LINES.join('\n')
 }
+
+// The three intents that carry words meant for a driver, as opposed to
+// a command about the bot itself.
+const FOR_A_DRIVER = new Set(['to-driver', 'to-current', 'ask-who'])
+
+// Commands that mean something different when there is only one driver:
+// /d cannot choose, /help names the person, /status knows whom to show.
+const ONE_DRIVER_COMMANDS = new Set(['set-driver', 'help', 'status'])
 
 function rosterText(rows) {
   return rows.map((d) => `${d.name} (${d.dutyStatus})`).join('\n')
@@ -81,6 +108,49 @@ export async function handleUpdate(fact, { state, app = realApp, userId, vision 
     replyToTelegramMessageId: fact.replyToTelegramMessageId ?? null,
     currentDriverId: state.currentDriverId ?? null,
   })
+
+  // One group, one driver.
+  //
+  // When TELEGRAM_DRIVER_NAME is set this is not a default that the
+  // routing can be talked out of: every message that is meant for a
+  // driver goes to THAT driver. A reply to an old line, a /d left over
+  // from before, a message that names nobody -- all the same person.
+  // The alternative is a bot that is usually right about who it is
+  // talking to, and words in the wrong driver's mouth are the one
+  // failure nothing anywhere would show.
+  //
+  // Resolved from the database on every turn, not once at boot: a name
+  // that stops matching (the driver quit, the roster was cleaned) must
+  // say so rather than keep answering as a row that is gone.
+  if (fixedDriverName && (FOR_A_DRIVER.has(intent.kind) || ONE_DRIVER_COMMANDS.has(intent.kind))) {
+    const matches = await app.driversByName(fixedDriverName)
+    if (matches.length !== 1) {
+      say(`TELEGRAM_DRIVER_NAME is "${fixedDriverName}" and that matches ${matches.length} drivers on the roster. It has to match exactly one.`)
+      return { state: next, replies }
+    }
+    const driver = matches[0]
+    if (intent.kind === 'set-driver') {
+      say(`This chat talks to ${driver.name}. Change TELEGRAM_DRIVER_NAME in .env and restart the bot to talk to someone else.`)
+      return { state: next, replies }
+    }
+    if (intent.kind === 'help' || intent.kind === 'status') {
+      const context = await app.getDriverContext(driver.id)
+      if (!context) {
+        say(`${driver.name} is on the roster but has no record the dispatch system can read.`)
+        return { state: next, replies }
+      }
+      if (intent.kind === 'help') {
+        const carrier = await app.getCarrier()
+        say(helpText(carrier?.name, context.driver))
+      } else {
+        say(statusText(context))
+      }
+      return { state: next, replies }
+    }
+    next = { ...next, currentDriverId: driver.id }
+    await deliver({ driverId: driver.id, fact, say, app, userId, vision })
+    return { state: next, replies }
+  }
 
   switch (intent.kind) {
     case 'help': {
@@ -149,22 +219,23 @@ export async function handleUpdate(fact, { state, app = realApp, userId, vision 
     }
 
     case 'ask-who': {
-      // One fixed driver short-circuits the question: the group talks, the
-      // driver answers. Resolved here rather than in the router because it
-      // needs the database (does the name still match anyone?), and the
-      // router is the one place that must stay pure.
-      if (fixedDriverName) {
-        const matches = await app.driversByName(fixedDriverName)
-        if (matches.length === 1) {
-          next = { ...next, currentDriverId: matches[0].id }
-          await deliver({ driverId: matches[0].id, fact, say, app, userId, vision })
-          break
-        }
-        say(`The configured driver "${fixedDriverName}" is not on the roster${matches.length > 1 ? ' (more than one by that name)' : ''}. Fix TELEGRAM_DRIVER_NAME in .env.`)
-        break
-      }
+      // Only reached when no driver is fixed: with one configured, the
+      // question never arises -- it was answered above, before the
+      // switch, for every intent that carries words for a driver.
       const roster = await app.driversList()
       say(`Who is this for? Reply to one of my messages, or pick with /d <name>:\n${rosterText(roster)}`)
+      break
+    }
+
+    case 'status': {
+      // No fixed driver: the chat's current one, if a /d has chosen.
+      const driver = state.currentDriverId ? await app.driverById(state.currentDriverId) : null
+      if (!driver) {
+        say('No driver picked yet. Pick one with /d <name>, then /status.')
+        break
+      }
+      const context = await app.getDriverContext(driver.id)
+      say(context ? statusText(context) : `${driver.name} has no record the dispatch system can read.`)
       break
     }
 

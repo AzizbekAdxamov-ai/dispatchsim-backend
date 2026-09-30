@@ -33,7 +33,7 @@ test('dutyStatusWhileOpen: stationary waits are off duty, attended trucks on dut
   assert.equal(dutyStatusWhileOpen('detention'), 'on-duty-not-driving')
 })
 
-const hasDb = Boolean(process.env.DATABASE_URL)
+const { hasDb } = await import('./helpers/db.js')
 
 test('logOpenEventWait: cuts the plan, writes one wait row, idempotent on re-run', { skip: !hasDb }, async (t) => {
   const { pool } = await import('../src/db/pool.js')

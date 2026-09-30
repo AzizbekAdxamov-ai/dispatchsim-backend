@@ -9,6 +9,7 @@ import { assertCanSend } from '../chat/chatBudget.service.js'
 import { tooLongForChat, CHAT_REPLY_MAX_CHARS } from '../../constants/chatBudget.js'
 import { chatConfigFor } from '../chat/chatProvider.js'
 import { AppError } from '../../lib/errors.js'
+import { getCarrier } from '../carrier/carrier.repository.js'
 import * as repo from './brokerChat.repository.js'
 import { replyDelaySec, rateConAmount } from './replyTiming.js'
 import { bookPosting } from '../loadBoard/loadBoard.service.js'
@@ -102,7 +103,9 @@ export async function sendMessage({ conversationId, userId, text }) {
   const dispatcherMessage = await repo.addMessage(conversationId, 'dispatcher', text)
 
   const history = (await repo.listMessages(conversationId)).slice(-HISTORY_TURNS - 1, -1)
+  const carrier = await getCarrier()
   const systemPrompt = buildBrokerSystemPrompt({
+    carrier,
     broker: { name: posting.name, contactName: posting.contactName, persona: posting.persona },
     posting,
   })

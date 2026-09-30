@@ -17,19 +17,30 @@ import { getAgreedRate } from '../brokerChat/brokerChat.repository.js'
 // Read endpoints
 // ---------------------------------------------------------------------
 
-export async function listPostings({ equipmentType, originState, originZone, destinationZone, minRatePerMile, maxDeadheadMi, sort, page, limit, fromCity, fromState }) {
-  // Validate city exists if provided
-  if (fromCity && fromState) {
-    const city = findCity(fromCity, fromState)
-    if (!city) throw new AppError('UNKNOWN_CITY')
-  }
+export async function listPostings(input) {
+  const { page, limit, fromCity, fromState, toCity, toState } = input
 
-  const offset = (page - 1) * limit
-  const postings = await loadBoardRepo.listPostings({
-    equipmentType, originState, originZone, destinationZone, minRatePerMile, maxDeadheadMi, sort, limit, offset, fromCity, fromState,
-  })
+  // Both reference points are validated here, before any SQL is built --
+  // the repository throws loudly on an unknown city rather than returning
+  // an empty board, and that throw is for a caller that skipped this.
+  if (fromCity && fromState && !findCity(fromCity, fromState)) throw new AppError('UNKNOWN_CITY')
+  if (toCity && toState && !findCity(toCity, toState)) throw new AppError('UNKNOWN_CITY')
 
-  // Build deadheadFrom meta
+  const filters = { ...input, offset: (page - 1) * limit }
+
+  // One page of rows and the two counts behind it. Counted rather than
+  // inferred from the page: `postings.length` is the page size, never the
+  // size of the answer, and a board that says "25 results" on every
+  // search has told the dispatcher nothing about the lane.
+  const [postings, counts] = await Promise.all([
+    loadBoardRepo.listPostings(filters),
+    loadBoardRepo.countPostings(filters),
+  ])
+
+  // Where the deadhead is measured FROM, so the column can say it. A
+  // location if one was searched, otherwise the nearest available driver
+  // -- and naming the driver is the point: "48 miles" means something
+  // different depending on whose truck it is.
   let deadheadFrom = null
   if (fromCity && fromState) {
     deadheadFrom = { kind: 'location', city: fromCity, state: fromState }
@@ -37,16 +48,29 @@ export async function listPostings({ equipmentType, originState, originZone, des
     deadheadFrom = { kind: 'driver', driverId: postings[0].nearestDriverId, driverName: postings[0].nearestDriverName }
   }
 
-  return { postings, meta: { page, limit, deadheadFrom } }
+  const deadheadTo = toCity && toState ? { city: toCity, state: toState } : null
+
+  return {
+    postings,
+    meta: {
+      page,
+      limit,
+      deadheadFrom,
+      deadheadTo,
+      // What the search found, and what the same search would find with
+      // the radius widened. Stated, not acted on: the board does not
+      // widen anything by itself.
+      total: counts.matching,
+      nearby: counts.nearby,
+    },
+  }
 }
 
-export async function getPostingById(id, { fromCity, fromState } = {}) {
-  if (fromCity && fromState) {
-    const city = findCity(fromCity, fromState)
-    if (!city) throw new AppError('UNKNOWN_CITY')
-  }
+export async function getPostingById(id, { fromCity, fromState, toCity, toState } = {}) {
+  if (fromCity && fromState && !findCity(fromCity, fromState)) throw new AppError('UNKNOWN_CITY')
+  if (toCity && toState && !findCity(toCity, toState)) throw new AppError('UNKNOWN_CITY')
 
-  const posting = await loadBoardRepo.getPostingById(id, fromCity, fromState)
+  const posting = await loadBoardRepo.getPostingById(id, fromCity, fromState, toCity, toState)
   if (!posting) {
     throw new AppError('POSTING_NOT_FOUND')
   }

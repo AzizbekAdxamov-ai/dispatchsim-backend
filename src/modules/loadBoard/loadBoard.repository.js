@@ -103,11 +103,11 @@ const BASE_CTE_FLEET = `
 
 // CTE: compute deadhead from a user-selected point (no driver involved).
 // NULLs for driver fields — deadhead is distance from the chosen city.
-const BASE_CTE_POINT = (lat, lon) => `
+const BASE_CTE_POINT = (latPh, lonPh) => `
   WITH nearest AS (
     SELECT
       p.id,
-      road_miles($1, $2, p.origin_lat, p.origin_lon)::int AS deadhead_mi,
+      road_miles(${latPh}, ${lonPh}, p.origin_lat, p.origin_lon)::int AS deadhead_mi,
       NULL::text AS driver_id, NULL::text AS driver_name, NULL::int AS driver_hos
     FROM load_postings p
     WHERE p.status = 'open'
@@ -116,47 +116,96 @@ const BASE_CTE_POINT = (lat, lon) => `
   )
 `
 
-// Exported for service to pick the right CTE
-export function buildBaseCte(fromCity, fromState) {
-  if (fromCity && fromState) {
-    const city = CITIES.find((c) => c.city === fromCity && c.state === fromState)
-    if (!city) {
-      // Loud, not silent. The service validates the city before calling, so
-      // reaching here means a caller skipped that check. Returning an empty
-      // board would hide the mistake — the same "silently wrong instead of
-      // loudly wrong" pattern that let the 14,676 mi deadhead sit unnoticed.
-      throw new Error(`buildBaseCte: unknown city ${fromCity}, ${fromState}`)
-    }
-    return { sql: BASE_CTE_POINT(city.lat, city.lon), lat: city.lat, lon: city.lon }
+// Placeholders, numbered once.
+//
+// Every fragment below asks this for its placeholder instead of counting
+// $1, $2, $3 by hand. The previous version built the filter starting at $1
+// and then rewrote every placeholder with a regex when the point CTE had
+// taken $1 and $2 -- which worked only as long as exactly one fragment
+// needed parameters of its own. The search bar needs four (origin point,
+// destination point, filters, paging), and a renumbering pass over four
+// fragments is a bug waiting for the fifth.
+//
+// `values.push` returns the new length, which is exactly the number the
+// placeholder needs.
+function params() {
+  const values = []
+  return {
+    values,
+    add(value) {
+      return `$${values.push(value)}`
+    },
   }
-  return { sql: BASE_CTE_FLEET, lat: null, lon: null }
 }
 
-function buildFilter({ equipmentType, originState, originZone, destinationZone, minRatePerMile, maxDeadheadMi }) {
-  const conditions = []
-  const params = []
+// The city a distance is measured from (or to). Loud on a miss, for the
+// same reason the old buildBaseCte was: the service validates the city
+// before calling, so an unknown one here means a caller skipped that
+// check, and an empty board would hide it.
+function pointFor(city, state, where) {
+  if (!city || !state) return null
+  const found = CITIES.find((c) => c.city === city && c.state === state)
+  if (!found) throw new Error(`${where}: unknown city ${city}, ${state}`)
+  return found
+}
 
-  if (equipmentType) {
-    params.push(equipmentType)
-    conditions.push(`p.equipment_type = $${params.length}`)
+// Exported for service to pick the right CTE
+export function buildBaseCte(fromCity, fromState, p) {
+  const point = pointFor(fromCity, fromState, 'buildBaseCte')
+  if (point) {
+    return { sql: BASE_CTE_POINT(p.add(point.lat), p.add(point.lon)), point }
+  }
+  return { sql: BASE_CTE_FLEET, point: null }
+}
+
+// DH-D: how far the load's DESTINATION is from the destination that was
+// searched for. Null when no destination was given -- the column is not
+// "zero miles", it is "not asked".
+//
+// The expression is built once and used in both the SELECT and the WHERE,
+// reusing the same two placeholders: a WHERE clause cannot refer to a
+// column alias, and computing it twice from two more parameters would let
+// the filter and the displayed number drift apart.
+function destinationDistance(toCity, toState, p) {
+  const point = pointFor(toCity, toState, 'destinationDistance')
+  if (!point) return null
+  return `road_miles(${p.add(point.lat)}, ${p.add(point.lon)}, p.destination_lat, p.destination_lon)::int`
+}
+
+// Everything the query bar can narrow by, EXCEPT the two deadhead radii.
+// Those are separated out because the result count is stated twice -- the
+// loads inside the radii, and the ones that match everything else and lie
+// outside them -- and the second number is only meaningful if the radii
+// are the only difference between the two.
+function buildFilter({
+  equipmentType, originState, originZone, destinationState, destinationZone,
+  minRatePerMile, maxLengthFt, maxWeightLbs, pickupFrom, pickupBefore,
+}, p) {
+  const conditions = []
+
+  if (equipmentType && equipmentType.length > 0) {
+    // One type or several: the query bar lets a dispatcher with a reefer
+    // that can also run dry van ask for both at once.
+    conditions.push(`p.equipment_type = ANY(${p.add(equipmentType)})`)
   }
 
   if (originState) {
-    params.push(originState)
-    conditions.push(`p.origin_state = $${params.length}`)
+    conditions.push(`p.origin_state = ${p.add(originState)}`)
+  }
+
+  if (destinationState) {
+    conditions.push(`p.destination_state = ${p.add(destinationState)}`)
   }
 
   // Zone -> the states it covers. No stored column and no join: the zone is
   // derived from the state code, so filtering by zone is filtering by a set
   // of states. A zone and a state filter intersect naturally.
   if (originZone) {
-    params.push(statesInZone(originZone))
-    conditions.push(`p.origin_state = ANY($${params.length})`)
+    conditions.push(`p.origin_state = ANY(${p.add(statesInZone(originZone))})`)
   }
 
   if (destinationZone) {
-    params.push(statesInZone(destinationZone))
-    conditions.push(`p.destination_state = ANY($${params.length})`)
+    conditions.push(`p.destination_state = ANY(${p.add(statesInZone(destinationZone))})`)
   }
 
   if (minRatePerMile != null) {
@@ -170,20 +219,52 @@ function buildFilter({ equipmentType, originState, originZone, destinationZone, 
     // board does not know the rate, so it cannot say the load clears a
     // floor. The filter is off by default, and the student can clear it to
     // see those loads again.
-    params.push(minRatePerMile)
     conditions.push(
-      `(p.rate_hidden = false AND (p.rate_usd::numeric / p.distance_mi) >= $${params.length})`,
+      `(p.rate_hidden = false AND (p.rate_usd::numeric / p.distance_mi) >= ${p.add(minRatePerMile)})`,
     )
   }
 
-  if (maxDeadheadMi != null) {
-    // NULL deadhead = distance unknown → exclude from max filter
-    // (user asked for a maximum distance, and "unknown" doesn't answer it)
-    params.push(maxDeadheadMi)
-    conditions.push(`n.deadhead_mi IS NOT NULL AND n.deadhead_mi <= $${params.length}`)
+  // Length and weight are the TRUCK's limits, not a wish: a 48 ft trailer
+  // cannot take a 53 ft load, and a tractor already carrying weight cannot
+  // take more than it can carry. So both read as a maximum.
+  if (maxLengthFt != null) {
+    conditions.push(`p.equipment_length_ft <= ${p.add(maxLengthFt)}`)
   }
 
-  return { conditions, params }
+  if (maxWeightLbs != null) {
+    conditions.push(`p.weight_lbs <= ${p.add(maxWeightLbs)}`)
+  }
+
+  // The pickup window: lower bound inclusive, upper bound exclusive, both
+  // instants. See the schema for why the exclusive one is named for it.
+  if (pickupFrom != null) {
+    conditions.push(`p.pickup_at >= ${p.add(pickupFrom)}`)
+  }
+
+  if (pickupBefore != null) {
+    conditions.push(`p.pickup_at < ${p.add(pickupBefore)}`)
+  }
+
+  return conditions
+}
+
+// The two radii, kept apart from buildFilter -- see its header.
+function buildRadiusFilter({ maxDeadheadMi, maxDeadheadDestMi }, destExpr, p) {
+  const conditions = []
+
+  if (maxDeadheadMi != null) {
+    // NULL deadhead = distance unknown -> exclude from max filter
+    // (user asked for a maximum distance, and "unknown" doesn't answer it)
+    conditions.push(`n.deadhead_mi IS NOT NULL AND n.deadhead_mi <= ${p.add(maxDeadheadMi)}`)
+  }
+
+  // Without a destination there is no DH-D to be inside or outside of, so
+  // the radius is not applied at all rather than excluding everything.
+  if (maxDeadheadDestMi != null && destExpr) {
+    conditions.push(`${destExpr} <= ${p.add(maxDeadheadDestMi)}`)
+  }
+
+  return conditions
 }
 
 function sortClause(sort) {
@@ -195,6 +276,8 @@ function sortClause(sort) {
     // row's position -- sort by $/mi, and the "call for rate" load sitting
     // between a $3.10 and a $3.05 is a $3.07 load. The whole point of the
     // posting is that the only way to learn the number is to ask for it.
+    case 'rate':
+      return 'ORDER BY p.rate_hidden ASC, p.rate_usd DESC'
     case 'ratePerMile':
       return 'ORDER BY p.rate_hidden ASC, (p.rate_usd::numeric / p.distance_mi) DESC'
     case 'deadhead':    return 'ORDER BY n.deadhead_mi ASC NULLS LAST'
@@ -204,30 +287,31 @@ function sortClause(sort) {
   }
 }
 
-export async function listPostings({ equipmentType, originState, originZone, destinationZone, minRatePerMile, maxDeadheadMi, sort, limit, offset, fromCity, fromState }) {
-  const { sql: baseCte, lat, lon } = buildBaseCte(fromCity, fromState)
+function andAll(conditions) {
+  return conditions.length > 0 ? `AND ${conditions.join(' AND ')}` : ''
+}
 
-  const { conditions, params } = buildFilter({ equipmentType, originState, originZone, destinationZone, minRatePerMile, maxDeadheadMi })
+// Built, not run -- so that scripts/sql-check.js can PREPARE the exact
+// string this module executes against the real schema. A statement this
+// dynamic has no other way to be parse-checked, and a mis-numbered
+// placeholder or a renamed column would otherwise surface in a chat
+// window rather than in a command.
+export function buildListPostingsSql(filters) {
+  const p = params()
+  const { sql: baseCte } = buildBaseCte(filters.fromCity, filters.fromState, p)
+  const destExpr = destinationDistance(filters.toCity, filters.toState, p)
+  const conditions = [
+    ...buildFilter(filters, p),
+    ...buildRadiusFilter(filters, destExpr, p),
+  ]
+  const limitPh = p.add(filters.limit)
+  const offsetPh = p.add(filters.offset)
 
-  // Point CTE uses $1/$2 for lat/lon, so filter params start at $3
-  const paramOffset = lat != null ? 2 : 0
-  const adjustedConditions = conditions.map((c) =>
-    c.replace(/\$(\d+)/g, (_, n) => `$${Number(n) + paramOffset}`),
-  )
-  const adjustedWhere = adjustedConditions.length > 0 ? `AND ${adjustedConditions.join(' AND ')}` : ''
-
-  params.push(limit)
-  const limitIdx = params.length
-  params.push(offset)
-  const offsetIdx = params.length
-
-  const sqlParams = lat != null ? [lat, lon, ...params] : params
-
-  const result = await query(
-    `${baseCte}
+  const text = `${baseCte}
      SELECT ${POSTING_COLUMNS},
             ${BROKER_COLUMNS},
             n.deadhead_mi AS "deadheadMi",
+            ${destExpr ?? 'NULL::int'} AS "deadheadDestMi",
             n.driver_id AS "nearestDriverId",
             n.driver_name AS "nearestDriverName",
             n.driver_hos AS "nearestDriverHosRemainingMin"
@@ -235,36 +319,86 @@ export async function listPostings({ equipmentType, originState, originZone, des
      LEFT JOIN nearest n ON n.id = p.id
      ${BROKER_JOIN}
      WHERE n.id IS NOT NULL
-       ${adjustedWhere}
-     ${sortClause(sort)}
-     LIMIT $${limitIdx + paramOffset} OFFSET $${offsetIdx + paramOffset}`,
-    sqlParams,
-  )
+       ${andAll(conditions)}
+     ${sortClause(filters.sort)}
+     LIMIT ${limitPh} OFFSET ${offsetPh}`
+
+  return { text, values: p.values }
+}
+
+// Two numbers, one pass over the same rows:
+//
+//   matching  -- everything the query bar asked for, radii included.
+//   nearby    -- matches every other filter and falls OUTSIDE the radii.
+//
+// The board states both because they answer different questions. "232
+// results" is what the truck can reach today; the second number is what
+// the same search would find if the dispatcher widened the circle, and it
+// is the difference between an empty lane and a lane that is busy 200
+// miles away.
+export function buildCountPostingsSql(filters) {
+  const p = params()
+  const { sql: baseCte } = buildBaseCte(filters.fromCity, filters.fromState, p)
+  // Only when the radius actually needs it. The list query always shows a
+  // DH-D column so it always computes the expression; counting never
+  // shows one, and binding the destination's coordinates to a statement
+  // that does not mention them is a bind-parameter error at runtime --
+  // on the ordinary search that names a destination without narrowing by
+  // distance to it.
+  const destExpr = filters.maxDeadheadDestMi != null
+    ? destinationDistance(filters.toCity, filters.toState, p)
+    : null
+  const conditions = buildFilter(filters, p)
+  const radius = buildRadiusFilter(filters, destExpr, p)
+  const inRadius = radius.length > 0 ? radius.map((c) => `(${c})`).join(' AND ') : 'true'
+
+  const text = `${baseCte}
+     SELECT count(*) FILTER (WHERE ${inRadius})::int AS "matching",
+            count(*)::int AS "withoutRadius"
+     FROM load_postings p
+     LEFT JOIN nearest n ON n.id = p.id
+     WHERE n.id IS NOT NULL
+       ${andAll(conditions)}`
+
+  return { text, values: p.values }
+}
+
+export async function listPostings(filters) {
+  const { text, values } = buildListPostingsSql(filters)
+  const result = await query(text, values)
   return result.rows
+}
+
+export async function countPostings(filters) {
+  const { text, values } = buildCountPostingsSql(filters)
+  const row = (await query(text, values)).rows[0]
+  return { matching: row.matching, nearby: row.withoutRadius - row.matching }
 }
 
 // Same deadhead reference point as listPostings: when the caller passes a
 // location the distance is measured from there, otherwise from the fleet.
 // Without this the detail view would report a different deadhead than the
 // row the user clicked.
-export async function getPostingById(id, fromCity, fromState) {
-  const { sql: baseCte, lat, lon } = buildBaseCte(fromCity, fromState)
-  const paramOffset = lat != null ? 2 : 0
-  const params = lat != null ? [lat, lon, id] : [id]
+export async function getPostingById(id, fromCity, fromState, toCity, toState) {
+  const p = params()
+  const { sql: baseCte } = buildBaseCte(fromCity, fromState, p)
+  const destExpr = destinationDistance(toCity, toState, p)
+  const idPh = p.add(id)
 
   const result = await query(
     `${baseCte}
      SELECT ${POSTING_COLUMNS},
             ${BROKER_COLUMNS},
             n.deadhead_mi AS "deadheadMi",
+            ${destExpr ?? 'NULL::int'} AS "deadheadDestMi",
             n.driver_id AS "nearestDriverId",
             n.driver_name AS "nearestDriverName",
             n.driver_hos AS "nearestDriverHosRemainingMin"
      FROM load_postings p
      LEFT JOIN nearest n ON n.id = p.id
      ${BROKER_JOIN}
-     WHERE p.id = $${1 + paramOffset}`,
-    params,
+     WHERE p.id = ${idPh}`,
+    p.values,
   )
   return result.rows[0] ?? null
 }

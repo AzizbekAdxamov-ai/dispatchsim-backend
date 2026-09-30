@@ -36,20 +36,16 @@ const UNPAID = [
   (a) => `Not until that ${money(a.owedUsd)} hits my account. I have been waiting ${a.daysOverdue} days on the oldest one.`,
 ]
 
-const OUT_OF_HOURS = [
-  (a) => `My eleven are gone. I cannot move this truck until I have had my ten off -- that is the law, not a mood.`,
-  (a) => `I am at zero on drive time. Paper says eleven hours, I have driven every one of them. Ten off and I am yours.`,
-  (a) => `No. My clock is at zero -- forty-nine CFR three ninety-five says I stop here, and so do I.`,
-]
-
 const QUIT = [
   () => 'I do not run for you any more.',
   () => 'I have moved on. Still want what I was owed.',
 ]
 
+// Hours of service is not in here, and must not come back: a driver out
+// of hours is dispatched and the plan opens with their rest, so there is
+// no refusal for them to voice (availabilityReasons.js says why).
 const BY_REASON = {
   [REASONS.UNPAID]: UNPAID,
-  [REASONS.OUT_OF_HOURS]: OUT_OF_HOURS,
   [REASONS.QUIT]: QUIT,
 }
 

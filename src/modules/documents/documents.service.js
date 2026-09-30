@@ -17,6 +17,7 @@
 // users.name) by the request's own user id instead of inventing one.
 
 import { AppError } from '../../lib/errors.js'
+import { getCarrier as getCompanyCarrier, addressLine as carrierAddressLine } from '../carrier/carrier.repository.js'
 import { documentsRepository as repo } from './documents.repository.js'
 import { generateBol } from './bol.js'
 import { generatePod } from './pod.js'
@@ -26,15 +27,32 @@ import { generateInvoicePdf } from './invoice.js'
 // the carrier block the PDF prints. Split out from carrierFor so the
 // company-then-name-then-dash fallback can be unit-tested without a
 // database -- carrierFor itself is just "fetch the row, hand it here".
-export function carrierFromRow(row) {
+// The fallback chain is still here, one step longer and in the right
+// order. 048 gave the company a row of its own; before it, the "carrier"
+// on every document was whatever the signing user typed into `company`
+// at registration -- so two dispatchers meant two carriers for one
+// fleet. The row wins now; the user's own text is what is left if the
+// database has not been migrated yet.
+export function carrierFromRow(row, carrierRow = null) {
+  const official = carrierRow?.name?.trim()
   const company = row?.company?.trim()
   const name = row?.name?.trim()
-  return { name: company || name || '—' }
+  return {
+    name: official || company || name || '—',
+    mcNumber: carrierRow?.mcNumber ?? null,
+    dotNumber: carrierRow?.dotNumber ?? null,
+    phone: carrierRow?.phone ?? null,
+    addressLine: carrierRow ? carrierAddressLine(carrierRow) : null,
+  }
 }
 
 async function carrierFor(auth) {
-  const row = auth?.userId ? await repo.getCarrier(auth.userId) : null
-  return carrierFromRow(row)
+  if (!hooks.getCompanyCarrier) hooks.getCompanyCarrier = getCompanyCarrier
+  const [row, carrierRow] = await Promise.all([
+    auth?.userId ? repo.getCarrier(auth.userId) : null,
+    hooks.getCompanyCarrier(),
+  ])
+  return carrierFromRow(row, carrierRow)
 }
 
 async function loadOr404(loadId) {
@@ -75,6 +93,10 @@ export async function getPod({ loadId }) {
 // tests substitute this hook instead of importing around the service.
 export const hooks = {
   getInvoiceById: null,
+  // The company's own row (048), on the same indirection and for the
+  // same reason: a test about how a document is RENDERED should not need
+  // a database to tell it who the company is.
+  getCompanyCarrier: null,
 }
 
 export async function getInvoicePdf({ invoiceId, auth }) {

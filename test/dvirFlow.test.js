@@ -8,7 +8,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import 'dotenv/config'
 
-const hasDb = Boolean(process.env.DATABASE_URL)
+const { hasDb } = await import('./helpers/db.js')
 
 test('a built report inserts, reads, and certifies per 396.13', { skip: !hasDb }, async (t) => {
   const { pool } = await import('../src/db/pool.js')

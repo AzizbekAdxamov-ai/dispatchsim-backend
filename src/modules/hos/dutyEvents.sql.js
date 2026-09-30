@@ -13,6 +13,25 @@ export const INSERT_DUTY_EVENT_SQL = `
   ON CONFLICT (driver_id, started_at) WHERE record_status = 'active' DO NOTHING
   RETURNING id`
 
+// The repositioning drive nobody was logged in for (hos/repositioning.js).
+//
+// driver_id NULL, origin 'unidentified' -- 038's duty_events_owner CHECK
+// requires a truck when there is no driver, which is exactly the shape of
+// the record: the ELD knows which truck moved and nothing about who.
+//
+// Its conflict target is the OTHER partial index (truck_id, started_at
+// WHERE active AND driver_id IS NULL): the driver one above cannot catch
+// these, because NULLs are not equal to each other in a unique index, and
+// a re-dispatched load would otherwise log the same empty drive twice.
+export const INSERT_UNIDENTIFIED_DUTY_EVENT_SQL = `
+  INSERT INTO duty_events (
+    driver_id, load_id, truck_id, status, started_at, ended_at, origin
+  ) VALUES (NULL, $1, $2, 'driving', $3, $4, 'unidentified')
+  ON CONFLICT (truck_id, started_at)
+    WHERE record_status = 'active' AND driver_id IS NULL
+    DO NOTHING
+  RETURNING id`
+
 // A driver's active log since $2 -- enough history for every HOS clock
 // (the 8-day 70-hour window is the longest). Events that have not started
 // yet are included; hosClock.js clips every sum at "now".

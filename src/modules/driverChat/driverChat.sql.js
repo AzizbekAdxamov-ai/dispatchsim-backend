@@ -18,21 +18,35 @@ export const GET_CONVERSATION_SQL = `
 
 // Everything the driver knows about themselves, in one round trip: who
 // they are, what truck they have, and the load they are on right now.
+// Everything the person knows about their own day.
+//
+// The location, the hours and the ETA are here because of Telegram. In
+// the app a dispatcher reads them off the tracking page; in a group chat
+// they just type "where are you?" -- and a model that has not been told
+// will answer anyway, which is the one thing this simulator must never
+// do. These columns are already written by the tick (current_city /
+// current_state by the trip walker, hos_remaining_min by syncDriverHos,
+// eta_at by dispatch); nothing new is computed, it is only handed to the
+// person whose day it is.
 export const GET_DRIVER_CONTEXT_SQL = `
   SELECT d.id, d.name, d.cdl_class AS "cdlClass",
          d.home_base_city AS "homeBaseCity", d.home_base_state AS "homeBaseState",
          d.duty_status AS "dutyStatus",
+         d.current_city AS "currentCity", d.current_state AS "currentState",
+         d.hos_remaining_min AS "hosRemainingMin", d.hours_today_min AS "hoursTodayMin",
          d.pay_model AS "payModel", d.pay_percent_bp AS "payPercentBp",
          d.pay_per_mile_cents AS "payPerMileCents",
          t.id AS "truckId",
+         t.fuel_gallons AS "fuelGallons", t.fuel_capacity_gal AS "fuelCapacityGal",
          l.id AS "loadId", l.origin_city AS "originCity", l.origin_state AS "originState",
          l.destination_city AS "destinationCity", l.destination_state AS "destinationState",
-         l.distance_mi AS "distanceMi"
+         l.distance_mi AS "distanceMi", l.eta_at AS "etaAt", l.delivery_at AS "deliveryAt"
     FROM drivers d
     LEFT JOIN trucks t ON t.driver_id = d.id
     LEFT JOIN LATERAL (
            SELECT x.id, x.origin_city, x.origin_state,
-                  x.destination_city, x.destination_state, x.distance_mi
+                  x.destination_city, x.destination_state, x.distance_mi,
+                  x.eta_at, x.delivery_at
              FROM loads x
             WHERE x.driver_id = d.id AND x.status <> 'done'
             ORDER BY x.dispatched_at DESC NULLS LAST

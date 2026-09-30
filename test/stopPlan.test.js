@@ -476,6 +476,33 @@ test('a driver who just ran 11 hours starts this run with the rest they still ow
   assert.ok(!warnings.some((w) => w.code === 'unexpected-hos-block'), 'a carried-over limit is not a planning bug')
 })
 
+// The case dispatch used to refuse outright (availabilityReasons.js's
+// OUT_OF_HOURS, removed): eleven hours driven, dispatched the same
+// instant, nothing left on the driving clock. The claim that justified
+// the refusal was that there is "nothing to plan" here. There is: the
+// full ten hours off at the origin, then the run.
+//
+// Kills: a planner that returns an empty plan (or a warning instead of a
+// timeline) when the driving clock is already at zero -- which is what
+// would make refusing at dispatch the only option.
+test('a driver dispatched with the driving clock already at zero opens the run with the full ten off', () => {
+  const { dutyTimeline, hosFacts, legalArrivalAt, warnings } = planStops({
+    routeGeometry: [pt(0), pt(100)],
+    distanceMi: 100,
+    startFuelGallons: NO_FUEL_STOP_TANK_GAL,
+    fuelCapacityGal: NO_FUEL_STOP_TANK_GAL,
+    facilities: [],
+    dispatchedAt: DISPATCHED_AT,
+    priorDutyEvents: [priorDriving(11, 0)],
+  })
+  assert.equal(dutyTimeline[0].status, 'off-duty')
+  assert.equal(restDurationsHours(dutyTimeline)[0], REQUIRED_REST_HOURS)
+  assert.equal(dutyTimeline[1].status, 'driving')
+  assert.ok(hosFacts.some((f) => f.code === 'DRIVING_LIMIT' && f.cfr === '395.3(a)(3)'))
+  assert.ok(legalArrivalAt, 'the run has a legal arrival, it is just ten hours later')
+  assert.ok(!warnings.some((w) => w.code === 'unexpected-hos-block'))
+})
+
 // Kills: gaps not treated as rest (a long-rested driver blocked anyway).
 test('a driver whose last run ended more than 10 hours ago starts driving immediately', () => {
   const { dutyTimeline, hosFacts } = planStops({

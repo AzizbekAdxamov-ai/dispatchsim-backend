@@ -93,9 +93,9 @@ const MAX_DISTANCE_MI = 2600
 
 // Every city pair within the usable distance band, computed once.
 //
-// Precomputed rather than sampled-and-retried: with 60-odd cities there
-// are a few thousand pairs, and drawing at random until one lands in range
-// would loop unpredictably on a sparse map. This also makes the true lane
+// Precomputed rather than sampled-and-retried: with ~150 cities there
+// are tens of thousands of pairs, and drawing at random until one lands in
+// range would loop unpredictably on a sparse map. This also makes the true lane
 // count knowable, which is what makes "how likely is a repeat" answerable.
 function buildLanes() {
   const lanes = []

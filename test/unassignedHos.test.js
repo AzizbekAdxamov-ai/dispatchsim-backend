@@ -52,7 +52,7 @@ test('the review threshold stays the regulation\'s', () => {
 
 // --- DB-backed flow (rolled back; skips without a database) -------------
 
-const hasDb = Boolean(process.env.DATABASE_URL)
+const { hasDb } = await import('./helpers/db.js')
 
 test('assign rewrites the record; annotate explains it; both leave one active row', { skip: !hasDb }, async (t) => {
   const { pool } = await import('../src/db/pool.js')
@@ -190,6 +190,25 @@ test('assign rewrites the record; annotate explains it; both leave one active ro
     assert.equal(originalB.annotation, 'Yard move at the terminal')
     assert.equal(originalB.driver_id, null)
 
+    // A second annotate on an ALREADY ANNOTATED record is refused too.
+    //
+    // This is the case the first version let through: annotate leaves the
+    // row active and unidentified, so the UPDATE matched a second time,
+    // replaced the carrier's earlier statement with no trace of it, and
+    // answered 200. The screen could not reach it -- the buttons hide
+    // once awaitingReview is false -- so the only thing standing between
+    // a destroyed record and the database was a component.
+    //
+    // Kills: the `annotation IS NULL` guard being dropped from
+    // ANNOTATE_UNIDENTIFIED_EVENT_SQL.
+    await assert.rejects(
+      () => service.annotateUnassignedHos({ eventId: eventIdB, annotation: 'Something else entirely' }, { client }),
+      (err) => err instanceof AppError && err.code === 'EVENT_ALREADY_REVIEWED',
+    )
+    const stillB = (await client.query(`SELECT annotation FROM duty_events WHERE id = $1`, [eventIdB])).rows[0]
+    assert.equal(stillB.annotation, 'Yard move at the terminal', 'the first statement survives the second attempt')
+
+
     // After both reviews the queue shows truck A gone (its only segment
     // is inactive) and truck B's segment reviewed.
     const list2 = await service.listUnassignedHos({ client })
@@ -215,6 +234,41 @@ test('assign rewrites the record; annotate explains it; both leave one active ro
     await assert.rejects(
       () => service.annotateUnassignedHos({ eventId: '999999999', annotation: 'Ghost' }, { client }),
       (err) => err instanceof AppError && err.code === 'EVENT_NOT_FOUND',
+    )
+  })
+})
+
+// The window the DATABASE keeps (migration 044), not only the schema in
+// front of it. 042 opened the birth case correctly -- an unidentified
+// record arrives with nobody to write a note -- but its new CHECK stopped
+// asking anything at all once that branch matched, so the annotate path
+// could write a one-character note onto exactly the rows this screen
+// touches. The 4..60 window is the ELD's (49 CFR 395 Subpart B, Appendix
+// A) and belongs in the constraint, like every other rule here.
+//
+// Its own transaction, for the reason dvirFlow.test.js's CHECK pair
+// spells out: a statement that is MEANT to fail aborts the transaction it
+// runs in, and everything after it comes back "current transaction is
+// aborted" instead of the thing it was checking.
+//
+// Kills: 044 reverted.
+test('the annotation window is a CHECK, not just a schema', { skip: !hasDb }, async () => {
+  const { pool } = await import('../src/db/pool.js')
+  const { inRollback } = await import('./helpers/rollback.js')
+
+  await inRollback(pool, async (client) => {
+    const truck = (await client.query(`SELECT id FROM trucks ORDER BY id LIMIT 1`)).rows[0]
+    if (!truck) return
+
+    await assert.rejects(
+      () => client.query(
+        `INSERT INTO duty_events (driver_id, truck_id, status, started_at, ended_at, origin, annotation)
+         VALUES (NULL, $1, 'driving', now() - interval '3 seconds', now() - interval '1 second',
+                 'unidentified', 'x')`,
+        [truck.id],
+      ),
+      (err) => /duty_events_annotation_required/.test(err.message),
+      'a one-character annotation is below the ELD window and the CHECK refuses it',
     )
   })
 })

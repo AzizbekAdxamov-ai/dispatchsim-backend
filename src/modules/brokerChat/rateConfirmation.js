@@ -38,10 +38,12 @@ function formatDateTime(dateStr) {
  *   distanceMi, equipmentType, equipmentLengthFt, commodity, weightLbs, pickupAt, deliveryAt,
  *   bookedLoadId }
  * @param {Object} data.broker - { name, contactName, mcNumber, paymentTerms }
- * @param {Object} data.user - { name, company }
+ * @param {Object} data.carrier - { name, contactName, mcNumber, dotNumber,
+ *   addressLine, phone } -- the company the
+ *   student runs and the person signing for it, from the users row.
  * @returns {Buffer} PDF buffer
  */
-export function generateRateConfirmation({ conversation, posting, broker, user }) {
+export function generateRateConfirmation({ conversation, posting, broker, carrier }) {
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ size: 'letter', margin: 50 })
     const chunks = []
@@ -81,19 +83,39 @@ export function generateRateConfirmation({ conversation, posting, broker, user }
     doc.text('BROKER', leftCol, y)
     doc.text('CARRIER', rightCol, y)
 
+    // Both columns read the same way down: who, then who signs, then
+    // the authority number. The carrier has no MC number anywhere in
+    // this program -- there is no column for one and no seed that issues
+    // one -- so the third line says that in words instead of printing an
+    // em dash that reads as a field somebody forgot to fill in.
     y += 15
     doc.fontSize(10).font('Helvetica')
     doc.text(broker.name || '—', leftCol, y)
-    doc.text(user?.name || user?.company || '—', rightCol, y)
+    doc.text(carrier?.name || '—', rightCol, y)
 
     y += 15
     doc.text(broker.contactName || '—', leftCol, y)
-    doc.text('MC —', rightCol, y)
+    doc.text(carrier?.contactName || '—', rightCol, y)
 
     y += 15
     // Not `MC ${mcNumber}` -- the stored value already starts with "MC-",
     // so that printed "MC MC-207863".
     doc.text(broker.mcNumber || 'MC —', leftCol, y)
+    // The carrier's own authority (048). This line used to read "MC number
+    // not issued in this program", in grey, where every real rate
+    // confirmation carries the number a broker checks before they send
+    // anyone a load. The company has one now, and this is where a
+    // dispatcher learns to look for it.
+    doc.text(carrier?.mcNumber || 'MC —', rightCol, y)
+
+    y += 13
+    doc.fontSize(8).fillColor('#666666')
+    doc.text(carrier?.dotNumber ? `USDOT ${carrier.dotNumber}` : '', rightCol, y)
+    y += 11
+    doc.text(carrier?.addressLine ?? '', rightCol, y)
+    y += 11
+    doc.text(carrier?.phone ?? '', rightCol, y)
+    doc.fontSize(10).fillColor('#000000')
 
     // --- Separator ---
     y += 25
@@ -161,10 +183,16 @@ export function generateRateConfirmation({ conversation, posting, broker, user }
     doc.text(posting.bookedLoadId ? `Load #${posting.bookedLoadId}` : 'Load — not yet booked', leftCol, y)
 
     // --- Footer ---
+    // Above the bottom margin, not on it. `page.height - 50` is exactly
+    // the margin line, so an 8pt line placed there did not fit in the
+    // content box and PDFKit flowed it onto a second page -- every rate
+    // confirmation this program has produced was two pages, the second
+    // one blank apart from this sentence. `lineBreak: false` keeps it on
+    // one line whatever the text is.
     doc.fontSize(8)
       .fillColor('#888888')
       .font('Helvetica')
-      .text(DISCLAIMER, 50, doc.page.height - 50, { align: 'center', width: doc.page.width - 100 })
+      .text(DISCLAIMER, 50, doc.page.height - 64, { align: 'center', width: doc.page.width - 100, lineBreak: false })
 
     doc.end()
   })

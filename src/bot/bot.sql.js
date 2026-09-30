@@ -29,6 +29,8 @@ export const DUE_DRIVER_MESSAGES_SQL = `
   SELECT m.id,
          m.content,
          m.deliver_at  AS "deliverAt",
+         to_char(m.deliver_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
+                       AS "deliverAtText",
          d.id          AS "driverId",
          d.name        AS "driverName",
          t.id          AS "truckId"

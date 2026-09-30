@@ -1,5 +1,6 @@
 // Cash: reading the account, and the one guard every spend goes through.
 import { AppError } from '../../lib/errors.js'
+import config from '../../config.js'
 import * as repo from './cash.repository.js'
 import { CREDIT_LIMIT_USD, OPENING_BALANCE_USD } from '../../constants/simClock.js'
 import { solvency, canCommitNewWork, STATES } from './solvency.service.js'
@@ -8,7 +9,12 @@ import { solvency, canCommitNewWork, STATES } from './solvency.service.js'
 // the account negative -- that is the credit line doing its job, and the
 // consequence arrives as interest on the next tick. It blocks only past
 // the limit, where a real lender would simply decline.
-export async function assertCanSpend(client, amountUsd) {
+// `enabled` is a seam, not an option any caller sets. With FINANCE=off the
+// balance is not consulted at all -- not read and then ignored -- so a
+// spend cannot be refused, and cannot fail on a balance nobody is looking
+// at. See config.js.
+export async function assertCanSpend(client, amountUsd, { enabled = config.financeEnabled } = {}) {
+  if (!enabled) return null
   const balance = await repo.getBalance(client)
   const after = balance - Math.abs(amountUsd)
   if (after < -CREDIT_LIMIT_USD) {
@@ -32,7 +38,11 @@ export async function assertCanSpend(client, amountUsd) {
 // The refusal is the LENDER and the market, not the program protecting
 // the student. Work already in transit finishes, invoices are still
 // collected, and drivers are still paid when payroll runs.
-export async function assertCanCommit(client, what = 'this') {
+// Same seam. With FINANCE=off the company is never declined for money:
+// booking a load, hiring a driver and buying a truck all go through, and
+// the solvency query is not run.
+export async function assertCanCommit(client, what = 'this', { enabled = config.financeEnabled } = {}) {
+  if (!enabled) return null
   const s = await solvency(client)
   if (canCommitNewWork(s.state)) return s
 
@@ -95,6 +105,13 @@ export async function getOverview() {
   return {
     ...summary,
     ...receivables,
+    // Whether the money model is running at all (config.js, FINANCE). The
+    // top bar reads this rather than guessing: with the model off the
+    // numbers below are still true history, but nothing accrues against
+    // them and nothing is refused because of them, so putting the balance
+    // in front of someone about to spend would state a consequence that
+    // is not there.
+    financeEnabled: config.financeEnabled,
     creditLimitUsd: CREDIT_LIMIT_USD,
     openingBalanceUsd: OPENING_BALANCE_USD,
     // How much is left before the credit line is exhausted. The number a

@@ -20,7 +20,7 @@ test('the review threshold the ELD tile states is repositioning\'s own', () => {
   assert.equal(REVIEW_THRESHOLD_MIN, 30)
 })
 
-const hasDb = Boolean(process.env.DATABASE_URL)
+const { hasDb } = await import('./helpers/db.js')
 
 test('the overview counts DQ states and lists open documents soonest-first', { skip: !hasDb }, async () => {
   const { pool } = await import('../src/db/pool.js')

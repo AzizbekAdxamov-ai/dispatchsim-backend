@@ -47,7 +47,7 @@ export function ceilingFor(posting) {
   return Math.round((posting.rateUsd * (1 + room)) / 25) * 25
 }
 
-export function buildBrokerSystemPrompt({ broker, posting }) {
+export function buildBrokerSystemPrompt({ broker, posting, carrier = null }) {
   const rpm = (posting.rateUsd / posting.distanceMi).toFixed(2)
   const ceiling = ceilingFor(posting)
   const ceilingRpm = (ceiling / posting.distanceMi).toFixed(2)
@@ -56,6 +56,12 @@ export function buildBrokerSystemPrompt({ broker, posting }) {
     `You are ${broker.contactName}, a freight broker at ${broker.name}.`,
     `Your character: ${broker.persona}`,
     '',
+    // Who is on the other end. A broker who does not know which carrier
+    // is calling cannot say "you ran that Laredo lane for me in March" --
+    // and the relationship is half of what gets a rate moved.
+    ...(carrier?.name
+      ? [`You are talking to ${carrier.name}${carrier.mcNumber ? ` (${carrier.mcNumber})` : ''}, a carrier.`, '']
+      : []),
     'THE LOAD YOU POSTED:',
     `  ${posting.originCity}, ${posting.originState} to ${posting.destinationCity}, ${posting.destinationState}`,
     `  ${posting.distanceMi} miles · ${posting.commodity} · ${posting.weightLbs} lbs`,

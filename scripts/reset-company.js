@@ -19,7 +19,7 @@
 import 'dotenv/config'
 import { pool } from '../src/db/pool.js'
 import { OPENING_BALANCE_USD } from '../src/constants/simClock.js'
-import { COMPANY_ROOTS, KEEP, REACHABLE_SQL, quoteIdent } from '../src/db/companyTables.js'
+import { COMPANY_ROOTS, KEEP, REACHABLE_SQL, quoteIdent, unknownTables } from '../src/db/companyTables.js'
 
 const DB_URL = process.env.DATABASE_URL
 if (!DB_URL) {
@@ -181,7 +181,7 @@ try {
   const reachable = await client.query(REACHABLE_SQL, [COMPANY_ROOTS])
   const reached = reachable.rows.map((r) => r.table_name)
 
-  const unknown = reached.filter((t) => !WIPED.has(t) && !KEEP.has(t))
+  const unknown = unknownTables(reached, WIPED)
 
   const survived = []
   for (const table of new Set([...WIPED, ...reached])) {

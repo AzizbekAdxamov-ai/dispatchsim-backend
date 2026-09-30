@@ -17,9 +17,16 @@ export const LOCK_TRUCK_FOR_RUN_SQL = `
 // One UPDATE per delivery. fuel_pct is recomputed in the same statement
 // from the same gallons being written -- two columns, one fact. The
 // odometer cap mirrors trucks_odometer's 2,000,000 bound.
+// $6 is where the run ENDED. trucks.current_location had no writer at all
+// until now -- it was seeded once and then frozen, which is why
+// availability.service.js lists it among the columns no refusal may be
+// built on. The delivery is the moment the truck's location is known for
+// certain, so this is where it is written; the next dispatch reads it to
+// work out how far the empty truck had to come (hos/repositioning.js).
 export const APPLY_RUN_TO_TRUCK_SQL = `
   UPDATE trucks
-     SET odometer_mi     = least(2000000, odometer_mi + $2),
+     SET current_location = coalesce($6, current_location),
+         odometer_mi     = least(2000000, odometer_mi + $2),
          fuel_gallons    = greatest(0, fuel_gallons - $3),
          fuel_pct        = greatest(0, least(100,
              round(100.0 * greatest(0, fuel_gallons - $3) / fuel_capacity_gal))),

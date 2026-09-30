@@ -29,11 +29,11 @@ test('resolveCity: a bare unambiguous name resolves, whitespace tolerated', () =
 })
 
 test('resolveCity: a duplicate bare name returns null -- never a guess', () => {
-  // The shipped set has unique names (invariant pinned below), so the
-  // ambiguity the guard exists for is forced here: a second Springfield
-  // is pushed, the bare query is made, and the set is restored. A
-  // find()-based resolver would return whichever entry comes first and
+  // A find()-based resolver would return whichever entry comes first and
   // draw the lane to the wrong state; the guard must refuse instead.
+  // Forced here with a synthetic second Dallas so that the assertion
+  // holds whatever the shipped set happens to contain -- the real
+  // collisions in it are pinned by the next test.
   CITIES.push({ city: 'Dallas', state: 'ZZ', lat: 37.2, lon: -93.3 })
   try {
     assert.equal(resolveCity('Dallas'), null)
@@ -45,9 +45,43 @@ test('resolveCity: a duplicate bare name returns null -- never a guess', () => {
   }
 })
 
-test('city set invariant: every city name is unique (bare-name resolution depends on it)', () => {
-  const names = CITIES.map((c) => c.city.toLowerCase())
-  assert.equal(new Set(names).size, names.length)
+test('city set invariant: a repeated city name is always a different state', () => {
+  // The set used to have 61 unique names, and this test used to pin that.
+  // It stopped being true the day the set grew to cover all 48 states:
+  // Portland, Charleston and Springfield are each a real city in two of
+  // them. That is fine -- resolveCity refuses a bare ambiguous name -- but
+  // what must never happen is the same (name, state) twice, because then
+  // even a state-qualified query is a coin flip.
+  //
+  // Kills: a paste that adds a second Portland, OR rather than the
+  // Portland, ME it was meant to add.
+  const byName = new Map()
+  for (const c of CITIES) {
+    const key = c.city.toLowerCase()
+    const states = byName.get(key) ?? new Set()
+    assert.ok(!states.has(c.state), `${c.city}, ${c.state} appears twice`)
+    states.add(c.state)
+    byName.set(key, states)
+  }
+
+  // Every name that repeats must be refused bare and resolve qualified.
+  const repeated = [...byName].filter(([, states]) => states.size > 1)
+  assert.ok(repeated.length > 0, 'expected the shipped set to contain same-name cities')
+  for (const [name, states] of repeated) {
+    assert.equal(resolveCity(name), null, `bare "${name}" should be ambiguous`)
+    for (const st of states) {
+      assert.equal(resolveCity(`${name}, ${st}`)?.state, st, `"${name}, ${st}" should resolve`)
+    }
+  }
+})
+
+test('cityCompletions offers both halves of an ambiguous name', () => {
+  // The bare name is refused, so the type-ahead is the only way a user
+  // gets to Portland at all. Kills a completion list that dedupes on the
+  // city name and silently drops one of the two.
+  const out = cityCompletions('portland', 6)
+  const states = out.filter((c) => c.city === 'Portland').map((c) => c.state).sort()
+  assert.deepEqual(states, ['ME', 'OR'])
 })
 
 test('resolveCity: unknown and empty queries are null', () => {

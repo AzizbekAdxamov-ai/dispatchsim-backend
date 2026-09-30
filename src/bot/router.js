@@ -18,7 +18,8 @@
 // and "cannot": typed without the argument. That is 'usage' -- one
 // sentence naming the missing word, not the whole list.
 //   /drivers       print the roster
-//   /help          print the commands
+//   /help          print the commands (also /start)
+//   /status        the driver, from the database -- no model involved
 //
 // Not linked? That is a fact about the CHAT, decided by the caller after
 // the router: the router has no right to send anything anywhere.
@@ -56,7 +57,14 @@ export function routeUpdate({ text, replyToTelegramMessageId, currentDriverId })
       case 'drivers':
         return { kind: 'drivers' }
       case 'help':
+      // /start is the first thing Telegram sends when someone opens a
+      // private chat with a bot, or unblocks one. Ignoring it -- which
+      // is what an unknown command gets -- means the very first press
+      // of the very first button is answered with silence.
+      case 'start':
         return { kind: 'help' }
+      case 'status':
+        return { kind: 'status' }
       default:
         // An unknown slash-word is probably a mistyped sentence, not a
         // message -- silently ignoring it beats dropping '/delivered to
@@ -66,7 +74,8 @@ export function routeUpdate({ text, replyToTelegramMessageId, currentDriverId })
   }
 
   // A reply to one of the bot's messages names the thread. The id is
-  // resolved to a conversation by the caller (telegram_deliveries).
+  // resolved to a driver by the caller, from the bot's own reply map
+  // (state.targets in src/bot/state.js).
   if (replyToTelegramMessageId) {
     return { kind: 'to-driver', replyToTelegramMessageId }
   }

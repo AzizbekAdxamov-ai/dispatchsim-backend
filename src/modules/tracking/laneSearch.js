@@ -18,8 +18,10 @@ import { CITIES, roadMiles } from '../../../scripts/seed/cities.js'
 // names work when they are unambiguous ("Dallas"); if two cities in the
 // set ever share a name, a bare query returns null rather than guessing
 // -- a wrong guess draws the lane to the wrong state, which is worse
-// than making the user type the state. (The set has 61 unique names
-// today; laneSearch.test.js pins that invariant.)
+// than making the user type the state. Since the set grew to cover all
+// 48 states there are real collisions in it (Portland ME/OR, Charleston
+// SC/WV, Springfield IL/MO), so this path is load-bearing rather than
+// theoretical; cityCompletions() below is how a user reaches either one.
 export function resolveCity(query) {
   const q = typeof query === 'string' ? query.trim() : ''
   if (!q) return null
@@ -39,7 +41,7 @@ export function resolveCity(query) {
 // starts with the query, most-populous-name-first is not knowable here --
 // alphabetical keeps the dropdown stable across keystrokes, which reads
 // as calmer than entries jumping around. `limit` guards the payload; the
-// closed set is 61 cities, so worst case is tiny anyway.
+// closed set is under 200 cities, so worst case is tiny anyway.
 export function cityCompletions(query, limit = 6) {
   const q = typeof query === 'string' ? query.trim().toLowerCase() : ''
   if (q.length < 2) return []

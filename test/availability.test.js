@@ -89,14 +89,35 @@ test('nobody threatens anybody', () => {
   }
 })
 
-// --- out-of-hours: the live 11-hour clock (syncDriverHos) --------------
+// --- hours of service is not a refusal, on either clock ----------------
 
-test('out-of-hours has lines for the driver to say, without inventing numbers', () => {
-  // The refusal line gets the minutes; the sentences must not round them
-  // into a different fact -- they reference the clock, not a fake figure.
-  const line = refusalLine({ driverId: 'd1', reason: REASONS.OUT_OF_HOURS, driveRemainingMin: 0 })
-  assert.ok(line, 'the reason has a line')
-  assert.ok(!/about|roughly|a couple/i.test(line), line)
+test('no hours-of-service reason exists', () => {
+  // Two have been tried: the ten-hour break and the 11-hour driving clock
+  // at zero. Both were the same block on different clocks, and both hid
+  // the plan the dispatcher is supposed to read.
+  //
+  // Kills: a re-added OUT_OF_HOURS / RESTING / HOS reason. The string
+  // check is deliberate -- a new name for the same idea should fail here
+  // too, which is why this looks at the values and not at one key.
+  for (const reason of REASON_KEYS) {
+    assert.ok(
+      !/hour|hos|rest|drive|duty|clock/i.test(reason),
+      `${reason} reads like an hours-of-service refusal; the stop planner owns that`,
+    )
+  }
+  assert.deepEqual([...REASON_KEYS].sort(), ['quit', 'unpaid'])
+})
+
+test('nothing in the driver\'s refusal vocabulary talks about the clock', () => {
+  // Kills: the OUT_OF_HOURS lines left behind on a reason that no longer
+  // exists -- dead sentences that read as shipped behaviour to the next
+  // person who opens the file.
+  for (const reason of REASON_KEYS) {
+    for (let i = 0; i < 20; i += 1) {
+      const line = refusalLine({ driverId: `d${i}`, reason, owedUsd: 100, unpaidCount: 1, daysOverdue: 2 })
+      assert.ok(!/eleven|ten off|drive time|395|hours of service/i.test(line), line)
+    }
+  }
 })
 
 test('every reason key still maps to refusal lines', () => {
@@ -108,7 +129,7 @@ test('every reason key still maps to refusal lines', () => {
 
 // --- the dispatch level: owed rest does not refuse ----------------------
 
-const hasDb = Boolean(process.env.DATABASE_URL)
+const { hasDb } = await import('./helpers/db.js')
 
 test('a driver with owed ten-hour rest is still dispatchable', { skip: !hasDb }, async (t) => {
   // The decision this test pins: the stop planner carries the rest into
@@ -148,5 +169,15 @@ test('a driver with owed ten-hour rest is still dispatchable', { skip: !hasDb },
     assert.equal(availability.available, true,
       'owed rest is carried by the stop plan, not refused at dispatch')
     assert.equal(availability.reason, null)
+
+    // The same decision on the other clock: eleven hours gone, nothing
+    // left to drive today. The planner opens the run with the full ten
+    // off at the origin, so this is a later ETA, not a refusal.
+    // Kills: the OUT_OF_HOURS branch coming back.
+    await client.query(`UPDATE drivers SET duty_status = 'driving', hos_remaining_min = 0 WHERE id = $1`, [driverId])
+    const atZero = await driverAvailability(client, driverId)
+    assert.equal(atZero.available, true,
+      'a driver at zero drive time is dispatched; the plan starts with their ten off')
+    assert.equal(atZero.reason, null)
   })
 })

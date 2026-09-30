@@ -221,10 +221,12 @@ export async function getConversationForPDF(conversationId, userId) {
             p.booked_load_id AS "bookedLoadId",
             b.name AS "brokerName", b.contact_name AS "brokerContactName",
             b.mc_number AS "mcNumber", b.credit_rating AS "creditRating",
-            b.days_to_pay AS "daysToPay"
+            b.days_to_pay AS "daysToPay",
+            u.company AS "carrierName", u.name AS "carrierContactName"
        FROM broker_conversations c
        JOIN load_postings p ON p.id = c.posting_id
        LEFT JOIN brokers b ON b.id = p.broker_id
+       JOIN users u ON u.id = c.user_id
       WHERE c.id = $1 AND c.user_id = $2`,
     [conversationId, userId],
   )

@@ -10,6 +10,7 @@
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
     "bot": "node src/bot/index.js",
+    "bot:check": "node scripts/bot-check.js",
     "migrate": "node src/db/migrate.js",
     "grant:admin": "node scripts/grant-admin.js",
     "db:pull": "prisma db pull",

@@ -2,7 +2,7 @@
   "summary": {
     "postings": {
       "requested": 600,
-      "accepted": 158
+      "accepted": 100
     },
     "truckListings": {
       "requested": 20,
@@ -12,7 +12,7 @@
   "gate": {
     "ok": false,
     "problems": [
-      "postings: 158/600 accepted (26%, need 90-110%)",
+      "postings: 100/600 accepted (17%, need 90-110%)",
       "truckListings: 8/20 accepted (40%, need 90-110%)"
     ]
   }

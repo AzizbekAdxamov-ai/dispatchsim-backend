@@ -18,6 +18,17 @@ export async function insertMany(client, rows) {
   return inserted
 }
 
+// One unidentified driving record. Returns null when the same truck
+// already has an active record starting at that instant -- a re-dispatch,
+// not an error.
+export async function insertUnidentified(client, { loadId, truckId, startedAt, endedAt }) {
+  const result = await client.query(
+    SQL.INSERT_UNIDENTIFIED_DUTY_EVENT_SQL,
+    [loadId, truckId, startedAt, endedAt],
+  )
+  return result.rows[0] ?? null
+}
+
 export async function recentForDriver(client, { driverId, since }) {
   const result = await client.query(SQL.RECENT_FOR_DRIVER_SQL, [driverId, since])
   return result.rows

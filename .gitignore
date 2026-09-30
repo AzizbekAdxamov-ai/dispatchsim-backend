@@ -20,3 +20,7 @@ prisma/migrations/
 # Qo'lda sinash uchun vaqtincha fayllar. Ular loyihaning bir qismi emas.
 tmp/
 test-rc.pdf
+
+# The bot's own bookkeeping: read position, current driver, reply map.
+# Not the company's data and not worth a table -- see src/bot/state.js.
+.bot-state.json

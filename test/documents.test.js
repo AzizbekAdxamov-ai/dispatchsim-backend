@@ -200,6 +200,14 @@ test('invoice PDF service: reuses finance.getInvoiceById, no second math', async
   // and the rendering, not the database.
   const { hooks } = await import('../src/modules/documents/documents.service.js')
   const original = hooks.getInvoiceById
+  const originalCarrier = hooks.getCompanyCarrier
+  // The company's row, stubbed for the same reason as the invoice: this
+  // test is about the paper, not about the database behind the name.
+  hooks.getCompanyCarrier = async () => ({
+    name: 'Keystone Line Haul', mcNumber: 'MC-741309', dotNumber: '3947182',
+    phone: '214-555-0110', addressLine: '4120 Empire Central Drive',
+    city: 'Dallas', state: 'TX', postalCode: '75247',
+  })
   hooks.getInvoiceById = async () => ({
     id: 'INV-2026-4471',
     loadId: '4471',
@@ -223,8 +231,13 @@ test('invoice PDF service: reuses finance.getInvoiceById, no second math', async
     const text = pdfText(pdf)
     assert.ok(text.includes('INV-2026-4471'))
     assert.ok(text.includes('$1,550'))
+    // Kills: the invoice naming the carrier after whoever asked for the
+    // PDF. 048 gave the company one name, and this is the paper that
+    // asks a broker to pay it.
+    assert.ok(text.includes('Keystone Line Haul'))
   } finally {
     hooks.getInvoiceById = original
+    hooks.getCompanyCarrier = originalCarrier
   }
 })
 
@@ -237,10 +250,22 @@ test('invoice PDF service: reuses finance.getInvoiceById, no second math', async
 // migration 001, not NULL) then name then the dash, same order the printed
 // paperwork has always fallen back through.
 
-test('carrierFromRow: a filled-in company wins', () => {
-  assert.deepEqual(
-    carrierFromRow({ company: 'Adxamov Logistics', name: 'Azizbek Adxamov' }),
-    { name: 'Adxamov Logistics' },
+// 048 put the company's own row above both of these. Kills: leaving the
+// document to name the carrier after whoever happens to be signing it --
+// two dispatchers with two spellings of the company meant two carriers
+// for one fleet.
+test('carrierFromRow: the company row wins over anything a person typed', () => {
+  const official = { name: 'Keystone Line Haul', mcNumber: 'MC-741309', dotNumber: '3947182', phone: '214-555-0110', addressLine: '4120 Empire Central Drive', city: 'Dallas', state: 'TX', postalCode: '75247' }
+  const out = carrierFromRow({ company: 'Adxamov Logistics', name: 'Azizbek Adxamov' }, official)
+  assert.equal(out.name, 'Keystone Line Haul')
+  assert.equal(out.mcNumber, 'MC-741309')
+  assert.equal(out.addressLine, '4120 Empire Central Drive, Dallas, TX 75247')
+})
+
+test('carrierFromRow: a filled-in company wins when there is no company row', () => {
+  assert.equal(
+    carrierFromRow({ company: 'Adxamov Logistics', name: 'Azizbek Adxamov' }).name,
+    'Adxamov Logistics',
   )
 })
 
@@ -249,20 +274,14 @@ test('carrierFromRow: an empty company falls back to the user\'s name', () => {
   // not NULL -- a check for `row.company == null` alone would print an
   // empty carrier line for every fresh account instead of falling through
   // to name.
-  assert.deepEqual(
-    carrierFromRow({ company: '', name: 'Azizbek Adxamov' }),
-    { name: 'Azizbek Adxamov' },
-  )
+  assert.equal(carrierFromRow({ company: '', name: 'Azizbek Adxamov' }).name, 'Azizbek Adxamov')
   // Whitespace-only counts as empty too.
-  assert.deepEqual(
-    carrierFromRow({ company: '   ', name: 'Azizbek Adxamov' }),
-    { name: 'Azizbek Adxamov' },
-  )
+  assert.equal(carrierFromRow({ company: '   ', name: 'Azizbek Adxamov' }).name, 'Azizbek Adxamov')
 })
 
 test('carrierFromRow: no company and no row at all fall back to the dash', () => {
-  assert.deepEqual(carrierFromRow({ company: '', name: '' }), { name: '—' })
+  assert.equal(carrierFromRow({ company: '', name: '' }).name, '—')
   // No row -- no auth (an unauthenticated caller reached this point) or no
   // matching user id.
-  assert.deepEqual(carrierFromRow(null), { name: '—' })
+  assert.equal(carrierFromRow(null).name, '—')
 })

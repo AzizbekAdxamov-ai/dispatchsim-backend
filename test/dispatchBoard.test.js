@@ -9,7 +9,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import 'dotenv/config'
 
-const hasDb = Boolean(process.env.DATABASE_URL)
+const { hasDb } = await import('./helpers/db.js')
 
 test('the board columns are disjoint and cover every load exactly once', { skip: !hasDb }, async () => {
   const { pool } = await import('../src/db/pool.js')

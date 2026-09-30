@@ -10,6 +10,31 @@ import { handleUpdate } from './incoming.js'
 
 export const POLL_TIMEOUT_SEC = 50
 
+// How many times one message may be re-tried before the bot stops
+// re-trying it.
+//
+// Keeping a message that never reached the app is right (nothing was
+// written, nobody was answered -- see isTransient below). Keeping it
+// FOREVER is not: a turn that fails the same way every time is retried
+// every five seconds, for as long as the bot runs, and each retry can
+// cost a model call. The wall of identical lines says the same thing
+// forever without ever saying what to do.
+//
+// Three tries, then the group is told plainly and the bot reads past it.
+// Consequence over blocking: one message is lost visibly instead of the
+// conversation stopping invisibly.
+export const MAX_TURN_ATTEMPTS = 3
+
+const ERROR_BACKOFF_MS = 5000
+const MAX_BACKOFF_MS = 60_000
+
+// Five seconds, then ten, then twenty, then a minute and no longer. The
+// flat five-second retry was honest about failing and useless about it:
+// twelve identical lines a minute, none of them new information.
+export function backoffMs(attempts, base = ERROR_BACKOFF_MS, max = MAX_BACKOFF_MS) {
+  return Math.min(base * 2 ** Math.max(0, attempts - 1), max)
+}
+
 // How many photos of one album travel with a turn, and how big each may
 // be. Both are this bot's choice, not a Telegram limit: a turn carries
 // the picture someone meant to show, and thirty of them at four
@@ -50,7 +75,13 @@ export function isTransient(err) {
   return err?.status === 0 || err?.status >= 500 || err?.code === 'ECONNREFUSED' || err?.code === 'CHAT_UNAVAILABLE'
 }
 
-export async function pollOnce({ telegram, state, save, userId, chatId, vision, fixedDriverName = null, app = undefined }) {
+export async function pollOnce({
+  telegram, state, save, userId, chatId, vision,
+  fixedDriverName = null, app = undefined,
+  // How many times the loop has already come back to this same message.
+  // index.js counts; pollOnce decides what the count means.
+  attempts = 0,
+}) {
   const updates = await telegram.getUpdates(state.offset, POLL_TIMEOUT_SEC)
   let next = state
 
@@ -72,14 +103,23 @@ export async function pollOnce({ telegram, state, save, userId, chatId, vision, 
           await telegram.sendMessage(chatId, line)
         }
       } catch (err) {
-        if (isTransient(err)) {
+        if (isTransient(err) && attempts < MAX_TURN_ATTEMPTS) {
           // The read position does NOT move: nobody has been answered
           // and nothing was written. Throwing hands the wait to the
           // loop, which comes back to this same message.
           console.error(`[bot] turn not delivered, keeping it: ${err.message}`)
           throw err
         }
-        console.error(`[bot] turn failed: ${err.message}`)
+        if (isTransient(err)) {
+          // Tried enough. The message is given up on OUT LOUD -- in the
+          // group, where the person who typed it is -- and then read
+          // past, so one unanswerable message cannot hold the whole
+          // conversation behind it.
+          console.error(`[bot] giving up on a turn after ${attempts} tries: ${err.message}`)
+          await telegram.sendMessage(chatId, `I could not deliver that message (${err.message}). Send it again when the app is back.`)
+        } else {
+          console.error(`[bot] turn failed: ${err.message}`)
+        }
       }
     }
 

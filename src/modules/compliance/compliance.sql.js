@@ -181,13 +181,22 @@ export const ASSIGN_REPLACEMENT_EVENT_SQL = `
 // The other branch of the review: the record is explained, not owned. The
 // original stays active as the record of the drive; a duplicate active
 // unidentified row would be two records for one drive, so the annotation
-// rides on the original and an empty result means it was already marked
-// -- 409, like a second assign.
+// rides on the original and an empty result means it was already
+// reviewed -- 409, like a second assign.
+//
+// `annotation IS NULL` is what makes that true. Without it the row stays
+// active and unidentified after the first review, so a second annotate
+// matched again, overwrote the carrier's earlier statement with no trace
+// of it, and answered 200. Nothing on the screen could reach it -- the
+// buttons hide once awaitingReview is false -- which is exactly the kind
+// of rule this project keeps in a constraint rather than in a component:
+// 49 CFR 395 requires the record to be RETAINED, and a silently replaced
+// annotation is a destroyed one.
 export const ANNOTATE_UNIDENTIFIED_EVENT_SQL = `
   UPDATE duty_events
      SET annotation = $2
    WHERE id = $1 AND driver_id IS NULL AND origin = 'unidentified'
-     AND record_status = 'active'
+     AND record_status = 'active' AND annotation IS NULL
   RETURNING id`
 
 // HOS Violations: every working driver's active log since $1, plus the

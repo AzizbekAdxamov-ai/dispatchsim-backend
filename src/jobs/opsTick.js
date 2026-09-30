@@ -12,6 +12,7 @@
 // clocks and different failure modes -- a broken market refresh should not
 // stop loads from being delivered.
 import cron from 'node-cron'
+import config from '../config.js'
 import { runTick } from '../modules/loads/dispatch.service.js'
 
 const TICK_EXPRESSION = '*/30 * * * * *'
@@ -77,6 +78,13 @@ async function tick(reason) {
 }
 
 export function startOpsTick() {
+  // Said once, out loud, at the one place the charges would have come
+  // from. With FINANCE=off the cost lines below simply never print, and a
+  // balance that stops moving with no explanation anywhere is exactly the
+  // kind of silence this log was built to end.
+  if (!config.financeEnabled) {
+    console.log('[opsTick] FINANCE=off — no credit-line interest, no insurance premium, and nothing refused for lack of money. Ledger untouched.')
+  }
   cron.schedule(TICK_EXPRESSION, () => tick('cron'))
   // Catch up immediately on boot: a server that was down for an hour has
   // loads that arrived and invoices that came due while it was off.

@@ -154,7 +154,6 @@ export function shapeBoard(rows, now = new Date()) {
       lat: position.lat,
       lon: position.lon,
       distanceRemainingMi: position.distanceRemainingMi,
-      laneHaversineMi: position.laneHaversineMi,
       // Lane endpoints with coordinates, for drawing the route line.
       originPos: position.origin,
       destinationPos: position.destination,

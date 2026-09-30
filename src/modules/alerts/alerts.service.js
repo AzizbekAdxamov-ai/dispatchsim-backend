@@ -8,9 +8,9 @@ import * as repo from './alerts.repository.js'
 import * as cashRepo from '../cash/cash.repository.js'
 import { FAMILIES, isLeavingSoon, HOS_LOW_THRESHOLD_MIN } from './alerts.catalog.js'
 import { simAgo, realAgo, place } from './alerts.format.js'
-import { CREDIT_LIMIT_USD } from '../../constants/simClock.js'
 import { EVENT_TYPES } from '../../constants/loadEvents.js'
 import * as solvencyService from '../cash/solvency.service.js'
+import config from '../../config.js'
 
 // Build one alert from a catalog family and the row behind it. Anything the
 // family's own functions need has already been shaped by the caller.
@@ -44,6 +44,23 @@ async function collect(label, fn, degraded) {
     degraded.push(label)
     return []
   }
+}
+
+// One account, one alert. The three states are different facts, not louder
+// versions of each other: under water, past the line, and insolvent are
+// answered by different numbers and call for different things.
+//
+// Pure, and exported, so the choice between them can be tested without a
+// database behind it. `enabled` is the FINANCE switch (config.js): with the
+// money model off nothing accrues against the balance and nothing is
+// refused because of it, so an alert about it would be the board reporting
+// a consequence that is not coming.
+export function cashAlert({ standing, balanceUsd, enabled = config.financeEnabled }) {
+  if (!enabled) return null
+  if (standing && standing.state === 'insolvent') return build('cash.insolvent', null, standing)
+  if (standing && standing.state === 'over_limit') return build('cash.limit-reached', null, standing)
+  if (balanceUsd < 0) return build('cash.negative', null, { balanceUsd })
+  return null
 }
 
 export async function listAlerts({ userId, now = new Date() }) {
@@ -100,17 +117,8 @@ export async function listAlerts({ userId, now = new Date() }) {
     alerts.push(build('invoice.overdue', i.loadId, i))
   }
 
-  // One account, one alert. The three states are different facts, not
-  // louder versions of each other: under water, past the line, and
-  // insolvent are answered by different numbers and call for different
-  // things.
-  if (standing && standing.state === 'insolvent') {
-    alerts.push(build('cash.insolvent', null, standing))
-  } else if (standing && standing.state === 'over_limit') {
-    alerts.push(build('cash.limit-reached', null, standing))
-  } else if (balanceUsd < 0) {
-    alerts.push(build('cash.negative', null, { balanceUsd }))
-  }
+  const cash = cashAlert({ standing, balanceUsd })
+  if (cash) alerts.push(cash)
 
   for (const d of drivers) {
     if (!d.truckId) {

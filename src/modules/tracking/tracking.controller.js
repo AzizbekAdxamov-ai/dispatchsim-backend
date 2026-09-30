@@ -2,8 +2,7 @@
 // The route already sits behind requireAuth + requireRole().
 
 import * as trackingService from './tracking.service.js'
-import { routeQuerySchema, loadRouteParamsSchema } from './tracking.schemas.js'
-import * as routingService from '../routing/routing.service.js'
+import { loadRouteParamsSchema } from './tracking.schemas.js'
 
 export async function board(req, res) {
   const result = await trackingService.inTransitBoard()
@@ -33,20 +32,6 @@ export async function laneSearch(req, res) {
 // waiting on the postings read the actual search runs.
 export function cityCompletions(req, res) {
   res.status(200).json(trackingService.searchCompletions(req.query.q))
-}
-
-// GET /tracking/route -- the actual road geometry for one lane, read
-// through routing.service.js's cache. Separate endpoint from the board
-// (not folded into /tracking/) because a route is fetched once per lane
-// and reused by every load on it -- it doesn't belong on a 10s poll any
-// more than /tracking/map's city list does.
-export async function route(req, res) {
-  const { originCity, originState, destinationCity, destinationState } = routeQuerySchema.parse(req.query)
-  const routes = await routingService.routesFor(
-    { city: originCity, state: originState },
-    { city: destinationCity, state: destinationState },
-  )
-  res.status(200).json({ routes })
 }
 
 // GET /tracking/loads/:loadId/route -- the FULL road geometry for ONE

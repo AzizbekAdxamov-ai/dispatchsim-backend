@@ -5,11 +5,10 @@
 // model that cannot see lives here too -- one place, so the honesty is
 // not scattered across conditionals.
 
-// (collectPhotos used to live here: it folded an album's updates into one
-// photo list. Parsing what Telegram sent is the BOT process's work now --
-// ../../../../telegram_bot/src/parse.js -- and it moved there with its
-// tests. This module keeps the decisions that need to know about the
-// model, which is the half that belongs to the app.)
+// (collectPhotos used to live here: it folded an album's updates into
+// one photo list. Parsing what Telegram sent belongs to ./parse.js, and
+// it moved there with its tests. This module keeps the decisions that
+// need to know about the model.)
 
 // The decision. CHAT_DRIVER_VISION=off -> the model must NOT be handed a
 // picture it cannot look at: pretending to have seen it is the one lie

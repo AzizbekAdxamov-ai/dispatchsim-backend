@@ -1,24 +1,22 @@
-# Every text file in this repo is LF in git, always.
+# Line endings are LF in the repository and LF in the working tree, on
+# every machine.
 #
-# Why this file exists: on 2026-09-16 nineteen files came back from an
-# editing pass with CRLF line endings. The content was byte-identical
-# after stripping the CRs, but git saw nineteen fully rewritten files, so
-# the diff for that day's work was unreadable -- and one of them was
-# 031_opening_balance.sql, a migration that had already been applied to
-# production. src/db/migrate.js checksums each migration file's bytes
-# (checksumOf, sha256 of the file) and compares it with the checksum
-# recorded in schema_migrations, so flipping LF to CRLF makes an applied
-# migration look edited on every subsequent run. That warning would have
-# been correct and useless at the same time: nothing about the SQL had
-# changed.
-#
-# `text=auto eol=lf` means git normalises to LF on commit and checks out
-# LF on every platform, Windows included. Node, Postgres and every tool in
-# this repo read LF fine on Windows.
+# Not a style preference: this project is edited from Windows, from a
+# Linux VM and by more than one assistant, and an editor that saved CRLF
+# once turned five untouched files into a 374-line "change" that hid the
+# real edits inside it. `text=auto eol=lf` makes git normalise on the way
+# in AND check out LF, so the working tree cannot drift again.
 * text=auto eol=lf
 
-# Binary: never touched, never normalised.
+# Binary: never touched, never diffed as text.
 *.png binary
 *.jpg binary
-*.webp binary
+*.jpeg binary
+*.gif binary
 *.ico binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.tgz binary
+*.zip binary

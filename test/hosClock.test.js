@@ -589,6 +589,28 @@ test('driverHosSnapshot saturates at the 14h/70h column bounds on an open-ended 
   assert.ok(snap.limits.some((l) => l.code === 'DUTY_WINDOW'), 'the reason travels with the snapshot')
 })
 
+// The clamp above is only correct while its two constants ARE the column
+// bounds. Nothing said so: the saturation test asserts the snapshot
+// against DUTY_WINDOW_HOURS and WEEKLY_LIMIT_HOURS_8DAY, and migration
+// 005 asserts nothing at all -- so raising either constant, or editing
+// the CHECK, would put the tick back on the failure the clamp was added
+// for, with every test still green.
+//
+// Read from the migration the same way DB_DUTY_STATUSES is, two tests
+// below.
+//
+// Kills: the constants and the CHECK drifting apart in either direction.
+test('the snapshot clamps are exactly migration 005\'s column bounds', () => {
+  const sql = readFileSync(join(here, '../src/db/migrations/005_drivers.sql'), 'utf8')
+  const bound = (name) => {
+    const m = sql.match(new RegExp(`${name}\\s+CHECK\\s*\\([^)]*BETWEEN\\s+0\\s+AND\\s+(\\d+)`))
+    assert.ok(m, `expected to find the ${name} CHECK in migration 005`)
+    return Number(m[1])
+  }
+  assert.equal(DUTY_WINDOW_HOURS * 60, bound('drivers_hours_today'))
+  assert.equal(WEEKLY_LIMIT_HOURS_8DAY * 60, bound('drivers_hours_week'))
+})
+
 // Kills: the ELD status vocabulary and migration 037's CHECK drifting apart.
 test('duty_events status CHECK (037) allows exactly the four ELD statuses', () => {
   const sql = readFileSync(join(here, '../src/db/migrations/037_duty_events.sql'), 'utf8')
