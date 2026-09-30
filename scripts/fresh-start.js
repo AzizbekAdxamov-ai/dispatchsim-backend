@@ -93,7 +93,7 @@ async function run() {
   // this script is to decide which of these rows to name on the command
   // line -- and you cannot name what you have not been shown.
   const users = await client.query(`
-    SELECT u.id, u.email, u.name, u.role, u.is_admin,
+    SELECT u.id, u.email, u.name, coalesce(u.active_role, 'dispatcher') AS active_role, u.is_admin,
            to_char(u.created_at, 'YYYY-MM-DD') AS created
       FROM users u
      ORDER BY u.created_at`)
@@ -101,7 +101,7 @@ async function run() {
   console.log('  USERS')
   for (const u of users.rows) {
     const marks = [u.is_admin ? 'admin' : ''].filter(Boolean).join(' ')
-    console.log(`    ${u.email.padEnd(34)} ${u.name.padEnd(22)} ${u.role.padEnd(14)} ${u.created}  ${marks}`)
+    console.log(`    ${u.email.padEnd(34)} ${u.name.padEnd(22)} ${u.active_role.padEnd(14)} ${u.created}  ${marks}`)
   }
   if (users.rowCount === 0) console.log('    (none)')
 

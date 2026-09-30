@@ -50,7 +50,7 @@ export const RELEASE = [
    `UPDATE load_postings
        SET status = 'open', booked_load_id = NULL, booked_by_user_id = NULL, booked_at = NULL
      WHERE status = 'booked'`,
-   'drivers'],
+   'none'],
 ]
 
 // Children before parents, so no foreign key has to be deferred. Every
