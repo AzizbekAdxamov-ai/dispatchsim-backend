@@ -9,6 +9,8 @@ import * as driversRepo from './drivers.repository.js'
 import * as loadsRepo from '../loads/loads.repository.js'
 import { AppError } from '../../lib/errors.js'
 import { computeProgress } from '../../lib/loadTimeline.js'
+import { fuelPercent } from '../driverChat/driverChat.prompt.js'
+import config from '../../config.js'
 
 function withCurrentLoadProgress(driver) {
   if (!driver.currentLoad) return driver
@@ -18,13 +20,34 @@ function withCurrentLoadProgress(driver) {
   }
 }
 
+// Whether this driver is the one the Telegram bot answers as. The bot is
+// configured by NAME (TELEGRAM_DRIVER_NAME), so the flag is a name
+// comparison -- and nothing else: the token, the chat id and every other
+// bot secret stay in config, and none of them reach this response.
+function withTelegramFlag(driver) {
+  const botName = config.telegramDriverName
+  return {
+    ...driver,
+    telegram: botName != null
+      && driver.name.trim().toLowerCase() === botName.trim().toLowerCase(),
+  }
+}
+
+// The truck's tank through the ONE percent calculation the driver chat
+// already uses, so the profile page and the driver's own words about
+// their fuel can never disagree about the same tank.
+function withTruckFuelPercent(driver) {
+  if (!driver.truck) return driver
+  return { ...driver, truck: { ...driver.truck, fuelPercent: fuelPercent(driver.truck) } }
+}
+
 export async function listDrivers({ limit }) {
   const [rows, counts] = await Promise.all([
     driversRepo.listDrivers({ limit }),
     driversRepo.countDriverStatuses(),
   ])
 
-  return { drivers: rows.map(withCurrentLoadProgress), meta: { counts } }
+  return { drivers: rows.map((d) => withTelegramFlag(withCurrentLoadProgress(d))), meta: { counts } }
 }
 
 export async function getDriverById(id) {
@@ -35,5 +58,8 @@ export async function getDriverById(id) {
 
   const recentLoads = await loadsRepo.listLoadsByDriverId(id, { limit: 10 })
 
-  return { ...withCurrentLoadProgress(driver), recentLoads }
+  return {
+    ...withTelegramFlag(withTruckFuelPercent(withCurrentLoadProgress(driver))),
+    recentLoads,
+  }
 }

@@ -50,12 +50,17 @@ const DRIVER_COLUMNS = `
 `
 
 // One truck at most per driver (trucks.driver_id is UNIQUE). NULL when the
-// driver has no truck assigned right now.
+// driver has no truck assigned right now. Fuel travels as the raw
+// gallons + capacity -- the percent is ONE computation away, in
+// driverChat.prompt.js's fuelPercent, and computing it here too would be
+// a second owner of the same tank.
 const TRUCK_LATERAL = `
   LEFT JOIN LATERAL (
     SELECT jsonb_build_object(
       'id', t.id, 'make', t.make, 'model', t.model, 'year', t.year,
-      'status', t.status, 'currentLocation', t.current_location
+      'status', t.status, 'currentLocation', t.current_location,
+      'odometerMi', t.odometer_mi,
+      'fuelGallons', t.fuel_gallons, 'fuelCapacityGal', t.fuel_capacity_gal
     ) AS truck
     FROM trucks t
     WHERE t.driver_id = d.id
