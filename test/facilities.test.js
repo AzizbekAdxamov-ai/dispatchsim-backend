@@ -373,11 +373,22 @@ test('the same city always produces the same ring', () => {
 })
 
 // Kills: dropping the dedupe -- a city stop landing on a corridor stop.
+//
+// The re-draw is part of the contract now: a point inside the merge
+// radius (or in the water) is rejected and the rng draws again. So the
+// second call with the first ring as `existing` does not replay the same
+// three draws -- it draws PAST them -- and the honest assertion is that
+// nothing it accepts sits within the merge radius of the first ring,
+// however many draws that took.
 test('a city stop inside the merge radius of a known point is dropped', () => {
   const plain = ringFor(DALLAS)
   assert.ok(plain.length > 0)
   const blocked = ringFor(DALLAS, { existing: plain })
-  assert.deepEqual(blocked, [], 'every point of its own ring blocks it the second time')
+  for (const p of blocked) {
+    const nearest = Math.min(...plain.map((q) => haversine(p, q)))
+    assert.ok(nearest > MERGE_RADIUS_MI,
+      `a re-drawn stop sits ${nearest.toFixed(1)}mi from the first ring -- inside the ${MERGE_RADIUS_MI}mi merge radius`)
+  }
 })
 
 // Kills: a ring that ignores the whole country -- every city must get
