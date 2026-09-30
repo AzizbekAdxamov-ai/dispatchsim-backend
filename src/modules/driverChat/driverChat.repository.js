@@ -21,7 +21,7 @@ export async function getDriverContext(driverId) {
   if (!r) return null
   return {
     driver: {
-      id: r.id, name: r.name, cdlClass: r.cdlClass,
+      id: r.id, name: r.name, cdlClass: r.cdlClass, bio: r.bio,
       homeBaseCity: r.homeBaseCity, homeBaseState: r.homeBaseState,
       dutyStatus: r.dutyStatus, payModel: r.payModel,
       payPercentBp: r.payPercentBp, payPerMileCents: r.payPerMileCents,

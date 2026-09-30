@@ -4,12 +4,14 @@
 // returns, and every test hands in a fake -- so a test never opens a
 // connection and cannot be broken by one.
 //
-// The five methods are exactly the Bot API calls this bot needs:
-//   getMe          who this token belongs to, and what it may read
-//   sendMessage    push a line into the group
-//   getUpdates     long-poll for what people typed
-//   getFile        resolve an incoming photo's file_id into a path
-//   downloadFile   fetch that path's bytes
+// The six methods are exactly the Bot API calls this bot needs:
+//   getMe           who this token belongs to, and what it may read
+//   sendMessage     push a line into the group
+//   sendChatAction  the "typing…" indicator, so an answer does not pop
+//                   in out of nowhere like a machine's
+//   getUpdates      long-poll for what people typed
+//   getFile         resolve an incoming photo's file_id into a path
+//   downloadFile    fetch that path's bytes
 //
 // Errors come back as plain Errors with a `status` attached (the HTTP
 // status when there was one): the seam names the fact, the caller names
@@ -57,6 +59,9 @@ export function createTelegramClient({ token, fetchImpl = fetch } = {}) {
     // bot ever says which one .env is pointed at.
     getChat: (chatId) => call('getChat', { chat_id: chatId }),
     sendMessage: (chatId, text) => call('sendMessage', { chat_id: chatId, text }),
+    // Best-effort by nature: an indicator nobody saw is nothing lost. The
+    // caller still decides what a failure means -- this only reports it.
+    sendChatAction: (chatId, action = 'typing') => call('sendChatAction', { chat_id: chatId, action }),
     getUpdates: (offset, timeoutSec) => call('getUpdates', { offset, timeout: timeoutSec }),
     getFile: (fileId) => call('getFile', { file_id: fileId }),
     // filePath comes from getFile's result; the token authenticates the

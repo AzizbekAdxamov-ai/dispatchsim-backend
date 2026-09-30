@@ -45,6 +45,7 @@ const DRIVER_COLUMNS = `
   d.pay_model          AS "payModel",
   d.pay_percent_bp     AS "payPercentBp",
   d.pay_per_mile_cents AS "payPerMileCents",
+  d.bio,
   d.created_at         AS "createdAt",
   d.updated_at         AS "updatedAt"
 `

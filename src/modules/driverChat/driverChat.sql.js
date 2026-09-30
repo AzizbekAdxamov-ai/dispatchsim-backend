@@ -30,6 +30,7 @@ export const GET_CONVERSATION_SQL = `
 // person whose day it is.
 export const GET_DRIVER_CONTEXT_SQL = `
   SELECT d.id, d.name, d.cdl_class AS "cdlClass",
+         d.bio,
          d.home_base_city AS "homeBaseCity", d.home_base_state AS "homeBaseState",
          d.duty_status AS "dutyStatus",
          d.current_city AS "currentCity", d.current_state AS "currentState",

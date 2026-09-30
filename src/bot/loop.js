@@ -42,6 +42,17 @@ export function backoffMs(attempts, base = ERROR_BACKOFF_MS, max = MAX_BACKOFF_M
 const MAX_PHOTOS_PER_TURN = 4
 const MAX_PHOTO_BYTES = 4 * 1024 * 1024
 
+// A line the INFRASTRUCTURE says -- provider limits, unreachable
+// providers, photo notices, help and /status output. Prefixed so it can
+// never be mistaken for the driver's own words: when the persona is a
+// single fixed driver in a private chat, a bare "The chat provider is
+// not answering" would sit in the thread as if Grace had said it, and
+// the one way to break a character is to make it say things a person
+// would not. The prefix is the seam between the road and the office.
+export function systemLine(text) {
+  return `[system] ${text}`
+}
+
 async function attachPhotos(fact, telegram) {
   const wanted = fact.photos.slice(0, MAX_PHOTOS_PER_TURN)
   const attached = []
@@ -100,7 +111,7 @@ export async function pollOnce({
         })
         next = result.state
         for (const line of result.replies) {
-          await telegram.sendMessage(chatId, line)
+          await telegram.sendMessage(chatId, systemLine(line))
         }
       } catch (err) {
         if (isTransient(err) && attempts < MAX_TURN_ATTEMPTS) {
@@ -116,7 +127,7 @@ export async function pollOnce({
           // past, so one unanswerable message cannot hold the whole
           // conversation behind it.
           console.error(`[bot] giving up on a turn after ${attempts} tries: ${err.message}`)
-          await telegram.sendMessage(chatId, `I could not deliver that message (${err.message}). Send it again when the app is back.`)
+          await telegram.sendMessage(chatId, systemLine(`I could not deliver that message (${err.message}). Send it again when the app is back.`))
         } else {
           console.error(`[bot] turn failed: ${err.message}`)
         }

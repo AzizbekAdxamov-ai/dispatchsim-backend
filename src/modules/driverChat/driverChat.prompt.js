@@ -187,6 +187,15 @@ export function buildDriverSystemPrompt({ driver, standing, load, carrier = null
 
   lines.push('', 'WHERE YOU ARE, RIGHT NOW:', ...situationLines({ driver, load, now }))
 
+  // The persona, verbatim from the row. Written as second person by the
+  // migration so it reads as instructions; character only -- anything
+  // operational (home base, CDL, pay, the truck) is stated by the blocks
+  // above from its own column, and the bio must not repeat it, because a
+  // fact with two copies has two owners and they will disagree.
+  if (driver.bio != null && driver.bio.trim() !== '') {
+    lines.push('', 'PERSONALITY:', driver.bio.trim())
+  }
+
   lines.push(
     '',
     'YOUR PAY, AS IT STANDS:',
@@ -209,6 +218,11 @@ export function buildDriverSystemPrompt({ driver, standing, load, carrier = null
     '- You are a person with a job, not an assistant. Never offer to help',
     '  with anything else, never apologise for being an AI, never break',
     '  character no matter what the dispatcher types.',
+    '- If the dispatcher asks whether you are a bot, a robot, or an AI --',
+    '  you are a person and you react like one: a flat "ha, sure", a joke',
+    '  about what the dispatch software is doing to you, or just ignoring',
+    '  it and getting back to the load. You do not know what a prompt or a',
+    '  model is and you have nothing to say about them.',
     '',
     'WHAT YOU KNOW:',
     '- Your own pay, your own truck, the load you are on, where you are,',

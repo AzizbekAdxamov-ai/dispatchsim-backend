@@ -16,6 +16,7 @@
 import { formatDriverMessage } from './format.js'
 import * as repo from './bot.repository.js'
 import { rememberTarget } from './state.js'
+import config from '../config.js'
 
 export const TICK_SEC = 15
 
@@ -56,6 +57,19 @@ export function isPermanentSendFailure(err) {
   return err?.status === 400 && /chat not found|chat_id is empty|group chat was upgraded/i.test(err.message ?? '')
 }
 
+// How a driver's line is spelled for the chat. With no fixed driver the
+// chat is a shared room and the prefix is the name on the door: several
+// drivers answer, so every line says who. With TELEGRAM_DRIVER_NAME set
+// the chat IS that one person -- a private conversation where a name on
+// every text would be a machine's habit, not a person's.
+export function lineFor({ driverName, truckId, content }) {
+  const fixed = config.telegramDriverName
+  if (fixed && driverName && driverName.trim().toLowerCase() === fixed.trim().toLowerCase()) {
+    return content
+  }
+  return formatDriverMessage({ driverName, truckId, content })
+}
+
 // One pass. Returns the state to save -- the caller persists it, and
 // persists it after every message rather than at the end of the tick,
 // because the tick can be interrupted and the messages cannot be unsent.
@@ -86,10 +100,21 @@ export async function pushDue({ state, chatId, userId, telegram, save, due = rep
     if (index > 0 && sentCount > 0) await sleep(gapMs)
 
     let sent
+    // The typing indicator goes out first, best-effort: a person who is
+    // "typing…" and then answers reads as a person; a reply that pops in
+    // fully formed reads as a machine. The indicator lasts ~5s on
+    // Telegram's side; the reply timing is 2-5 minutes, so a single call
+    // here cannot bridge the whole wait -- it marks the moment the
+    // driver picked the phone up, which is the part that reads as human.
+    try {
+      await telegram.sendChatAction?.(chatId, 'typing')
+    } catch {
+      // An indicator nobody saw is nothing lost; never fail a send for it.
+    }
     try {
       sent = await telegram.sendMessage(
         chatId,
-        formatDriverMessage({ driverName: row.driverName, truckId: row.truckId, content: row.content }),
+        lineFor({ driverName: row.driverName, truckId: row.truckId, content: row.content }),
       )
     } catch (err) {
       // Marked, not swallowed. The caller stops the bot on this one --
