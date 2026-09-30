@@ -84,19 +84,21 @@ export function billableSimDays(elapsedMs) {
 // ---------------------------------------------------------------------
 
 // Enough to buy a truck and still have working capital, not so much that
-// the first few decisions do not matter.
+// the first few decisions do not matter. $200,000 is Azizbek's figure
+// (2026-09-30): the company starts with ONE truck and ONE driver -- the
+// Telegram bot's Grace Lindqvist -- and the tighter purse is the point.
 //
 // This is where the number lives for the APP. A migration cannot import
-// it -- SQL has no access to this file -- so 021 spells 200000 out and
-// 031 corrects it to 250000 afterwards. Every database therefore ends up
-// at the same figure whichever order it was built in, but the two places
-// are kept in step by a test, not by hope:
+// it -- SQL has no access to this file -- so 021 spelled 200000 out and
+// 031 moved it to 250000, and now 050 moves it back to 200000. Every
+// database therefore ends up at the last figure whichever order it was
+// built in, but the two places are kept in step by a test, not by hope:
 // test/openingBalance.test.js fails if this constant and the last
 // migration that sets it ever disagree.
 //
 // scripts/reset-company.js writes the row from THIS constant, so a reset
 // always produces whatever is written here.
-export const OPENING_BALANCE_USD = 250000
+export const OPENING_BALANCE_USD = 200000
 
 // The balance is allowed to go negative. Refusing the purchase would be a
 // block, and this project's rule is consequence over blocking: the student

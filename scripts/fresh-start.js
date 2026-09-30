@@ -3,6 +3,7 @@
 //
 //   node scripts/fresh-start.js                                       # dry run: shows what is there
 //   node scripts/fresh-start.js --keep-driver=d4 --confirm
+//   node scripts/fresh-start.js --keep-driver=d4 --keep-truck=TX-4821-HX --confirm
 //   node scripts/fresh-start.js --keep-driver=d4 --delete-user=test@example.com --confirm
 //   node scripts/fresh-start.js --keep-driver=none --confirm          # keep nobody
 //
@@ -26,6 +27,13 @@
 // rest of the fleet, so they end up exactly like a driver hired five
 // minutes ago: a full 11-hour clock, zero miles, no truck, no history.
 //
+// --keep-truck changes exactly one thing: the truck named (or, without
+// it, the kept driver's own truck) survives the wipe. The truck keeps
+// its COLUMNS -- odometer, fuel, tires: facts about the unit -- and
+// loses its history like everyone else. A truck cannot be kept for a
+// driver who is not: the pairing lives in trucks.driver_id, and this
+// script writes no assignments -- that is the app's fleet feature.
+//
 // --keep-driver is required with --confirm. Not because the default is
 // dangerous but because there isn't one: this script cannot tell which
 // driver you meant, and the failure mode of guessing is unrecoverable.
@@ -37,7 +45,7 @@ import { COMPANY_ROOTS, KEEP, REACHABLE_SQL, quoteIdent, unknownTables } from '.
 // RELEASE, WIPE and the kept-driver reset live in a module so that
 // scripts/sql-check.js can PREPARE them: this file wipes on import and
 // cannot be imported by anything.
-import { RELEASE, WIPE, RESET_KEPT_DRIVER } from '../src/db/freshStart.sql.js'
+import { RELEASE, WIPE, RESET_KEPT_DRIVER, paramsFor, resolveTrucksToKeep } from '../src/db/freshStart.sql.js'
 
 const DB_URL = process.env.DATABASE_URL
 if (!DB_URL) {
@@ -67,6 +75,7 @@ function listArg(flag) {
 const keepArgs = listArg('--keep-driver')
 const keepNobody = keepArgs.length === 1 && keepArgs[0].toLowerCase() === 'none'
 const KEEP_DRIVERS = keepNobody ? [] : keepArgs
+const keepTruckArgs = listArg('--keep-truck')
 const DELETE_USERS = listArg('--delete-user').map((e) => e.toLowerCase())
 
 const WIPED = new Set(WIPE.map(([name]) => name))
@@ -95,6 +104,12 @@ async function run() {
     console.log(`    ${u.email.padEnd(34)} ${u.name.padEnd(22)} ${u.role.padEnd(14)} ${u.created}  ${marks}`)
   }
   if (users.rowCount === 0) console.log('    (none)')
+
+  const trucks = await client.query(`
+    SELECT t.id, t.year, t.make, t.model, t.odometer_mi,
+           t.driver_id AS driver
+      FROM trucks t
+     ORDER BY t.id`)
 
   const drivers = await client.query(`
     SELECT d.id, d.name, d.duty_status,
@@ -157,6 +172,34 @@ async function run() {
     problems.push('that would delete the last admin — nobody could edit the carrier or promote anyone afterwards')
   }
 
+  // Which trucks survive: --keep-truck, or the kept drivers' own trucks.
+  // The rules live in freshStart.sql.js as a pure function so the tests
+  // can kill their mutations without a database; a refusal (an unknown
+  // id, a kept driver stranded without their unit) exits here, before
+  // the transaction opens.
+  const resolution = resolveTrucksToKeep({
+    trucks: trucks.rows,
+    drivers: drivers.rows,
+    keepDrivers: KEEP_DRIVERS,
+    keepTruckArgs,
+  })
+  if (resolution.error) {
+    console.log(`\n  ${resolution.error}\n`)
+    process.exitCode = 1
+    return
+  }
+  const KEEP_TRUCKS = resolution.keep
+
+  console.log('\n  TRUCKS')
+  for (const t of trucks.rows) {
+    const keeping = KEEP_TRUCKS.includes(t.id) ? '  <-- KEEP' : ''
+    console.log(
+      `    ${t.id.padEnd(14)} ${String(t.year).padEnd(5)} ${`${t.make} ${t.model}`.padEnd(24)} ` +
+      `${String(t.odometer_mi).padStart(7)} mi  driver ${String(t.driver ?? 'none').padEnd(5)}${keeping}`,
+    )
+  }
+  if (trucks.rowCount === 0) console.log('    (none)')
+
   if (problems.length) {
     console.log('')
     for (const p of problems) console.log(`  ${p}`)
@@ -167,18 +210,20 @@ async function run() {
 
   if (!CONFIRM) {
     console.log('\n  Nothing has been changed. To do it:')
-    console.log('    node scripts/fresh-start.js --keep-driver=<id> [--delete-user=<email>] --confirm\n')
+    console.log('    node scripts/fresh-start.js --keep-driver=<id> [--keep-truck=<id>] [--delete-user=<email>] --confirm\n')
     return
   }
 
   await client.query('BEGIN')
 
-  for (const [name, sql] of RELEASE) {
-    const r = await client.query(sql, [KEEP_DRIVERS])
+  // Every truck-aware statement takes both lists. The rest take the
+  // drivers alone, exactly as before.
+  for (const [name, sql, kind] of RELEASE) {
+    const r = await client.query(sql, paramsFor(kind, KEEP_DRIVERS, KEEP_TRUCKS))
     console.log(`  released ${name.padEnd(26)} ${r.rowCount}`)
   }
-  for (const [name, sql] of WIPE) {
-    const r = await client.query(sql, sql.includes('$1') ? [KEEP_DRIVERS] : [])
+  for (const [name, sql, kind] of WIPE) {
+    const r = await client.query(sql, paramsFor(kind, KEEP_DRIVERS, KEEP_TRUCKS))
     console.log(`  deleted  ${name.padEnd(26)} ${r.rowCount}`)
   }
   if (KEEP_DRIVERS.length) {
@@ -205,11 +250,12 @@ async function run() {
   //   broken yet.
   //
   //   survived -- a table still holds rows it should not. The kept
-  //   drivers and their DQ files are the only rows allowed to survive,
-  //   so the number expected is stated rather than assumed.
+  //   drivers, their DQ files and their trucks are the only rows allowed
+  //   to survive, so the number expected is stated rather than assumed.
   const expected = new Map([
     ['drivers', KEEP_DRIVERS.length],
     ['driver_qualification', KEEP_DRIVERS.length],
+    ['trucks', KEEP_TRUCKS.length],
   ])
 
   const reachable = await client.query(REACHABLE_SQL, [COMPANY_ROOTS])
@@ -247,6 +293,9 @@ async function run() {
            coalesce(d.current_city, d.home_base_city) AS city,
            coalesce(d.current_state, d.home_base_state) AS state
       FROM drivers d ORDER BY d.id`)
+  const trucksLeft = await client.query(`
+    SELECT t.id, t.odometer_mi, t.driver_id
+      FROM trucks t ORDER BY t.id`)
   const balance = await client.query('SELECT coalesce(sum(amount_usd),0)::int AS balance FROM cash_ledger')
 
   console.log('\n  on the payroll now:')
@@ -255,6 +304,13 @@ async function run() {
       `${d.hos_remaining_min} min of clock, ${d.total_miles} miles`)
   }
   if (after.rowCount === 0) console.log('    (nobody)')
+
+  console.log('\n  in the yard:')
+  for (const t of trucksLeft.rows) {
+    console.log(`    ${t.id} — ${t.odometer_mi} mi, driver ${t.driver_id ?? 'none'}`)
+  }
+  if (trucksLeft.rowCount === 0) console.log('    (no trucks)')
+
   console.log(`\n  balance: $${balance.rows[0].balance.toLocaleString()}\n`)
 }
 
