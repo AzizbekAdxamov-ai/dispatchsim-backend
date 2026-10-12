@@ -54,4 +54,41 @@ test('the broker contact name is stripped the same way', () => {
 test('a reply that is only a label is kept, never emptied', () => {
   // Kills: returning an empty string, which would be saved and sent blank.
   assert.equal(stripSpeakerLabel('Grace:', 'Grace Miller'), 'Grace:')
+  assert.equal(stripSpeakerLabel('**Grace:**', 'Grace Miller'), '**Grace:**')
+})
+
+test('emphasis that belongs to the content is not eaten', () => {
+  // Kills: an optional closing mark after the colon consuming the reply's
+  // own opening emphasis ("*sighs* ok" -> "sighs* ok").
+  assert.equal(stripSpeakerLabel('Grace: *sighs* ok', 'Grace Miller'), '*sighs* ok')
+  assert.equal(stripSpeakerLabel('Grace: _ok_', 'Grace Miller'), '_ok_')
+  assert.equal(stripSpeakerLabel('Grace: **Yes** I can', 'Grace Miller'), '**Yes** I can')
+})
+
+test('a repeated label is removed, a bracketed or full-width one too', () => {
+  // Kills: only one label being peeled ("Grace: Grace: hi"), "[Grace]:" not
+  // matched, or the full-width colon not matched.
+  assert.equal(stripSpeakerLabel('Grace: Grace: hi', 'Grace Miller'), 'hi')
+  assert.equal(stripSpeakerLabel('[Grace]: hi', 'Grace Miller'), 'hi')
+  assert.equal(stripSpeakerLabel('Grace：hi', 'Grace Miller'), 'hi')
+})
+
+test('leading whitespace and a newline after the colon are tolerated', () => {
+  // Kills: the pattern requiring the label at index 0 or a space after the colon.
+  assert.equal(stripSpeakerLabel('\n\nGrace: hi', 'Grace Miller'), 'hi')
+  assert.equal(stripSpeakerLabel('Grace:\nhi', 'Grace Miller'), 'hi')
+})
+
+test('names with punctuation or accents match', () => {
+  // Kills: names not regex-escaped ("J.R." matching any character, or
+  // breaking on the apostrophe) and accented names not folding case.
+  assert.equal(stripSpeakerLabel("Sean O'Neil: hi", "Sean O'Neil"), 'hi')
+  assert.equal(stripSpeakerLabel('J.R.: hi', 'J.R.'), 'hi')
+  assert.equal(stripSpeakerLabel('JxRx: hi', 'J.R.'), 'JxRx: hi')
+  assert.equal(stripSpeakerLabel('ZOË: hi', 'Zoë'), 'hi')
+})
+
+test('a longer word that starts with the name is not a label', () => {
+  // Kills: dropping the colon/boundary requirement so "Graceful:" loses "Grace".
+  assert.equal(stripSpeakerLabel('Graceful: hi', 'Grace Miller'), 'Graceful: hi')
 })
