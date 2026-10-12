@@ -6,7 +6,9 @@
 // driver_settlements exactly. A generated sentence can round $1,840 to
 // "about two grand", or say "a couple of weeks" when the table says nine
 // days, and then the dispatcher is holding two versions of one fact with
-// nothing to say which is true. The conversation that follows is the
+// nothing to say which is true. (The wait is worded by describeWait --
+// exact up to two weeks, "a few weeks" after -- the same words the prompt
+// gives the model, so the line and the chat still agree.) The conversation that follows is the
 // model's; this first line is the database speaking in the driver's voice.
 //
 // Wording varies by driver so the same person sounds like themselves and
@@ -15,6 +17,7 @@
 // technique brokerChat uses for its per-posting ceiling.
 
 import { REASONS } from '../../constants/availabilityReasons.js'
+import { describeWait } from '../../constants/driverPay.js'
 
 function hashPick(id, n) {
   let h = 2166136261
@@ -31,9 +34,9 @@ function money(n) {
 }
 
 const UNPAID = [
-  (a) => `I am not taking another load until I am paid. ${money(a.owedUsd)} still owed, oldest one is ${a.daysOverdue} days past due.`,
-  (a) => `Sorry, no. You still owe me ${money(a.owedUsd)} across ${a.unpaidCount} settlement${a.unpaidCount === 1 ? '' : 's'} and the oldest is ${a.daysOverdue} days out. Settle that and I will roll.`,
-  (a) => `Not until that ${money(a.owedUsd)} hits my account. I have been waiting ${a.daysOverdue} days on the oldest one.`,
+  (a) => `I am not taking another load until I am paid. ${money(a.owedUsd)} still owed, oldest one is ${describeWait(a.daysOverdue)} past due.`,
+  (a) => `Sorry, no. You still owe me ${money(a.owedUsd)} across ${a.unpaidCount} settlement${a.unpaidCount === 1 ? '' : 's'} and the oldest is ${describeWait(a.daysOverdue)} out. Settle that and I will roll.`,
+  (a) => `Not until that ${money(a.owedUsd)} hits my account. I have been waiting ${describeWait(a.daysOverdue)} on the oldest one.`,
 ]
 
 const QUIT = [

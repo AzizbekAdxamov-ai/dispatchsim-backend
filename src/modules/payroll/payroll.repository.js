@@ -45,3 +45,22 @@ export async function driverOwed(client, driverId) {
   const result = await runner.query(SQL.DRIVER_OWED_ONE_SQL, [driverId])
   return result.rows[0] ?? null
 }
+
+// Lock the tick watermark and return it; null when this is the first tick
+// ever seen (the row is created at `now` and there is no gap to measure).
+export async function lockTickClock(client, now) {
+  await client.query(SQL.ENSURE_TICK_CLOCK_SQL, [now.toISOString()])
+  const result = await client.query(SQL.READ_TICK_CLOCK_SQL)
+  const raw = result.rows[0]?.lastAt
+  return raw ? new Date(raw) : null
+}
+
+export async function writeTickClock(client, at) {
+  await client.query(SQL.WRITE_TICK_CLOCK_SQL, [at.toISOString()])
+}
+
+// Returns how many unpaid settlements were pushed.
+export async function holdSettlementClock(client, seconds) {
+  const result = await client.query(SQL.HOLD_SETTLEMENT_CLOCK_SQL, [seconds])
+  return result.rowCount
+}

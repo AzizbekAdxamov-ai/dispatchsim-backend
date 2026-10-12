@@ -79,6 +79,17 @@ export function billableSimDays(elapsedMs) {
   return Math.min(elapsedMs, MAX_CATCHUP_REAL_MS) / REAL_MS_PER_SIM_DAY
 }
 
+// The other half of billableSimDays: the real time a gap DROPPED. Interest
+// stops billing at the cap; anything the company owes ON A DATE has to stop
+// ageing at the same point, or the dropped time comes back as lateness. A
+// driver's settlement is the case that did: the server off over a weekend
+// left Grace "4,236 days past due" for pay that was never late in any
+// world the student lived in. Whole seconds, because SQL takes an integer.
+export function droppedGapSeconds(elapsedMs) {
+  if (!(elapsedMs > MAX_CATCHUP_REAL_MS)) return 0
+  return Math.floor((elapsedMs - MAX_CATCHUP_REAL_MS) / 1000)
+}
+
 // ---------------------------------------------------------------------
 // Money
 // ---------------------------------------------------------------------

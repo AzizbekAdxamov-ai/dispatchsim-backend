@@ -97,3 +97,21 @@ export function stageFor(daysOverdue) {
 export function willAcceptWork(stage) {
   return stage === 'ok' || stage === 'asks'
 }
+
+// How a wait is SAID, as opposed to how it is decided.
+//
+// stageFor() keeps working on the exact day count; this only chooses the
+// words. Past two weeks a person stops counting days -- and the count
+// itself stops being trustworthy: it is simulated time, and a company
+// left running over a weekend reads "300 days" for money that was never
+// really late that long. "a few weeks" and "over two months" say the same
+// thing a driver would, without pinning a number the world cannot back.
+export const WAIT_EXACT_MAX_DAYS = 14
+export const WAIT_WEEKS_MAX_DAYS = 60
+
+export function describeWait(days) {
+  const n = Math.max(0, Math.floor(Number(days) || 0))
+  if (n <= WAIT_EXACT_MAX_DAYS) return `${n} ${n === 1 ? 'day' : 'days'}`
+  if (n <= WAIT_WEEKS_MAX_DAYS) return 'a few weeks'
+  return 'over two months'
+}

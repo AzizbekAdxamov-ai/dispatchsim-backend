@@ -22,6 +22,7 @@ import {
   simDaysToSeconds,
   simDaysToMs,
   billableSimDays,
+  droppedGapSeconds,
   interestForPeriodExactTiered,
 } from '../../constants/simClock.js'
 import { TERM_DAYS } from '../../constants/paymentTerms.js'
@@ -1334,6 +1335,35 @@ export async function syncDriverHos() {
   return synced
 }
 
+// Stop the payroll clock while the company was not running.
+//
+// Interest drops an offline gap (billableSimDays); a settlement's due date
+// is a wall-clock instant, so it kept ageing through the same gap and the
+// driver came back "4,236 days past due" and sat in the quits stage for
+// good. This shifts every unpaid due_at forward by what the gap dropped
+// (gap minus MAX_CATCHUP_REAL_MS), once: the watermark row is locked FOR
+// UPDATE, so concurrent ticks queue, and each one moves it forward in the
+// same transaction as the shift. A normal gap shifts nothing. Payroll
+// itself stays manual.
+//
+// Broker invoices are deliberately NOT shifted: an invoice that comes due
+// while the server is off is simply paid on the next tick -- the company
+// is paid early, nothing ages into a penalty.
+export async function holdPayrollClock({ run = withTransaction, nowFn = () => new Date() } = {}) {
+  let held = 0
+  await run(async (client) => {
+    const now = nowFn()
+    const lastAt = await payrollRepo.lockTickClock(client, now)
+    if (!lastAt) return
+    const seconds = droppedGapSeconds(now.getTime() - lastAt.getTime())
+    if (seconds > 0) held = await payrollRepo.holdSettlementClock(client, seconds)
+    // Never backwards: a tick that queued on the lock carries a `now`
+    // taken before the previous one wrote its own.
+    if (now > lastAt) await payrollRepo.writeTickClock(client, now)
+  })
+  return held
+}
+
 // The three stages are independent on purpose. Each one already handles
 // its own failures, and this makes sure a thrown error in one can never
 // stop the other two -- the failure mode that froze the whole simulator.
@@ -1346,6 +1376,9 @@ export async function runTick() {
       return null
     }
   }
+  // First: a settlement earned by this tick's deliveries must not be
+  // shifted by a gap that ended before it existed.
+  await settle('payroll clock', holdPayrollClock)
   const delivered = (await settle('delivery', deliverArrivedLoads)) ?? []
   const paid = (await settle('invoices', payDueInvoices)) ?? []
   // Mid-route fuel: the stop was already decided at dispatch, this is only

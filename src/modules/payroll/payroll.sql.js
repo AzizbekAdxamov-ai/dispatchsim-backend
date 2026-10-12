@@ -127,3 +127,32 @@ export const DRIVER_OWED_ONE_SQL = `
     LEFT JOIN driver_settlements s ON s.driver_id = d.id
    WHERE d.id = $1
    GROUP BY d.id, d.name`
+
+// The company clock stopped while nobody was running it: push every unpaid
+// settlement's due date forward by the real seconds the gap dropped, so a
+// settlement ages only through time the company actually lived. Paid rows
+// are history and stay exactly as they were.
+export const HOLD_SETTLEMENT_CLOCK_SQL = `
+  UPDATE driver_settlements
+     SET due_at = due_at + ($1::int * interval '1 second')
+   WHERE paid_at IS NULL`
+
+// The tick's own watermark for the above. A key of its own rather than the
+// interest one: interest's stands still under FINANCE=off, and a gap
+// measured from a stale watermark would shift pay for time the server was
+// up. DO NOTHING + FOR UPDATE is the whole concurrency story: the first
+// tick in creates the row, and every tick after it queues on the row lock
+// and reads the watermark the previous one left.
+export const ENSURE_TICK_CLOCK_SQL = `
+  INSERT INTO sim_state (key, value, updated_at)
+  VALUES ('tick_clock', jsonb_build_object('lastAt', $1::text), now())
+  ON CONFLICT (key) DO NOTHING`
+
+export const READ_TICK_CLOCK_SQL = `
+  SELECT value->>'lastAt' AS "lastAt" FROM sim_state
+   WHERE key = 'tick_clock' FOR UPDATE`
+
+export const WRITE_TICK_CLOCK_SQL = `
+  UPDATE sim_state
+     SET value = jsonb_build_object('lastAt', $1::text), updated_at = now()
+   WHERE key = 'tick_clock'`

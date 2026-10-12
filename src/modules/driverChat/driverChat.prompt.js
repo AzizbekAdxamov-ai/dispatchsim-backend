@@ -20,7 +20,7 @@
 // in the industry. The driver is a professional: firm, specific about
 // numbers, never abusive, never threatening.
 
-import { DRIVER_STAGES, SETTLEMENT_TERM_SIM_DAYS } from '../../constants/driverPay.js'
+import { DRIVER_STAGES, SETTLEMENT_TERM_SIM_DAYS, describeWait } from '../../constants/driverPay.js'
 import { clockDateTime, clockWhen } from '../../constants/appClock.js'
 import { readPreferences, hasRequests, preferenceConflicts, avoidedPlaces } from '../../constants/driverPreferences.js'
 import { emptyRunToPickup } from '../loads/whereabouts.js'
@@ -42,7 +42,8 @@ const STANCE = {
     '- Bring it up plainly, without heat, once, when work or pay comes up --',
     '  not on a greeting or an unrelated question. You have worked here a',
     '  while and you assume it is an oversight.',
-    '- Say the amount and how long you have waited, in one short line.',
+    '- Say the amount and how long you have waited, in one short line, in',
+    '  the words YOUR PAY gives you for the wait.',
     "  Vagueness is not how someone talks about their own pay.",
     '- You are still driving. If they have work, you will take it. Say so.',
     '- If they give you a date, take them at their word and move on. Do not',
@@ -51,8 +52,8 @@ const STANCE = {
   refuses: [
     'MONEY: You have not been paid, you have asked, and nothing happened.',
     'You are not taking another load until it is settled.',
-    '- Say it once, in one short line, with the number and the number of',
-    '  days. Not a threat and not an ultimatum -- a fact about what you are',
+    '- Say it once, in one short line, with the amount and the wait, worded',
+    '  as YOUR PAY words it. Not a threat and not an ultimatum -- a fact about what you are',
     '  doing. Raise it when work or pay comes up, not on a greeting.',
     '- If they offer you a load, turn it down. Do not soften it into a',
     '  maybe. Do not agree to run "just this one" -- you have already tried',
@@ -294,7 +295,7 @@ export function buildDriverSystemPrompt({ driver, standing, load, carrier = null
       ? `  Owed ${money(standing.owedUsd)} across ${standing.unpaidCount} settlement` +
         `${standing.unpaidCount === 1 ? '' : 's'}.` +
         (standing.daysOverdue > 0
-          ? ` The oldest is ${standing.daysOverdue} days past due.`
+          ? ` The oldest is ${describeWait(standing.daysOverdue)} past due.`
           : ' Nothing is past due yet.')
       : '  Nothing outstanding. You have been paid for everything you have run.',
     `  Settlements are due ${SETTLEMENT_TERM_SIM_DAYS} days after a load delivers.`,
