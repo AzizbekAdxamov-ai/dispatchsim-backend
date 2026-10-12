@@ -419,16 +419,12 @@ export function placeAroundCity(city, {
   const want = CITY_STOPS_MIN + Math.floor(rng() * (CITY_STOPS_MAX - CITY_STOPS_MIN + 1))
   const maxDraws = want * 12
   let draws = 0
-  let rejected = 0
   while (accepted.length < want && draws < maxDraws) {
     draws += 1
     const bearing = rng() * 2 * Math.PI
     const distance = minMi + rng() * (maxMi - minMi)
     const p = offsetPoint(city.lat, city.lon, bearing, distance)
-    if (!isOnLand(p.lat, p.lon)) {
-      rejected += 1
-      continue
-    }
+    if (!isOnLand(p.lat, p.lon)) continue
     if (isNear(p.lat, p.lon)) continue
     accepted.push({ lat: round4(p.lat), lon: round4(p.lon) })
   }

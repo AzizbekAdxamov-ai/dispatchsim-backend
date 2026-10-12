@@ -20,6 +20,7 @@ import assert from 'node:assert/strict'
 import { inflateSync } from 'node:zlib'
 
 import { generateRateConfirmation } from '../src/modules/brokerChat/rateConfirmation.js'
+import { brokerTerms, termsLines } from '../src/constants/accessorials.js'
 
 // Every FlateDecode stream in the file, inflated and concatenated. A
 // stream that will not inflate (an embedded font, say) is skipped rather
@@ -130,4 +131,17 @@ test('the practice disclaimer is on the page', async () => {
     conversation: CONVERSATION, posting: POSTING, broker: BROKER, carrier: CARRIER,
   }))
   assert.ok(text.includes('practice document, not a contract'))
+})
+
+// Kills: a rate confirmation without the broker's terms, or with terms
+// from somewhere other than the function the chat quotes from. What the
+// broker said in the thread is what is on the paper.
+test('the paper carries the same accessorial terms the broker quotes', async () => {
+  const text = pdfText(await generateRateConfirmation({
+    conversation: CONVERSATION, posting: POSTING, broker: BROKER, carrier: CARRIER,
+  }))
+  assert.ok(text.includes('ACCESSORIALS'), 'no accessorials section')
+  for (const line of termsLines(brokerTerms(BROKER.name, POSTING.equipmentType))) {
+    assert.ok(text.includes(line), `missing: ${line}`)
+  }
 })

@@ -158,8 +158,9 @@ export function generateLoad(rng, { avoid, brokerHistory, hiddenRateShare = 0 } 
   const [wLo, wHi] = WEIGHT_BAND[equipmentType]
   // The band is the SAME function validate.js uses, so a generated rate is
   // inside the band by construction and the clamp downstream is a no-op
-  // rather than a silent correction.
-  const [rLo, rHi] = rateBandFor(equipmentType, lane.distanceMi)
+  // rather than a silent correction. Priced from where the load STARTS:
+  // DAT's benchmarks are by origin region (src/constants/marketRates.js).
+  const [rLo, rHi] = rateBandFor(equipmentType, lane.distanceMi, lane.origin.state)
 
   return {
     originCity: lane.origin.city,

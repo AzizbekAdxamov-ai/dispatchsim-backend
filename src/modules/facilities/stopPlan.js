@@ -83,6 +83,7 @@ import {
   toHosDomain, withOffDutyGaps, HOS_TIME_SCALE,
 } from '../../constants/hosClock.js'
 import { simDaysToMs } from '../../constants/simClock.js'
+import { clockDateTime } from '../../constants/appClock.js'
 import { SPACING_MI, MERGE_RADIUS_MI, AVG_HIGHWAY_MPH } from '../../../scripts/seed/facilities.js'
 import { haversineMi } from '../../../scripts/seed/cities.js'
 
@@ -604,8 +605,10 @@ export function planStops({
     hosFacts.push({
       code: 'LATE_VS_PROMISED',
       cfr: null,
-      detail: `The HOS-legal arrival (${legalArrivalAt}) is after the broker's promised window `
-        + `(${new Date(promisedMs).toISOString()}) -- the mandatory rest and break time above does not fit inside it.`,
+      // On the company clock, as a person reads a time -- not an ISO string
+      // in UTC, which is what the Trip plan printed until 2026-10-08.
+      detail: `The HOS-legal arrival (${clockDateTime(legalArrivalAt)} CT) is after the broker's promised window `
+        + `(${clockDateTime(new Date(promisedMs).toISOString())} CT) -- the mandatory rest and break time above does not fit inside it.`,
     })
   }
 

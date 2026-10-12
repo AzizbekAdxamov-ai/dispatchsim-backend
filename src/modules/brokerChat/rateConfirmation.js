@@ -9,6 +9,7 @@
 // that it is not a contract.
 
 import PDFDocument from 'pdfkit'
+import { brokerTerms, termsLines } from '../../constants/accessorials.js'
 
 const DISCLAIMER = 'DispatchSim — practice document, not a contract'
 
@@ -173,6 +174,18 @@ export function generateRateConfirmation({ conversation, posting, broker, carrie
     // belong on the document: a rate confirmation states them, and a
     // dispatcher who reads this one learns how long the money will take.
     doc.text(`Payment terms ${broker.paymentTerms || 'net30'}`, leftCol, y)
+
+    // --- Accessorials ---
+    // The terms the broker quoted in the chat, from the same function
+    // (src/constants/accessorials.js): what was said is what is signed.
+    y += 20
+    doc.fontSize(9).font('Helvetica-Bold').fillColor('#000000')
+    doc.text('ACCESSORIALS', leftCol, y)
+    doc.font('Helvetica').fillColor('#444444')
+    for (const line of termsLines(brokerTerms(broker.name, posting.equipmentType))) {
+      y += 13
+      doc.text(line, leftCol, y)
+    }
 
     // --- Load number ---
     y += 25

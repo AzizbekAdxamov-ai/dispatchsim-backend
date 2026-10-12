@@ -12,10 +12,28 @@ import { AppError } from '../../lib/errors.js'
 import { findCity } from '../../../scripts/seed/cities.js'
 import { termsForDaysToPay } from '../../constants/paymentTerms.js'
 import { getAgreedRate } from '../brokerChat/brokerChat.repository.js'
+import { marketFacts } from '../../constants/marketRates.js'
 
 // ---------------------------------------------------------------------
 // Read endpoints
 // ---------------------------------------------------------------------
+
+// The market a posting sits in, attached on the way out: what freight
+// leaving its origin pays this week, and what freight leaving its
+// destination pays -- the reload the truck will be hunting for. Computed
+// from the posting's own states and equipment (src/constants/
+// marketRates.js), never stored: the benchmark is the week's, the posting
+// is the broker's. null for equipment DAT does not report.
+export function withMarket(posting) {
+  return {
+    ...posting,
+    market: marketFacts({
+      originState: posting.originState,
+      destinationState: posting.destinationState,
+      equipmentType: posting.equipmentType,
+    }),
+  }
+}
 
 export async function listPostings(input) {
   const { page, limit, fromCity, fromState, toCity, toState } = input
@@ -51,7 +69,7 @@ export async function listPostings(input) {
   const deadheadTo = toCity && toState ? { city: toCity, state: toState } : null
 
   return {
-    postings,
+    postings: postings.map(withMarket),
     meta: {
       page,
       limit,
@@ -74,7 +92,7 @@ export async function getPostingById(id, { fromCity, fromState, toCity, toState 
   if (!posting) {
     throw new AppError('POSTING_NOT_FOUND')
   }
-  return posting
+  return withMarket(posting)
 }
 
 // ---------------------------------------------------------------------

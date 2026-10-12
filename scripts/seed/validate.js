@@ -11,6 +11,8 @@
 // city/banned-word checks are integrity checks; the rate/weight checks
 // are normalization of a number that's expected to vary).
 import { CITY_KEYS, findCity, roadMiles } from './cities.js'
+import { EQUIPMENT_KEYS } from '../../src/constants/equipment.js'
+import { marketBand, REGION_STATES, DB_RPM_MIN, DB_RPM_MAX } from '../../src/constants/marketRates.js'
 
 // The words themselves, as data, so a prompt can tell a model what to
 // avoid. On 2026-09-13 scripts/refresh-vocabulary.js asked Groq for
@@ -65,11 +67,19 @@ function findBannedField(item) {
   return null
 }
 
+// The old pricing model, kept for the equipment DAT does not report.
+//
 // Real-world dry-van market band in $/mile. Every other equipment type is
 // this band scaled by a multiplier -- reefer and tanker cost more to run
 // (temperature control, hazmat/washout rules), flatbed a bit more than
 // dry-van, and a short haul commands a premium because the truck's fixed
 // costs (fuel to reposition, driver's day) get spread over fewer miles.
+//
+// None of these numbers has a source. Since 2026-10-05 dry van, reefer
+// and flatbed price from DAT's regional benchmarks instead
+// (src/constants/marketRates.js); this band is what is left for
+// step-deck, tanker and power-only, and the short-haul premium still
+// applies to everything. Both are on the list to check with dispatchers.
 const BASE_RATE_BAND = [1.8, 2.8]
 const EQUIPMENT_RATE_MULTIPLIER = {
   reefer: 1.18,
@@ -79,8 +89,29 @@ const EQUIPMENT_RATE_MULTIPLIER = {
 const SHORT_HAUL_MAX_MI = 250
 const SHORT_HAUL_MULTIPLIER = 1.25
 
-// The widest band rateBandFor can ever return, computed from the same
-// multipliers rather than typed out beside them.
+function legacyBand(equipmentType) {
+  const equipmentMultiplier = EQUIPMENT_RATE_MULTIPLIER[equipmentType] ?? 1
+  return BASE_RATE_BAND.map((v) => v * equipmentMultiplier)
+}
+
+// The $/mi band a load is priced in.
+//
+// With an origin state and an equipment type DAT reports, the band is that
+// region's market (marketBand). Without either, the old band. A short haul
+// gets its premium on top, and the result never leaves the database's own
+// $1-5/mi band (migrations 007/010): a short reefer out of Upper Midwest
+// would otherwise price at $6/mi and be refused by the CHECK -- capped
+// here, in the open, rather than discovered as an insert error.
+export function rateBandFor(equipmentType, distanceMi, originState = null) {
+  const base = (originState && marketBand(originState, equipmentType)) || legacyBand(equipmentType)
+  const haulMultiplier = distanceMi < SHORT_HAUL_MAX_MI ? SHORT_HAUL_MULTIPLIER : 1
+  const inDb = (v) => Math.min(DB_RPM_MAX, Math.max(DB_RPM_MIN, v))
+  return [inDb(base[0] * haulMultiplier), inDb(base[1] * haulMultiplier)]
+}
+
+// The widest band rateBandFor can ever return, computed by asking it --
+// every equipment type, every state in a region, long haul and short,
+// and no state at all (the old band).
 //
 // schemas.js bounds LoadItem.ratePerMile with these. Before, the schema
 // said 1.2-4.0 while this function could produce 4.375 for a short-haul
@@ -90,22 +121,14 @@ const SHORT_HAUL_MULTIPLIER = 1.25
 // the clamp then quietly raised it. A generator that produces the band
 // directly hit the wall the model had been steered around.
 //
-// Derived, so the two can no longer disagree. Change a multiplier and the
-// schema follows.
-const ALL_MULTIPLIERS = [1, ...Object.values(EQUIPMENT_RATE_MULTIPLIER)]
-export const RATE_ABSOLUTE_MIN = BASE_RATE_BAND[0] * Math.min(...ALL_MULTIPLIERS)
-export const RATE_ABSOLUTE_MAX =
-  BASE_RATE_BAND[1] * Math.max(...ALL_MULTIPLIERS) * SHORT_HAUL_MULTIPLIER
+// Derived, so the two can no longer disagree.
+const ALL_BANDS = EQUIPMENT_KEYS.flatMap((eq) => [null, ...Object.values(REGION_STATES).flat()]
+  .flatMap((state) => [rateBandFor(eq, SHORT_HAUL_MAX_MI - 1, state), rateBandFor(eq, SHORT_HAUL_MAX_MI, state)]))
+export const RATE_ABSOLUTE_MIN = Math.min(...ALL_BANDS.map((b) => b[0]))
+export const RATE_ABSOLUTE_MAX = Math.max(...ALL_BANDS.map((b) => b[1]))
 
-export function rateBandFor(equipmentType, distanceMi) {
-  const equipmentMultiplier = EQUIPMENT_RATE_MULTIPLIER[equipmentType] ?? 1
-  const haulMultiplier = distanceMi < SHORT_HAUL_MAX_MI ? SHORT_HAUL_MULTIPLIER : 1
-  const [min, max] = BASE_RATE_BAND
-  return [min * equipmentMultiplier * haulMultiplier, max * equipmentMultiplier * haulMultiplier]
-}
-
-export function clampRatePerMile(equipmentType, distanceMi, ratePerMile) {
-  const [min, max] = rateBandFor(equipmentType, distanceMi)
+export function clampRatePerMile(equipmentType, distanceMi, ratePerMile, originState = null) {
+  const [min, max] = rateBandFor(equipmentType, distanceMi, originState)
   return Math.min(max, Math.max(min, ratePerMile))
 }
 
@@ -165,7 +188,7 @@ export function validateLoadItem(item) {
       originCity,
       destinationCity,
       distanceMi,
-      ratePerMile: clampRatePerMile(item.equipmentType, distanceMi, item.ratePerMile),
+      ratePerMile: clampRatePerMile(item.equipmentType, distanceMi, item.ratePerMile, item.originState),
       weightLbs: clampWeightLbs(item.weightLbs),
     },
   }
