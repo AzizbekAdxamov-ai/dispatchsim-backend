@@ -52,6 +52,11 @@ export const KEEP = Object.freeze(new Set([
   // company over, it does not erase what the models were measured on. No
   // foreign keys on purpose (see 056), so the walk never reaches it.
   'chat_turn_log',
+  // chat_script_requests (058) -- what the eval/scenario scripts spent at
+  // the provider today. It is the provider account's count, not the
+  // company's: a reset must not hand the daily budget back requests that
+  // were already spent. No foreign keys.
+  'chat_script_requests',
   // pre_trip_inspections (045) -- the pre-trip walk-around (49 CFR 392.7)
   // names the truck, driver and load it belongs to: company property, all
   // three, and reached by the walk from loads and trucks either way. It is

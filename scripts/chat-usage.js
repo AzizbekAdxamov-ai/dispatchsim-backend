@@ -49,12 +49,13 @@ async function report() {
     const { rows } = await pool.query(DAILY_USAGE_SQL, [
       '00000000-0000-0000-0000-000000000000', scope,
     ])
-    const { account_used: used, seats } = rows[0]
+    const { account_used: used, script_used: scriptUsed, seats } = rows[0]
     const share = fairShare(budget, Math.max(1, seats))
 
     const label = scope === 'both' ? 'broker + driver' : scope
     console.log(`${label.padEnd(16)} ${provider.name}  ${config.model}`)
     console.log(`  ${bar(used, budget)}  ${used}/${budget}`)
+    console.log(`  app ${used - scriptUsed} + scripts ${scriptUsed} (chat:eval / chat:scenarios)`)
     console.log(`  bugun ${seats} ta dispecher, har biriga ${share} ta`)
     if (used >= budget) {
       console.log('  BYUDJET TUGADI — bugun hech kim xabar yubora olmaydi')

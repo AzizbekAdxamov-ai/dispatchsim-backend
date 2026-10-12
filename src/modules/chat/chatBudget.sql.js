@@ -27,26 +27,37 @@
 // provider's wall. Each dispatcher row now carries the requests its reply
 // actually cost, and the budget is their sum.
 //
+//   script_used the part of account_used that the evaluation and scenario
+//              scripts spent (058). They write no threads, so before 058
+//              the budget could not see them. Their rows have no user: they
+//              add to the wallet's total, never to anyone's share or seat.
+//
 //   my_turns   whether this dispatcher has a seat yet -- by turns, not by
 //              requests, because a turn that cost nothing still sat down
 export const DAILY_USAGE_SQL = `
   WITH turns AS (
-    SELECT c.user_id, m.provider_requests AS n
+    SELECT c.user_id, m.provider_requests AS n, false AS script
       FROM driver_messages m
       JOIN driver_conversations c ON c.id = m.conversation_id
      WHERE m.role = 'dispatcher'
        AND m.created_at >= date_trunc('day', now())
        AND $2::text IN ('both', 'driver')
     UNION ALL
-    SELECT c.user_id, m.provider_requests
+    SELECT c.user_id, m.provider_requests, false
       FROM broker_messages m
       JOIN broker_conversations c ON c.id = m.conversation_id
      WHERE m.role = 'dispatcher'
        AND m.created_at >= date_trunc('day', now())
        AND $2::text IN ('both', 'broker')
+    UNION ALL
+    SELECT NULL::uuid, s.requests, true
+      FROM chat_script_requests s
+     WHERE s.created_at >= date_trunc('day', now())
+       AND $2::text IN ('both', s.side)
   )
   SELECT coalesce(sum(n) FILTER (WHERE user_id = $1), 0)::int AS used,
          coalesce(sum(n), 0)::int                           AS account_used,
+         coalesce(sum(n) FILTER (WHERE script), 0)::int     AS script_used,
          count(*) FILTER (WHERE user_id = $1)::int           AS my_turns,
          count(DISTINCT user_id)::int                       AS seats
     FROM turns`

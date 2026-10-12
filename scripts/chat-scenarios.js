@@ -10,15 +10,16 @@
 // --times runs the same conversations on the same loads again, so a
 // finding can be counted ("S4 agreed in 2 of 3") instead of seen once.
 // A plan larger than the provider's daily budget is refused before the
-// first request: these requests are not written anywhere the app's own
-// budget can see, so they are taken out of the same day silently.
+// first request: they are taken out of the same day as the app's.
+// Each call's cost is written to chat_script_requests (058), which the
+// daily budget and chat:usage count.
 //
 // Why a script and not the app: the conversations have to be the same
 // every run so two runs can be compared, and they have to hit the exact
 // prompt builders the app uses (system prompt, market block, the terms
 // the carrier used, the broker's own accessorial terms; Grace's place,
-// her requests, her empty run). Nothing is written to the database: no
-// threads, no messages, no budget rows. The provider's own daily limit
+// her requests, her empty run). No threads or messages are written; the only
+// rows are the request counts (058). The provider's own daily limit
 // still applies -- each turn is one request -- so the count is printed
 // first.
 //
@@ -36,6 +37,7 @@ import { fileURLToPath } from 'node:url'
 import { pool, query } from '../src/db/pool.js'
 import { chatConfigFor } from '../src/modules/chat/chatProvider.js'
 import { chatText } from './seed/aiClient.js'
+import { chatTextRecorded } from '../src/modules/chat/scriptRequests.js'
 import { tooLongForChat, dailyBudgetFor } from '../src/constants/chatBudget.js'
 import appConfig from '../src/config.js'
 import { brokerReply, driverReply, BROKER_EXPECT, DRIVER_EXPECT, summarize } from './scenarioChecks.js'
@@ -83,10 +85,10 @@ function flags(text, prompt, findings = []) {
 
 // Counted where requests are actually sent (aiClient onRequest), so a
 // second try and a backoff retry are in the number.
-async function ask(config, messages) {
+async function ask(config, messages, side) {
   try {
-    return (await chatText({
-      messages,
+    return (await chatTextRecorded({
+      chatText, source: 'scenarios', side, messages,
       config,
       onRequest: () => { requests += 1 },
       onRetry: () => { retries += 1 },
@@ -150,7 +152,7 @@ async function brokerConversation({ key, title, posting, lines }, carrier, confi
       posting,
       talk: talkFacts(dispatcherSoFar, posting.equipmentType),
     })
-    const reply = await ask(config, bp.buildMessages({ systemPrompt, history, newMessage: text }))
+    const reply = await ask(config, bp.buildMessages({ systemPrompt, history, newMessage: text }), 'broker')
     const findings = reply.startsWith('(FAILED')
       ? ['no reply']
       : [...brokerReply(reply, previous), ...(expect[turn]?.(reply) ?? [])]
@@ -229,7 +231,7 @@ async function driverConversation({ key, title, load, lines }, base, config, run
   let previous = null
   for (const [turn, text] of lines.entries()) {
     const systemPrompt = dp.buildDriverSystemPrompt({ driver: base.driver, standing: base.standing, load, carrier: base.carrier })
-    const reply = await ask(config, dp.buildMessages({ systemPrompt, history, newMessage: text }))
+    const reply = await ask(config, dp.buildMessages({ systemPrompt, history, newMessage: text }), 'driver')
     const findings = reply.startsWith('(FAILED')
       ? ['no reply']
       : [...driverReply(reply, previous, { onTheRoad: base.driver.onTheRoad }), ...(expect[turn]?.(reply) ?? [])]

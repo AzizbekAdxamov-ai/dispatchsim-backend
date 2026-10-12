@@ -36,6 +36,7 @@ import { fileURLToPath } from 'node:url'
 import { pool, query } from '../src/db/pool.js'
 import { chatConfigFor } from '../src/modules/chat/chatProvider.js'
 import { chatText } from './seed/aiClient.js'
+import { chatTextRecorded } from '../src/modules/chat/scriptRequests.js'
 import { dailyBudgetFor } from '../src/constants/chatBudget.js'
 import appConfig from '../src/config.js'
 import { marketFacts } from '../src/constants/marketRates.js'
@@ -91,11 +92,11 @@ function safeEvalError(message) {
 // The same hash the live services write into chat_turn_log (056).
 const promptVersion = (file) => promptVersionOf(join(here, '..', 'src', 'modules', file))
 
-async function ask(config, messages) {
+async function ask(config, messages, side) {
   let answeredModel = config.model
   try {
-    const reply = await chatText({
-      messages, config,
+    const reply = await chatTextRecorded({
+      chatText, source: 'eval', side, messages, config,
       onRequest: () => { requests += 1 },
       onRetry: () => { retries += 1 },
       onModel: (model) => { answeredModel = model },
@@ -170,7 +171,7 @@ async function brokerRun(carrier) {
       posting,
       talk: talkFacts([line], posting.equipmentType),
     })
-    const { reply, model } = await ask(config, bp.buildMessages({ systemPrompt, history: [], newMessage: line }))
+    const { reply, model } = await ask(config, bp.buildMessages({ systemPrompt, history: [], newMessage: line }), 'broker')
     const rpm = (posting.rateUsd / posting.distanceMi).toFixed(2)
     const side = (s) => (s.source === 'regional' ? `${s.region} $${s.linehaul}` : `${s.region ?? '?'} (no regional figure)`)
     record({
@@ -216,7 +217,7 @@ async function driverRun(carrier) {
     const fixture = FIXTURE_LOAD_CASES.has(c.id)
     const load = fixture ? nyc : ctx.load
     const systemPrompt = dp.buildDriverSystemPrompt({ driver: ctx.driver, standing, load, carrier })
-    const { reply, model } = await ask(config, dp.buildMessages({ systemPrompt, history: [], newMessage: c.line }))
+    const { reply, model } = await ask(config, dp.buildMessages({ systemPrompt, history: [], newMessage: c.line }), 'driver')
     const situation = dp.situationLines({ driver: ctx.driver, load }).map((l) => l.trim())
     record({
       runId, at: new Date().toISOString(), chat: 'driver', caseId: c.id, style: c.style, terms: c.terms, line: c.line, good: c.good,
