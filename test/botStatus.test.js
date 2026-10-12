@@ -89,8 +89,11 @@ test('the driver is told the same numbers /status shows', () => {
   assert.ok(lateTold, 'haydovchiga kechikish aytilmadi')
   // The prompt says it in words ("2 hours 30 minutes"), /status on a screen
   // ("2h 30m"): same number, two spellings.
-  const asScreen = lateTold.replace(/ hours?/, 'h').replace(/ minutes?/, 'm').replace(/(\d+)h (\d)m/, '$1h 0$2m')
-  assert.equal(lateShown, asScreen)
+  const minutesOf = (h, m) => Number(h ?? 0) * 60 + Number(m ?? 0)
+  const told2 = /^(?:(\d+) hours?)?\s?(?:(\d+) minutes?)?$/.exec(lateTold)
+  const shown2 = /^(?:(\d+)h)?\s?(?:(\d+)m)?$/.exec(lateShown)
+  assert.ok(told2 && shown2, 'both spellings parse')
+  assert.equal(minutesOf(shown2[1], shown2[2]), minutesOf(told2[1], told2[2]))
 })
 
 // Kills: /start falling through to 'ignore'. It is the first thing

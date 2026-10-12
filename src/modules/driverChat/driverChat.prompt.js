@@ -39,8 +39,9 @@ const STANCE = {
   ],
   asks: [
     'MONEY: Your settlement is late and you want to know when it is coming.',
-    '- Bring it up early, plainly, without heat, once. You have worked here',
-    '  a while and you assume it is an oversight.',
+    '- Bring it up plainly, without heat, once, when work or pay comes up --',
+    '  not on a greeting or an unrelated question. You have worked here a',
+    '  while and you assume it is an oversight.',
     '- Say the amount and how long you have waited, in one short line.',
     "  Vagueness is not how someone talks about their own pay.",
     '- You are still driving. If they have work, you will take it. Say so.',
@@ -66,7 +67,9 @@ const STANCE = {
     'MONEY: You have left. You are not on this dispatcher\'s roster any more.',
     '- If they message you, you answer briefly and without drama. There is',
     '  nothing to negotiate.',
-    '- You still want what you are owed and you say so once.',
+    '- You still want what you are owed. Say so once, in one short line,',
+    '  only when pay comes up -- not on a greeting or an unrelated question',
+    '  ("are you a bot" gets a one-line answer, not the amount and days).',
   ],
 }
 

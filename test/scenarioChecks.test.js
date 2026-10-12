@@ -6,10 +6,15 @@
 // Pure. Each test names the mutation it kills.
 
 import { test } from 'node:test'
+import { readFileSync } from 'node:fs'
+import { join, dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import assert from 'node:assert/strict'
 
+import { FALLBACK_REPLY as DRIVER_FALLBACK } from '../src/modules/driverChat/driverChat.prompt.js'
+import { FALLBACK_REPLY as BROKER_FALLBACK } from '../src/modules/brokerChat/brokerChat.prompt.js'
 import {
-  anyReply, brokerReply, driverReply, repeatsQuestion, dollars, summarize, BROKER_EXPECT, DRIVER_EXPECT,
+  PROMISE, anyReply, brokerReply, driverReply, repeatsQuestion, dollars, summarize, BROKER_EXPECT, DRIVER_EXPECT,
 } from '../scripts/scenarioChecks.js'
 
 // Kills: a promise pattern that misses "let me look at the paperwork"
@@ -122,4 +127,28 @@ test('the summary counts runs, not replies, and lists the clean scenarios', () =
   const { lines, clean } = summarize(rows, 2)
   assert.deepEqual(lines, ['| S1 | same question as last reply | 1/2 |'])
   assert.deepEqual(clean, ['S6'])
+})
+
+// Kills: the system's own holding line ("Give me a minute ...") being
+// counted as the model promising to come back -- it is a separate result.
+test('the fallback replies are "fell back", not a promise', () => {
+  assert.deepEqual(anyReply(DRIVER_FALLBACK), ['fell back'])
+  assert.deepEqual(anyReply(BROKER_FALLBACK), ['fell back'])
+  assert.deepEqual(anyReply('Give me a minute, back soon.'), ['promises to get back'])
+})
+
+// Kills: Grace's persona (drivers.bio) telling the model to say "let me
+// look" while the prompt forbids it (ED02/ED10, 2026-10-12). 051 wrote the
+// phrase; 057 must replace exactly it (a one-character mismatch makes the
+// UPDATE a silent no-op) with words that are not a promise.
+test('the migration that fixes the Grace bio matches the old text and promises nothing', () => {
+  const dir = join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'db', 'migrations')
+  const read = (name) => readFileSync(join(dir, name), 'utf8').replaceAll('\r\n', '\n')
+  const old = read('051_driver_bio.sql')
+  const fix = read('057_grace_bio_no_promise.sql')
+  const [, from, to] = /replace\(bio, '([^']*)', '([^']*)'\)/.exec(fix)
+  assert.ok(old.includes(from), 'the phrase 057 replaces is in 051')
+  assert.match(old, PROMISE, '051 does contain a promise (the thing being fixed)')
+  assert.doesNotMatch(old.replace(from, to), PROMISE)
+  assert.doesNotMatch(to, PROMISE)
 })

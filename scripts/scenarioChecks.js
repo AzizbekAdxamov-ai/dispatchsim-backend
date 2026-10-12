@@ -13,11 +13,14 @@
 // pass. What it flags is a line to read, not a verdict; the transcript is
 // still the record.
 
+import { FALLBACK_REPLY as DRIVER_FALLBACK } from '../src/modules/driverChat/driverChat.prompt.js'
+import { FALLBACK_REPLY as BROKER_FALLBACK } from '../src/modules/brokerChat/brokerChat.prompt.js'
+
 // -- Any reply, either chat ----------------------------------------------------
 
 // "Let me check and get back", "let me look at the paperwork": nothing
 // comes back from a model later, and the person on the other end waits.
-const PROMISE = /\b(get back to you|circle back|let me (check|look|see|find out)|i'?ll (check|look into|find out|confirm)|give me a (sec|second|minute|moment)|one (sec|moment))\b|look at the paperwork/i
+export const PROMISE = /\b(get back to you|circle back|let me (check|look|see|find out)|i'?ll (check|look into|find out|confirm)|give me a (sec|second|minute|moment)|one (sec|moment))\b|look at the paperwork/i
 
 // *into*, **bold**, a bulleted line. A chat line is plain text.
 const MARKDOWN = /\*[^*\s][^*\n]*\*|(^|\n)\s*[-•]\s/
@@ -50,7 +53,18 @@ export function dollars(text) {
   return (String(text).match(/\$\s?\d[\d,]*(\.\d+)?/g) ?? []).map((d) => Number(d.replace(/[$,\s]/g, '')))
 }
 
+export const FELL_BACK = 'fell back'
+
+// The holding line the chats send when a reply was thrown away. It says
+// "give me a minute", which is a promise -- but it is the system's line,
+// not the model's, so it is its own result and not a failure to fix.
+export function isFallback(reply) {
+  const t = String(reply).trim()
+  return t === DRIVER_FALLBACK || t === BROKER_FALLBACK
+}
+
 export function anyReply(reply, previousReply) {
+  if (isFallback(reply)) return [FELL_BACK]
   const out = []
   if (PROMISE.test(reply)) out.push('promises to get back')
   if (MARKDOWN.test(reply)) out.push('markdown')

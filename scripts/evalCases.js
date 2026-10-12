@@ -14,7 +14,7 @@
 // Every check is a pattern and can be wrong; what it flags is a line to
 // read. The human grade in the dataset (accurate? why?) is the verdict.
 
-import { dollars, brokerReply, driverReply } from './scenarioChecks.js'
+import { dollars, brokerReply, driverReply, isFallback, FELL_BACK } from './scenarioChecks.js'
 import { hoursMinutes } from '../src/constants/appClock.js'
 import { humanDuration } from '../src/modules/driverChat/driverChat.prompt.js'
 
@@ -168,7 +168,7 @@ export const DRIVER_CASES = [
     good: 'Takes it as news and asks what she needs: miles, where exactly, the drop.',
   },
   {
-    id: 'ED08', style: 'P', terms: [], hypotheticalNyc: true,
+    id: 'ED08', style: 'P', terms: [],
     line: 'Grace ur on the NYC load',
     expect: () => (r) => (/new york|\bnyc\b|\bthe city\b/i.test(r) ? [] : ['her own request not raised']),
     good: 'Says, in her way, that she asked not to be sent there; may ask for something back; does not refuse.',
@@ -190,10 +190,12 @@ export const DRIVER_CASES = [
 // Findings on any reply of either chat, plus the case's own.
 export function brokerFindings(reply, check) {
   if (reply.startsWith('(FAILED')) return ['no reply']
+  if (isFallback(reply)) return [FELL_BACK]
   return [...brokerReply(reply, null), ...(CLASSIFIER_ONLY.test(reply.trim()) ? [CLASSIFIER_ONLY_FINDING] : []), ...(ASKS_PAPERWORK.test(reply) ? ['asks for paperwork'] : []), ...check(reply)]
 }
 
 export function driverFindings(reply, check, { onTheRoad }) {
   if (reply.startsWith('(FAILED')) return ['no reply']
+  if (isFallback(reply)) return [FELL_BACK]
   return [...driverReply(reply, null, { onTheRoad }), ...(CLASSIFIER_ONLY.test(reply.trim()) ? [CLASSIFIER_ONLY_FINDING] : []), ...check(reply)]
 }

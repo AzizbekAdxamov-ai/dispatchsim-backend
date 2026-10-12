@@ -172,6 +172,10 @@ test('durations are phrased like a person, exactly', () => {
   assert.equal(humanDuration(61), '1 hour 1 minute')
   assert.equal(humanDuration(45), '45 minutes')
   assert.equal(humanDuration(null), null)
+  assert.equal(humanDuration(0), '0 minutes')
+  assert.equal(humanDuration(59), '59 minutes')
+  assert.equal(humanDuration(120), '2 hours')
+  assert.equal(humanDuration(-30), '0 minutes')
   const out = text({ driver: { ...DRIVER, hosRemainingMin: 660 }, load: null })
   assert.match(out, /Driving time left today: 11 hours\./)
   assert.doesNotMatch(out, /\d+h\b|\d+m\b/)
@@ -205,4 +209,20 @@ test('the exactness rule asks for human wording, not machine format', () => {
   const p = promptFor(LOAD)
   assert.match(p, /"11 hours", never "11h 00m"/)
   assert.doesNotMatch(p, /do not round them/)
+})
+
+// Kills: a stance that makes her raise pay on a greeting or a bot joke
+// (ED01, ED10 -- the quits stance dumped amount and days on "r u a bot").
+test('every money stance that talks about pay does it in one line, when pay comes up', () => {
+  for (const stage of ['asks', 'refuses', 'quits']) {
+    const p = buildDriverSystemPrompt({
+      driver: DRIVER, load: null, now: NOW,
+      standing: { stage, unpaidCount: 1, owedUsd: 529, daysOverdue: 12 },
+    })
+    const block = p.slice(p.indexOf('MONEY:'), p.indexOf('HOW YOU TALK:'))
+    assert.match(block, /one short line/, stage)
+    assert.match(block, /(when work or pay comes up|only when pay comes up)/, stage)
+    assert.match(block, /greeting|unrelated question/, stage)
+    assert.doesNotMatch(p, /Bring it up early/, stage)
+  }
 })
