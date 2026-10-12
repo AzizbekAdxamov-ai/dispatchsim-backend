@@ -17,7 +17,7 @@
 
 // "Let me check and get back", "let me look at the paperwork": nothing
 // comes back from a model later, and the person on the other end waits.
-const PROMISE = /\b(get back to you|circle back|let me (check|look|see|find out)|i'?ll (check|look into|find out|confirm))\b|look at the paperwork/i
+const PROMISE = /\b(get back to you|circle back|let me (check|look|see|find out)|i'?ll (check|look into|find out|confirm)|give me a (sec|second|minute|moment)|one (sec|moment))\b|look at the paperwork/i
 
 // *into*, **bold**, a bulleted line. A chat line is plain text.
 const MARKDOWN = /\*[^*\s][^*\n]*\*|(^|\n)\s*[-•]\s/

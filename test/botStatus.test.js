@@ -87,7 +87,10 @@ test('the driver is told the same numbers /status shows', () => {
   const lateTold = /That is (.+?) past the appointment/.exec(told)?.[1]
   const lateShown = /— (.+?) past the appointment/.exec(shown)?.[1]
   assert.ok(lateTold, 'haydovchiga kechikish aytilmadi')
-  assert.equal(lateShown, lateTold)
+  // The prompt says it in words ("2 hours 30 minutes"), /status on a screen
+  // ("2h 30m"): same number, two spellings.
+  const asScreen = lateTold.replace(/ hours?/, 'h').replace(/ minutes?/, 'm').replace(/(\d+)h (\d)m/, '$1h 0$2m')
+  assert.equal(lateShown, asScreen)
 })
 
 // Kills: /start falling through to 'ignore'. It is the first thing

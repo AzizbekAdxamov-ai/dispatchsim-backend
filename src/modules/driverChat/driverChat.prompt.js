@@ -21,7 +21,7 @@
 // numbers, never abusive, never threatening.
 
 import { DRIVER_STAGES, SETTLEMENT_TERM_SIM_DAYS } from '../../constants/driverPay.js'
-import { clockDateTime, clockWhen, hoursMinutes } from '../../constants/appClock.js'
+import { clockDateTime, clockWhen } from '../../constants/appClock.js'
 import { readPreferences, hasRequests, preferenceConflicts, avoidedPlaces } from '../../constants/driverPreferences.js'
 import { emptyRunToPickup } from '../loads/whereabouts.js'
 
@@ -39,10 +39,10 @@ const STANCE = {
   ],
   asks: [
     'MONEY: Your settlement is late and you want to know when it is coming.',
-    '- Bring it up early, plainly, without heat. You have worked here a',
-    '  while and you assume it is an oversight.',
-    '- Say the amount and how long you have waited. Vagueness is not how',
-    "  someone talks about their own pay -- they know the number.",
+    '- Bring it up early, plainly, without heat, once. You have worked here',
+    '  a while and you assume it is an oversight.',
+    '- Say the amount and how long you have waited, in one short line.',
+    "  Vagueness is not how someone talks about their own pay.",
     '- You are still driving. If they have work, you will take it. Say so.',
     '- If they give you a date, take them at their word and move on. Do not',
     '  keep circling back in the same message.',
@@ -50,8 +50,9 @@ const STANCE = {
   refuses: [
     'MONEY: You have not been paid, you have asked, and nothing happened.',
     'You are not taking another load until it is settled.',
-    '- Say it once, clearly, with the number and the number of days. Not a',
-    '  threat and not an ultimatum -- a fact about what you are doing.',
+    '- Say it once, in one short line, with the number and the number of',
+    '  days. Not a threat and not an ultimatum -- a fact about what you are',
+    '  doing. Raise it when work or pay comes up, not on a greeting.',
     '- If they offer you a load, turn it down. Do not soften it into a',
     '  maybe. Do not agree to run "just this one" -- you have already tried',
     '  being reasonable and it is why you are here.',
@@ -102,6 +103,21 @@ export function minutesLate(load) {
   return over > 0 ? over : null
 }
 
+// Minutes the way a person says them: 660 -> "11 hours", 395 -> "6 hours
+// 35 minutes", 45 -> "45 minutes". Exact, never rounded -- only phrased.
+// The shared hoursMinutes ("11h 00m") stays for /status, which is a
+// screen; this goes to a model that copies what it is given, and on
+// 2026-10-12 Grace texted "Driving time left: 11h" to "r u a bot lol".
+export function humanDuration(min) {
+  if (min == null || !Number.isFinite(min)) return null
+  const abs = Math.max(0, Math.round(min))
+  const h = Math.floor(abs / 60)
+  const m = abs % 60
+  const hours = h > 0 ? `${h} ${h === 1 ? 'hour' : 'hours'}` : ''
+  const mins = m > 0 || h === 0 ? `${m} ${m === 1 ? 'minute' : 'minutes'}` : ''
+  return [hours, mins].filter(Boolean).join(' ')
+}
+
 export function situationLines({ driver, load, now = new Date() }) {
   const lines = []
 
@@ -136,7 +152,7 @@ export function situationLines({ driver, load, now = new Date() }) {
     ? '  You are on duty but not driving -- stopped on the road for fuel or a walkaround. You are not at a dock.'
     : DUTY[driver.dutyStatus] ?? '  You are off the clock.')
 
-  const left = hoursMinutes(driver.hosRemainingMin)
+  const left = humanDuration(driver.hosRemainingMin)
   if (left) {
     lines.push(`  Driving time left today: ${left}.`)
   }
@@ -157,7 +173,7 @@ export function situationLines({ driver, load, now = new Date() }) {
       // Said in hours, because the model shrank 27 hours to "a bit late"
       // (2026-10-06 scenario run). A number the dispatcher plans on must
       // reach them as the number.
-      lines.push(`  That is ${hoursMinutes(late)} past the appointment. You know you are running late; if it comes up, say by how much in hours, never "a bit".`)
+      lines.push(`  That is ${humanDuration(late)} past the appointment. You know you are running late; if it comes up, say by how much, never "a bit".`)
     }
   }
 
@@ -283,8 +299,12 @@ export function buildDriverSystemPrompt({ driver, standing, load, carrier = null
     ...stance,
     '',
     'HOW YOU TALK:',
-    '- One to three sentences. Texting from a truck stop, not writing an',
-    '  email. No lists, no headings, no asterisks.',
+    '- Answer only what was asked, in one or two short sentences. Texting',
+    '  from a truck stop, not writing an email. No lists, no headings, no',
+    '  asterisks.',
+    '- Do not volunteer hours, fuel, pay, truck number, load ID or any',
+    '  number nobody asked about. Exceptions: a safety problem, and what',
+    '  MONEY above tells you to raise (one short line).',
     '- Plain American trucking English. You say "I ran that load", "I am',
     '  sitting in Amarillo", "when is that hitting my account".',
     '- You are a person with a job, not an assistant. Never offer to help',
@@ -299,14 +319,18 @@ export function buildDriverSystemPrompt({ driver, standing, load, carrier = null
     'WHAT YOU KNOW:',
     '- Your own pay, your own truck, the load you are on, where you are,',
     '  your own hours and fuel, and what has been said in this',
-    '  conversation. Those numbers are above: use them, do not round them',
-    '  into something vaguer and do not improve on them.',
+    '  conversation. Those numbers are above: when asked, give them as',
+    '  written, not vaguer and not improved, and say them like a person:',
+    '  "11 hours", never "11h 00m".',
     '- If you are asked something that is NOT above -- where another driver',
     '  is, what the company was paid, the weather in three hours --',
     '  say you do not know. Never promise to check and get back: nothing',
     '  comes back from you later, and the dispatcher would be left waiting.',
-    // 2026-10-06 fourth run: "let me look at the paperwork".
-    '  Saying you will look at the paperwork is the same promise.',
+    // 2026-10-06 fourth run: "let me look at the paperwork"; 2026-10-12
+    // "Let me look." with no load at all.
+    '  So never say "let me look", "let me check", "I will get back to you",',
+    '  "give me a sec". Answer now or say you do not know.',
+    '- If you have no load, say so plainly.',
     // Same run: "should be at the drop in a bit", then "at the NY drop" --
     // from a driver whose situation says on the road near New York, with
     // an hour she is due in. And "waiting on the shipper" at the delivery.

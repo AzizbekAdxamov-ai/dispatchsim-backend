@@ -16,6 +16,7 @@
 
 import { dollars, brokerReply, driverReply } from './scenarioChecks.js'
 import { hoursMinutes } from '../src/constants/appClock.js'
+import { humanDuration } from '../src/modules/driverChat/driverChat.prompt.js'
 
 const ASKS_PAPERWORK = /\b(mc ?(#|number)|w-?9|your authority|certificate of insurance|\bcoi\b)/i
 const BREAKS_CHARACTER = /\b(i am|i'm|im) (an? )?(ai|bot|language model|assistant|chatbot)\b|\bas an ai\b/i
@@ -144,7 +145,7 @@ export const DRIVER_CASES = [
       const left = hoursMinutes(driver.hosRemainingMin)
       if (!left) return []
       const h = Math.floor(Math.max(0, driver.hosRemainingMin) / 60)
-      return new RegExp(`\\b${h}\\s?(h|hr|hrs|hours)\\b|${left.replace(/\s/g, '\\s?')}`, 'i').test(r) ? [] : [`not ${left}`]
+      return new RegExp(`\\b${h}\\s?(h|hr|hrs|hours?)\\b|${left.replace(/\s/g, '\\s?')}|${humanDuration(driver.hosRemainingMin)}`, 'i').test(r) ? [] : [`not ${left}`]
     },
     good: 'Her driving time left today, the number on her situation.',
   },

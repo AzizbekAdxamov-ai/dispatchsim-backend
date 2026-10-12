@@ -13,9 +13,11 @@ import {
 } from '../scripts/scenarioChecks.js'
 
 // Kills: a promise pattern that misses "let me look at the paperwork"
-// (G2, fourth run), or one that flags a plain "I do not know" (G3).
+// (G2, fourth run) or "give me a sec", or one that flags a plain "I do not know" (G3).
 test('a promise to come back is flagged; saying you do not know is not', () => {
   assert.deepEqual(anyReply("Don't have the Nashville detention numbers—let me look at the paperwork."), ['promises to get back'])
+  assert.deepEqual(anyReply('Give me a sec, checking.'), ['promises to get back'])
+  assert.deepEqual(anyReply('One moment, I will be right there.'), ['promises to get back'])
   assert.deepEqual(anyReply("I do not know about a Dallas load yet — what's the pickup, how many miles, when does it need to be there?"), [])
 })
 

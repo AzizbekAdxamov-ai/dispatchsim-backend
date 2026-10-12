@@ -11,7 +11,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { situationLines, buildDriverSystemPrompt } from '../src/modules/driverChat/driverChat.prompt.js'
+import { situationLines, buildDriverSystemPrompt, humanDuration } from '../src/modules/driverChat/driverChat.prompt.js'
 
 const NOW = new Date('2026-09-29T18:00:00Z') // 1:00 PM in America/Chicago
 
@@ -49,7 +49,7 @@ test('a driver with no known position is not given one', () => {
 // Kills: dropping the hours, or printing raw minutes. A driver says
 // "six and a half hours", never "395".
 test('the hours are the hours, in a person\'s words', () => {
-  assert.match(text({ driver: DRIVER, load: LOAD }), /Driving time left today: 6h 35m\./)
+  assert.match(text({ driver: DRIVER, load: LOAD }), /Driving time left today: 6 hours 35 minutes\./)
   assert.doesNotMatch(text({ driver: DRIVER, load: LOAD }), /395/)
 })
 
@@ -73,7 +73,7 @@ test('times are on the operation clock, not UTC', () => {
 // are late -- they are the one watching the miles, and they would know
 // first. Arithmetic belongs here, not in the model.
 test('running late is stated, with how late', () => {
-  assert.match(text({ driver: DRIVER, load: LOAD }), /2h 30m past the appointment/)
+  assert.match(text({ driver: DRIVER, load: LOAD }), /2 hours 30 minutes past the appointment/)
 })
 
 // Kills: calling every load late by comparing the wrong way round.
@@ -135,7 +135,7 @@ test('a late driver is told to say how late in hours', () => {
     load: { originCity: 'Nashville', originState: 'TN', destinationCity: 'New York', destinationState: 'NY', etaAt: '2026-10-06T13:20:00Z', deliveryAt: '2026-10-05T09:46:00Z' },
     now: new Date('2026-10-06T13:00:00Z'),
   }).join('\n')
-  assert.match(late, /past the appointment\. You know you are running late; if it comes up, say by how much in hours, never "a bit"\./)
+  assert.match(late, /past the appointment\. You know you are running late; if it comes up, say by how much, never "a bit"\./)
 })
 
 // Kills: the general on-duty line ("fuelling, loading, a walkaround") on
@@ -159,6 +159,50 @@ test('the driver says where and when as written, and promises no paperwork check
   })
   assert.match(p, /on the road near a city is not at the dock there/)
   assert.match(p, /the\s+hour you are due is an hour, not "a bit"/)
-  assert.match(p, /Saying you will look at the paperwork is the same promise\./)
+  assert.match(p, /never say "let me look", "let me check"/)
   assert.match(p, /Where you pick up is the shipper; where you deliver is the receiver\./)
+})
+
+// Kills: machine durations ("11h 00m") reaching the model, which copies
+// them into the text (ED01/ED10, 2026-10-12); or rounding the minutes.
+test('durations are phrased like a person, exactly', () => {
+  assert.equal(humanDuration(660), '11 hours')
+  assert.equal(humanDuration(395), '6 hours 35 minutes')
+  assert.equal(humanDuration(60), '1 hour')
+  assert.equal(humanDuration(61), '1 hour 1 minute')
+  assert.equal(humanDuration(45), '45 minutes')
+  assert.equal(humanDuration(null), null)
+  const out = text({ driver: { ...DRIVER, hosRemainingMin: 660 }, load: null })
+  assert.match(out, /Driving time left today: 11 hours\./)
+  assert.doesNotMatch(out, /\d+h\b|\d+m\b/)
+})
+
+const promptFor = (load) => buildDriverSystemPrompt({
+  driver: DRIVER, load, now: NOW,
+  standing: { stage: 'ok', unpaidCount: 0, owedUsd: 0, daysOverdue: 0 },
+})
+
+// Kills: the driver volunteering hours, fuel, pay or IDs nobody asked
+// about (ED01 "how r u" -> hours + fuel; ED10 "r u a bot" -> a data dump),
+// or going back to "one to three sentences".
+test('the driver answers only what was asked, in one or two sentences', () => {
+  const p = promptFor(LOAD)
+  assert.match(p, /Answer only what was asked, in one or two short sentences/)
+  assert.match(p, /Do not volunteer hours, fuel, pay, truck number, load ID/)
+  assert.doesNotMatch(p, /One to three sentences/)
+})
+
+// Kills: dropping the no-promise rule (ED02 "Let me look." with no load),
+// or the plain "no load" answer.
+test('the driver never promises to look or get back, and says plainly when she has no load', () => {
+  const p = promptFor(null)
+  assert.match(p, /never say "let me look", "let me check", "I will get back to you",\s+"give me a sec"/)
+  assert.match(p, /If you have no load, say so plainly\./)
+})
+
+// Kills: the exactness rule demanding machine formats again.
+test('the exactness rule asks for human wording, not machine format', () => {
+  const p = promptFor(LOAD)
+  assert.match(p, /"11 hours", never "11h 00m"/)
+  assert.doesNotMatch(p, /do not round them/)
 })
