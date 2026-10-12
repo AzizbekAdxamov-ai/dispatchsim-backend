@@ -22,6 +22,7 @@ import { assertCanSend } from '../chat/chatBudget.service.js'
 import { tooLongForChat, CHAT_REPLY_MAX_CHARS } from '../../constants/chatBudget.js'
 import { chatConfigFor } from '../chat/chatProvider.js'
 import { AppError } from '../../lib/errors.js'
+import { stripSpeakerLabel } from '../../lib/speakerLabel.js'
 import { withTransaction } from '../../db/pool.js'
 import * as repo from './driverChat.repository.js'
 import * as payrollService from '../payroll/payroll.service.js'
@@ -132,12 +133,15 @@ export async function sendMessage({ conversationId, userId, text, images }) {
 
   let reply
   try {
-    reply = await chatText({
+    // The driver's own name as a leading "Grace:" is removed before any
+    // check or save -- see src/lib/speakerLabel.js.
+    const clean = (t) => stripSpeakerLabel(t, context.driver.name)
+    reply = clean(await chatText({
       messages: buildMessages({ systemPrompt, history, newMessage: text, images }),
       config,
       onRequest,
       onModel,
-    })
+    }))
 
     // Two ways a reply is unusable, both regenerated once and then replaced
     // with a short in-character line. Neither can be dropped silently --
@@ -159,7 +163,7 @@ export async function sendMessage({ conversationId, userId, text, images }) {
           : `ran to ${reply.trim().length} characters when the limit is ${CHAT_REPLY_MAX_CHARS}`
       console.warn(`[driverChat] retrying — reply ${why}`)
       regenerated = why
-      reply = await chatText({
+      reply = clean(await chatText({
         messages: buildMessages({
           systemPrompt: `${systemPrompt}\n\nYour last reply ${why}. Reply again as the driver, in character, one to three sentences only.`,
           history,
@@ -169,7 +173,7 @@ export async function sendMessage({ conversationId, userId, text, images }) {
         config,
         onRequest,
         onModel,
-      })
+      }))
       if (unusable(reply)) reply = FALLBACK_REPLY
     }
   } catch (err) {
