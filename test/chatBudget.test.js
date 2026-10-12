@@ -489,6 +489,9 @@ function throttled(message) {
   return { ok: false, status: 429, headers: { get: () => null }, text: async () => JSON.stringify({ error: { message } }) }
 }
 
+// Kills: never falling back on a transient 429, or a fallback request that
+// onRequest does not count (budget off by one), or not reporting which
+// model actually answered.
 test('Grace switches after one transient 429 and records the model that answered', async () => {
   const { chatText } = await import('../scripts/seed/aiClient.js')
   const models = []
@@ -508,6 +511,8 @@ test('Grace switches after one transient 429 and records the model that answered
   assert.deepEqual(answered, ['backup'])
 })
 
+// Kills: falling back on a daily-quota 429, spending a second request that
+// cannot succeed because the quota belongs to the account, not the model.
 test('an explicit daily cap never calls the fallback', async () => {
   const { chatText } = await import('../scripts/seed/aiClient.js')
   let sent = 0
@@ -518,6 +523,8 @@ test('an explicit daily cap never calls the fallback', async () => {
   assert.equal(sent, 1)
 })
 
+// Kills: a busy fallback entering its own retry chain (or retrying the
+// primary again), so one message burns 4+ requests of the daily budget.
 test('a fallback 429 stops after two requests', async () => {
   const { chatText } = await import('../scripts/seed/aiClient.js')
   let sent = 0
@@ -528,6 +535,8 @@ test('a fallback 429 stops after two requests', async () => {
   assert.equal(sent, 2)
 })
 
+// Kills: a failing fallback getting the full retry policy, a second
+// backoff chain on top of the first request.
 test('a fallback 503 does not start a second retry chain', async () => {
   const { chatText } = await import('../scripts/seed/aiClient.js')
   let sent = 0
@@ -542,6 +551,8 @@ test('a fallback 503 does not start a second retry chain', async () => {
   assert.equal(sent, 2)
 })
 
+// Kills: a configured fallback disabling the primary's own network and 5xx
+// retries, or switching models on errors that are not a model throttle.
 test('a configured fallback leaves ordinary network and 5xx retries intact', async () => {
   const { chatText } = await import('../scripts/seed/aiClient.js')
   const models = []

@@ -14,10 +14,10 @@
 
 import { readAiConfig } from '../../../scripts/seed/config.js'
 import { AppError } from '../../lib/errors.js'
+import appConfig from '../../config.js'
 import { DEFAULT_CHAT_BASE_URL } from '../../constants/chatBudget.js'
 
 const PREFIX = Object.freeze({ broker: 'CHAT_BROKER', driver: 'CHAT_DRIVER' })
-const DRIVER_FALLBACK_MODEL = 'nvidia/nemotron-3-super-120b-a12b:free'
 
 // The error each chat raises when it has no usable configuration. They are
 // different codes because they put a sentence about a different person on
@@ -37,12 +37,14 @@ function read(which) {
 export function chatConfigFor(which) {
   const { config, errors } = read(which)
   if (!config) throw new AppError(FAILURE[which], errors.join('; '))
-  // Grace alone can switch when her primary free model is throttled.
-  // Keep this on OpenRouter, where the fallback id and shared free wallet
-  // are known; a custom provider must use only its configured model.
+  // Grace alone can switch when her primary free model is throttled, and
+  // only when CHAT_DRIVER_FALLBACK_MODEL names one (blank = no fallback).
+  // Keep this on OpenRouter, where the shared free wallet is known; a
+  // custom provider must use only its configured model.
+  const fallbackModel = appConfig.chatDriverFallbackModel
   const openRouter = config.baseUrl.replace(/\/+$/, '') === DEFAULT_CHAT_BASE_URL.replace(/\/+$/, '')
-  if (which === 'driver' && openRouter && config.model !== DRIVER_FALLBACK_MODEL) {
-    return { ...config, fallbackModel: DRIVER_FALLBACK_MODEL }
+  if (which === 'driver' && openRouter && fallbackModel && config.model !== fallbackModel) {
+    return { ...config, fallbackModel }
   }
   return config
 }

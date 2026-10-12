@@ -12,7 +12,14 @@
 
 import { test, beforeEach } from 'node:test'
 import assert from 'node:assert/strict'
-import { chatConfigFor, walletScopeFor, describeChat } from '../src/modules/chat/chatProvider.js'
+
+// config.js refuses to load without these two; the tests below never use
+// them. Set before the dynamic imports so the file is hermetic.
+process.env.DATABASE_URL ??= 'postgresql://u:p@localhost:5432/x'
+process.env.JWT_SECRET ??= 'x'.repeat(48)
+const { default: appConfig } = await import('../src/config.js')
+const { chatConfigFor, walletScopeFor, describeChat } = await import('../src/modules/chat/chatProvider.js')
+const FALLBACK = 'backup/model:free'
 
 const VARS = [
   'CHAT_BASE_URL', 'CHAT_API_KEY', 'CHAT_MODEL',
@@ -25,6 +32,7 @@ const VARS = [
 // passing or failing according to whose machine they run on.
 beforeEach(() => {
   for (const v of VARS) delete process.env[v]
+  appConfig.chatDriverFallbackModel = null
 })
 
 test('one shared key means one shared wallet', () => {
@@ -79,19 +87,48 @@ test('a different model on one key is still one wallet', () => {
   assert.equal(chatConfigFor('driver').model, 'some/model')
 })
 
+// Kills: handing the fallback to the broker chat, offering a fallback equal
+// to the model already in use, or sending it to a non-OpenRouter provider
+// (which would get an OpenRouter-only model id).
 test('only Grace on OpenRouter receives a distinct fallback model', () => {
+  appConfig.chatDriverFallbackModel = FALLBACK
   process.env.CHAT_API_KEY = 'key-one'
   process.env.CHAT_MODEL = 'some/model'
   const driver = chatConfigFor('driver')
-  assert.equal(driver.fallbackModel, 'nvidia/nemotron-3-super-120b-a12b:free')
+  assert.equal(driver.fallbackModel, FALLBACK)
   assert.equal(chatConfigFor('broker').fallbackModel, undefined)
 
-  process.env.CHAT_DRIVER_MODEL = driver.fallbackModel
+  process.env.CHAT_DRIVER_MODEL = FALLBACK
   assert.equal(chatConfigFor('driver').fallbackModel, undefined)
 
   process.env.CHAT_DRIVER_BASE_URL = 'https://api.groq.com/openai/v1'
   process.env.CHAT_DRIVER_MODEL = 'some/model'
   assert.equal(chatConfigFor('driver').fallbackModel, undefined)
+})
+
+// Kills: a hardcoded fallback model that applies when CHAT_DRIVER_FALLBACK_MODEL
+// is blank, so Grace silently doubles requests nobody asked for.
+test('with no fallback configured the driver config has none and chatText never tries another model', async () => {
+  process.env.CHAT_API_KEY = 'key-one'
+  process.env.CHAT_MODEL = 'some/model'
+  const driver = chatConfigFor('driver')
+  assert.equal(driver.fallbackModel, undefined)
+
+  const { chatText } = await import('../scripts/seed/aiClient.js')
+  const real = globalThis.fetch
+  const models = []
+  globalThis.fetch = async (_url, opts) => {
+    models.push(JSON.parse(opts.body).model)
+    return { ok: false, status: 429, headers: { get: (h) => (/retry-after/i.test(h) ? '0' : null) }, text: async () => JSON.stringify({ error: { message: 'upstream model is busy' } }) }
+  }
+  try {
+    await assert.rejects(chatText({ messages: [], config: driver }), (err) => err.rateLimited === true)
+  } finally {
+    globalThis.fetch = real
+  }
+  // The primary's own retries may send several; none may go to another model.
+  assert.ok(models.length >= 1)
+  assert.deepEqual([...new Set(models)], ['some/model'])
 })
 
 test('each chat inherits what its own family does not set', () => {
