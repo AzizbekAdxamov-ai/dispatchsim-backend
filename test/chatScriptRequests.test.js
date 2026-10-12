@@ -129,3 +129,28 @@ test('script rows raise account_used by their requests and nobody\'s share', { s
     await pool.end()
   }
 })
+
+// --- the pre-run check judges the plan against what is left ----------------
+
+import { budgetRefusal } from '../src/modules/chat/scriptRequests.js'
+
+// Kills: comparing the plan to the whole budget (the 2026-10-12 case:
+// 40 used of 45, a plan of 20 was allowed).
+test('a plan larger than what remains today is refused, with the numbers', () => {
+  const msg = budgetRefusal({ planned: 20, budget: 45, used: 40, hint: 'Wait.' })
+  assert.match(msg, /~20 requests/)
+  assert.match(msg, /40 of 45 are used and 5 remain/)
+  assert.equal(budgetRefusal({ planned: 5, budget: 45, used: 40, hint: '' }), null)
+  assert.equal(budgetRefusal({ planned: 20, budget: 45, used: 0, hint: '' }), null)
+  assert.match(budgetRefusal({ planned: 1, budget: 45, used: 50, hint: '' }), /0 remain/)
+})
+
+// Kills: a script that does not ask the database how much is used.
+for (const file of ['chat-eval.js', 'chat-scenarios.js']) {
+  test(`${file} checks the plan against today's usage`, () => {
+    const src = read('scripts', file)
+    assert.match(src, /budgetRefusal\(\{ planned, budget, used,/)
+    assert.match(src, /usedToday/)
+    assert.doesNotMatch(src, /planned > budget/)
+  })
+}

@@ -5,6 +5,8 @@
 // reads the database -- never knew about them.
 
 import { query } from '../../db/pool.js'
+import { DAILY_USAGE_SQL } from './chatBudget.sql.js'
+import { walletScopeFor } from './chatProvider.js'
 
 export const INSERT_SCRIPT_REQUESTS_SQL = `
   INSERT INTO chat_script_requests (source, side, model, requests)
@@ -40,4 +42,22 @@ export async function chatTextRecorded({ chatText, source, side, config, record 
 
 async function defaultRecord({ source, side, model, requests }) {
   await query(INSERT_SCRIPT_REQUESTS_SQL, [source, side, model, requests])
+}
+
+const NOBODY = '00000000-0000-0000-0000-000000000000'
+
+// Requests already spent today on the wallet this side draws from: the
+// app's turns and the scripts' own rows (058).
+export async function usedToday(which) {
+  const { rows } = await query(DAILY_USAGE_SQL, [NOBODY, walletScopeFor(which)])
+  return rows[0].account_used
+}
+
+// The refusal for a plan that does not fit in what is left of today, or
+// null when it fits. `used` is what is already spent, so a plan is judged
+// against the room that remains, not the whole day.
+export function budgetRefusal({ planned, budget, used, hint }) {
+  const remaining = budget - used
+  if (planned <= remaining) return null
+  return `Planned ~${planned} requests; today ${used} of ${budget} are used and ${Math.max(0, remaining)} remain. ${hint}`
 }

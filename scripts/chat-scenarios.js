@@ -37,7 +37,7 @@ import { fileURLToPath } from 'node:url'
 import { pool, query } from '../src/db/pool.js'
 import { chatConfigFor } from '../src/modules/chat/chatProvider.js'
 import { chatText } from './seed/aiClient.js'
-import { chatTextRecorded } from '../src/modules/chat/scriptRequests.js'
+import { chatTextRecorded, usedToday, budgetRefusal } from '../src/modules/chat/scriptRequests.js'
 import { tooLongForChat, dailyBudgetFor } from '../src/constants/chatBudget.js'
 import appConfig from '../src/config.js'
 import { brokerReply, driverReply, BROKER_EXPECT, DRIVER_EXPECT, summarize } from './scenarioChecks.js'
@@ -278,9 +278,10 @@ const planned = times * ((only !== 'driver' ? TURNS.broker : 0) + (only !== 'bro
 const budgets = [...new Set([only !== 'driver' && 'broker', only !== 'broker' && 'driver'].filter(Boolean))]
   .map((w) => dailyBudgetFor(chatConfigFor(w).baseUrl, appConfig.chatRequestsPerDay))
 const budget = Math.min(...budgets)
-if (planned > budget) {
-  console.error(`Planned ~${planned} requests; the provider's daily budget is ${budget}. `
-    + 'Run fewer times, or broker and driver on separate days.')
+const used = Math.max(...await Promise.all([...new Set([only !== 'driver' && 'broker', only !== 'broker' && 'driver'].filter(Boolean))].map(usedToday)))
+const refusal = budgetRefusal({ planned, budget, used, hint: 'Run fewer times, or broker and driver on separate days.' })
+if (refusal) {
+  console.error(refusal)
   await pool.end()
   process.exit(1)
 }

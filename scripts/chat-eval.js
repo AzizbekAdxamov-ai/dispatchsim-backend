@@ -36,7 +36,7 @@ import { fileURLToPath } from 'node:url'
 import { pool, query } from '../src/db/pool.js'
 import { chatConfigFor } from '../src/modules/chat/chatProvider.js'
 import { chatText } from './seed/aiClient.js'
-import { chatTextRecorded } from '../src/modules/chat/scriptRequests.js'
+import { chatTextRecorded, usedToday, budgetRefusal } from '../src/modules/chat/scriptRequests.js'
 import { dailyBudgetFor } from '../src/constants/chatBudget.js'
 import appConfig from '../src/config.js'
 import { marketFacts } from '../src/constants/marketRates.js'
@@ -242,10 +242,12 @@ async function driverRun(carrier) {
 const runBroker = only !== 'driver' && brokerCases.length > 0
 const runDriver = only !== 'broker' && driverCases.length > 0
 const planned = (runBroker ? brokerCases.length : 0) + (runDriver ? driverCases.length : 0)
-const budget = Math.min(...[runBroker && 'broker', runDriver && 'driver'].filter(Boolean)
-  .map((w) => dailyBudgetFor(chatConfigFor(w).baseUrl, appConfig.chatRequestsPerDay)))
-if (planned > budget) {
-  console.error(`Planned ~${planned} requests; the provider's daily budget is ${budget}. Run broker and driver separately.`)
+const sides = [runBroker && 'broker', runDriver && 'driver'].filter(Boolean)
+const budget = Math.min(...sides.map((w) => dailyBudgetFor(chatConfigFor(w).baseUrl, appConfig.chatRequestsPerDay)))
+const used = Math.max(...await Promise.all(sides.map(usedToday)))
+const refusal = budgetRefusal({ planned, budget, used, hint: 'Run broker and driver separately, or wait for tomorrow.' })
+if (refusal) {
+  console.error(refusal)
   await pool.end()
   process.exit(1)
 }
