@@ -49,6 +49,7 @@ import { getDriverContext } from '../src/modules/driverChat/driverChat.repositor
 import { driverStanding } from '../src/modules/payroll/payroll.service.js'
 import { getCarrier } from '../src/modules/carrier/carrier.repository.js'
 import { BROKER_CASES, DRIVER_CASES, brokerFindings, driverFindings, CLASSIFIER_ONLY_FINDING } from './evalCases.js'
+import { nycFixtureLoad, FIXTURE_LOAD_CASES } from './evalFixtures.js'
 import { nextEvalRunId, writeEvalReport } from './evalReport.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -207,14 +208,13 @@ async function driverRun(carrier) {
   const ctx = await getDriverContext(id)
   const standing = await driverStanding(null, id)
   const now = Date.now()
-  // The New York case needs a load into New York, whatever she is really
-  // on -- labelled as not in the database wherever it is shown.
-  const nyc = {
-    id: 'EVAL-NY', originCity: 'Nashville', originState: 'TN', destinationCity: 'New York', destinationState: 'NY',
-    distanceMi: 895, dispatchedAt: new Date(now - 3600e3), etaAt: new Date(now + 8 * 3600e3), deliveryAt: new Date(now + 9 * 3600e3),
-  }
+  // ED08 needs a load into New York and ED02 needs any load to give an ETA
+  // for, whatever she is really on -- labelled as not in the database
+  // wherever it is shown. The pickup is her own city (evalFixtures.js).
+  const nyc = nycFixtureLoad(ctx.driver, now)
   for (const c of driverCases) {
-    const load = c.hypotheticalNyc ? nyc : ctx.load
+    const fixture = FIXTURE_LOAD_CASES.has(c.id)
+    const load = fixture ? nyc : ctx.load
     const systemPrompt = dp.buildDriverSystemPrompt({ driver: ctx.driver, standing, load, carrier })
     const { reply, model } = await ask(config, dp.buildMessages({ systemPrompt, history: [], newMessage: c.line }))
     const situation = dp.situationLines({ driver: ctx.driver, load }).map((l) => l.trim())
@@ -222,11 +222,11 @@ async function driverRun(carrier) {
       runId, at: new Date().toISOString(), chat: 'driver', caseId: c.id, style: c.style, terms: c.terms, line: c.line, good: c.good,
       model, promptVersion: promptVersion('driverChat/driverChat.prompt.js'),
       data: {
-        driver: ctx.driver.name, load: load ? `${load.originCity}, ${load.originState} -> ${load.destinationCity}, ${load.destinationState}${c.hypotheticalNyc ? ' (not in the database)' : ''}` : null,
+        driver: ctx.driver.name, load: load ? `${load.originCity}, ${load.originState} -> ${load.destinationCity}, ${load.destinationState}${fixture ? ' (not in the database)' : ''}` : null,
         situation, requests: dp.requestLines(ctx.driver, load).map((l) => l.trim()).filter(Boolean),
         pay: { unpaidCount: standing.unpaidCount, owedUsd: standing.owedUsd, daysOverdue: standing.daysOverdue },
       },
-      dataSummary: `${situation.join(' ')}${load ? ` · load ${load.originCity} → ${load.destinationCity}${c.hypotheticalNyc ? ' (not in the database)' : ''}` : ' · no load'}`
+      dataSummary: `${situation.join(' ')}${load ? ` · load ${load.originCity} → ${load.destinationCity}${fixture ? ' (not in the database)' : ''}` : ' · no load'}`
         + ` · pay: ${standing.unpaidCount > 0 ? `owed $${Math.round(standing.owedUsd)} (${standing.unpaidCount})` : 'nothing owed'}`,
       systemPrompt,
       reply,

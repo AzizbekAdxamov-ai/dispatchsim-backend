@@ -1,0 +1,41 @@
+// Kills: ED08's New York load picking up in Nashville while Grace sits in
+// Seattle (a 2,325-mile empty run nobody would put in a test of manners),
+// ED02 asking for an ETA with no load to give one for, and a fixture load
+// number that looks internal ("EVAL-NY") instead of a six-digit app number.
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { nycFixtureLoad, FIXTURE_LOAD_CASES } from '../scripts/evalFixtures.js'
+import { emptyRunToPickup } from '../src/modules/loads/whereabouts.js'
+
+const seattle = { currentCity: 'Seattle', currentState: 'WA' }
+
+test('ED08 pickup is where the driver is, not across the country', () => {
+  const load = nycFixtureLoad(seattle)
+  const run = emptyRunToPickup({ city: 'Seattle', state: 'WA' }, load)
+  assert.ok(run.miles <= 150, `empty run ${run.miles} mi`)
+  assert.equal(load.destinationCity, 'New York')
+  assert.ok(load.distanceMi > 2000, 'distance matches the real lane')
+})
+
+test('an unknown driver place falls back to a known pickup city', () => {
+  const load = nycFixtureLoad({ currentCity: 'Nowhere', currentState: 'ZZ' })
+  assert.equal(load.originCity, 'Nashville')
+})
+
+test('ED02 is given a load with an ETA, and the id looks like an app load number', () => {
+  assert.ok(FIXTURE_LOAD_CASES.has('ED02'))
+  assert.ok(FIXTURE_LOAD_CASES.has('ED08'))
+  const load = nycFixtureLoad(seattle)
+  assert.ok(load.etaAt instanceof Date)
+  assert.match(load.id, /^\d{6}$/)
+})
+
+// Kills: chat-eval.js going back to its own inline Nashville load, or to
+// giving only the case-bank flag a fixture load (ED02 would get none).
+test('chat evaluation builds the fixture load from the driver and the case list', async () => {
+  const { readFileSync } = await import('node:fs')
+  const code = readFileSync(new URL('../scripts/chat-eval.js', import.meta.url), 'utf8')
+  assert.match(code, /nycFixtureLoad\(ctx\.driver, now\)/)
+  assert.match(code, /FIXTURE_LOAD_CASES\.has\(c\.id\)/)
+  assert.doesNotMatch(code, /EVAL-NY/)
+})
