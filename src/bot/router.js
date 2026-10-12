@@ -26,14 +26,23 @@
 
 // Parse "/cmd args..." -- the command word lower-cased, arguments verbatim
 // (names may carry any spacing the user typed).
-function parseCommand(text) {
-  const match = /^\/([A-Za-z]+)(?:\s+(.*))?$/.exec(text.trim())
+//
+// In a group Telegram writes a command picked from the menu as
+// "/status@SomeBot" -- the handle says which bot it is for. Without the
+// suffix being understood, "/status@SomeBot" was not a command at all and
+// went to the driver as a sentence. A handle that names a DIFFERENT bot
+// is that bot's command: `forOtherBot`, and the router ignores it.
+function parseCommand(text, botUsername = null) {
+  const match = /^\/([A-Za-z]+)(?:@(\w+))?(?:\s+(.*))?$/.exec(text.trim())
   if (!match) return null
-  return { command: match[1].toLowerCase(), args: (match[2] ?? '').trim() }
+  const handle = match[2] ?? null
+  const forOtherBot = Boolean(handle && botUsername && handle.toLowerCase() !== botUsername.toLowerCase())
+  return { command: match[1].toLowerCase(), args: (match[3] ?? '').trim(), forOtherBot }
 }
 
-export function routeUpdate({ text, replyToTelegramMessageId, currentDriverId }) {
-  const command = parseCommand(text ?? '')
+export function routeUpdate({ text, replyToTelegramMessageId, currentDriverId, botUsername = null }) {
+  const command = parseCommand(text ?? '', botUsername)
+  if (command?.forOtherBot) return { kind: 'ignore' }
 
   // Commands are commands even as replies -- /link inside a reply still
   // binds the chat; only plain text falls through to the reply target.

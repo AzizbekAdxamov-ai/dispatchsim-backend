@@ -21,7 +21,9 @@
 // numbers, never abusive, never threatening.
 
 import { DRIVER_STAGES, SETTLEMENT_TERM_SIM_DAYS } from '../../constants/driverPay.js'
-import { clockTime, hoursMinutes } from '../../constants/appClock.js'
+import { clockDateTime, clockWhen, hoursMinutes } from '../../constants/appClock.js'
+import { readPreferences, hasRequests, preferenceConflicts, avoidedPlaces } from '../../constants/driverPreferences.js'
+import { emptyRunToPickup } from '../loads/whereabouts.js'
 
 // Same list the broker uses -- assistant-speak breaks a persona instantly.
 const BANNED_WORDS = 'certainly, assist, delve, moreover, furthermore, I apologize, as an AI'
@@ -104,7 +106,21 @@ export function situationLines({ driver, load, now = new Date() }) {
   const lines = []
 
   if (driver.currentCity && driver.currentState) {
-    lines.push(`  You are in ${driver.currentCity}, ${driver.currentState} right now.`)
+    // On a run the place is a point on the lane named by the nearest city
+    // (livePlace.js) -- "near", because the truck is between cities.
+    lines.push(driver.onTheRoad
+      ? `  You are on the road near ${driver.currentCity}, ${driver.currentState} right now.`
+      : `  You are in ${driver.currentCity}, ${driver.currentState} right now.`)
+  }
+
+  // The empty run this load started with: from where the driver was
+  // parked to the pickup. The program moves the truck to the pickup at
+  // dispatch, but those miles were real and they were empty -- a driver
+  // sent 2,300 miles for a pickup has something to say about it.
+  const empty = load ? emptyRunToPickup({ city: driver.parkedCity, state: driver.parkedState }, load) : null
+  if (empty && empty.miles > 0) {
+    lines.push(`  Before this load you were parked in ${driver.parkedCity}, ${driver.parkedState}. The pickup in`
+      + ` ${load.originCity}, ${load.originState} was about ${empty.miles.toLocaleString('en-US')} road miles from there, all of it empty.`)
   }
 
   const DUTY = {
@@ -113,7 +129,12 @@ export function situationLines({ driver, load, now = new Date() }) {
     resting: '  You are in the bunk on your ten.',
     off: '  You are off the clock.',
   }
-  lines.push(DUTY[driver.dutyStatus] ?? '  You are off the clock.')
+  // On a run, "on duty, not driving" is a stop on the road. The general
+  // line lists loading, and on 2026-10-06 (fourth run) Grace, on the road
+  // near New York, said "waiting on the dock, box is loaded".
+  lines.push(driver.onTheRoad && driver.dutyStatus === 'on-duty'
+    ? '  You are on duty but not driving -- stopped on the road for fuel or a walkaround. You are not at a dock.'
+    : DUTY[driver.dutyStatus] ?? '  You are off the clock.')
 
   const left = hoursMinutes(driver.hosRemainingMin)
   if (left) {
@@ -126,25 +147,68 @@ export function situationLines({ driver, load, now = new Date() }) {
   }
 
   if (load?.etaAt) {
-    const eta = clockTime(load.etaAt)
+    const eta = clockWhen(load.etaAt, now.toISOString())
     lines.push(`  You are due into ${load.destinationCity}, ${load.destinationState} around ${eta}.`)
     // Late is a fact the DRIVER would know before the dispatcher does --
     // they are the one watching the miles go by. Computed from the two
     // timestamps rather than trusted to the model's arithmetic.
     const late = minutesLate(load)
     if (late != null) {
-      lines.push(`  That is ${hoursMinutes(late)} past the appointment. You know you are running late.`)
+      // Said in hours, because the model shrank 27 hours to "a bit late"
+      // (2026-10-06 scenario run). A number the dispatcher plans on must
+      // reach them as the number.
+      lines.push(`  That is ${hoursMinutes(late)} past the appointment. You know you are running late; if it comes up, say by how much in hours, never "a bit".`)
     }
   }
 
   // The clock the times above are on, so the person speaks in one zone.
-  lines.push(`  It is ${clockTime(now.toISOString())} where the load is.`)
+  // The day and the date, not just the hour: "pickup today at 3 AM" and
+  // "delivery Friday night" only mean something to someone who knows it
+  // is Wednesday.
+  lines.push(`  It is ${clockDateTime(now.toISOString())} (Central time) where the load is.`)
 
   return lines
 }
 
 function money(n) {
   return `$${Math.abs(n ?? 0).toLocaleString('en-US')}`
+}
+
+// What this driver has asked dispatch not to give them (drivers.
+// preferences, 054), and -- if the load they are on runs into it -- that
+// it does. The office's note is quoted, not rephrased: it is written about
+// the driver the way the bio is, and the header says whose words they are.
+//
+// Sent there anyway, a person says so once and gets on with it, maybe
+// angling for something back. They do not refuse here: refusing a load is
+// decided by the dispatch rules (availability), and a chat model saying
+// "no" on its own would be a second, invisible rule.
+export function requestLines(driver, load) {
+  const prefs = readPreferences(driver.preferences)
+  if (!hasRequests(prefs)) return []
+  const out = [
+    '',
+    'WHAT YOU HAVE ASKED DISPATCH NOT TO GIVE YOU:',
+    // YOUR request, said as one: in the 2026-10-06 run Grace told the
+    // dispatcher "you said no NYC" -- turning her own request into theirs.
+    `  Runs to ${avoidedPlaces(prefs).join(', ')}. This is YOUR request to the office -- you asked`,
+    '  them, not the other way round.',
+    ...(prefs.why ? [`  The office has it written down as: "${prefs.why}"`] : []),
+  ]
+  const conflicts = load ? preferenceConflicts(prefs, load) : []
+  if (conflicts.length > 0) {
+    out.push(
+      `  The load you are on runs to ${conflicts.map((c) => `${c.place} (the ${c.end})`).join(' and ')} --`,
+      '  exactly what you asked not to get. Say so ONCE in this whole chat, the',
+      '  first time it comes up, in your own way; you might ask for something',
+      '  back for it. If you have already said it above, do not say it again --',
+      '  not even tacked onto an answer about something else.',
+      // 2026-10-06 fourth run: asked her ETA, Grace added "this delivery
+      // is in NY, not the city, like I told dispatch" -- moving the load.
+      '  The load goes where it is written above; never say it goes anywhere else.',
+    )
+  }
+  return out
 }
 
 // A driver is not a broker: they are your employee, they know your
@@ -187,14 +251,22 @@ export function buildDriverSystemPrompt({ driver, standing, load, carrier = null
 
   lines.push('', 'WHERE YOU ARE, RIGHT NOW:', ...situationLines({ driver, load, now }))
 
-  // The persona, verbatim from the row. Written as second person by the
-  // migration so it reads as instructions; character only -- anything
+  // The persona, verbatim from the row. Character only -- anything
   // operational (home base, CDL, pay, the truck) is stated by the blocks
   // above from its own column, and the bio must not repeat it, because a
   // fact with two copies has two owners and they will disagree.
+  //
+  // 051 writes the bio in the THIRD person ("she can go on"), as a
+  // profile page reads it, while every other block here says "you". The
+  // header is what joins the two: without it, a description of "her" in
+  // the middle of instructions to "you" invites the model to talk about
+  // Grace instead of being her. (This comment used to say the migration
+  // wrote second person. It did not.)
   if (driver.bio != null && driver.bio.trim() !== '') {
-    lines.push('', 'PERSONALITY:', driver.bio.trim())
+    lines.push('', 'PERSONALITY (this is you, described the way a colleague would):', driver.bio.trim())
   }
+
+  lines.push(...requestLines(driver, load))
 
   lines.push(
     '',
@@ -212,7 +284,7 @@ export function buildDriverSystemPrompt({ driver, standing, load, carrier = null
     '',
     'HOW YOU TALK:',
     '- One to three sentences. Texting from a truck stop, not writing an',
-    '  email. No lists, no headings.',
+    '  email. No lists, no headings, no asterisks.',
     '- Plain American trucking English. You say "I ran that load", "I am',
     '  sitting in Amarillo", "when is that hitting my account".',
     '- You are a person with a job, not an assistant. Never offer to help',
@@ -229,9 +301,25 @@ export function buildDriverSystemPrompt({ driver, standing, load, carrier = null
     '  your own hours and fuel, and what has been said in this',
     '  conversation. Those numbers are above: use them, do not round them',
     '  into something vaguer and do not improve on them.',
-    '- If you are asked something that is NOT above -- the next load, where',
-    '  another driver is, what the company was paid, the weather in three',
-    '  hours -- say you do not know, or that you will check and come back.',
+    '- If you are asked something that is NOT above -- where another driver',
+    '  is, what the company was paid, the weather in three hours --',
+    '  say you do not know. Never promise to check and get back: nothing',
+    '  comes back from you later, and the dispatcher would be left waiting.',
+    // 2026-10-06 fourth run: "let me look at the paperwork".
+    '  Saying you will look at the paperwork is the same promise.',
+    // Same run: "should be at the drop in a bit", then "at the NY drop" --
+    // from a driver whose situation says on the road near New York, with
+    // an hour she is due in. And "waiting on the shipper" at the delivery.
+    '- Where you are and when you are due are written above. Say them as',
+    '  written: on the road near a city is not at the dock there, and the',
+    '  hour you are due is an hour, not "a bit".',
+    '- Where you pick up is the shipper; where you deliver is the receiver.',
+    // 2026-10-06 scenario run: told "got a dallas load next", Grace said
+    // "I don't know about a Dallas load yet. Let me check and get back to
+    // you" -- about a load the dispatcher was handing HER.
+    '- When the dispatcher tells you about a next load, they know it and you',
+    '  do not yet: ask for what you need -- where it picks up, how many miles,',
+    '  when.',
     '  Making up a town you are near or an hour you will arrive is the one',
     '  thing that cannot be walked back: your dispatcher will plan on it.',
     '- You do NOT know the company bank balance, what other drivers are',

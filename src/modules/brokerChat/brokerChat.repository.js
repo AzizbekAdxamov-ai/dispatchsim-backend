@@ -299,3 +299,10 @@ export async function rateConDelivered(conversationId) {
   )
   return result.rows[0].delivered
 }
+
+// What one dispatcher turn cost at the provider (055): every request its
+// reply took, second tries included. Written after the reply, success or
+// failure -- a failed call that sent three requests still spent three.
+export async function setProviderRequests(messageId, n) {
+  await query('UPDATE broker_messages SET provider_requests = $2 WHERE id = $1', [messageId, n])
+}

@@ -5,12 +5,16 @@
 // 22 requests a day, chat is per-message and open-ended — so they get
 // separate budgets, keys and models.
 import { chatText } from '../../../scripts/seed/aiClient.js'
+import { fileURLToPath } from 'node:url'
+import { promptVersionOf } from '../../lib/promptVersion.js'
+import { turnRow, logTurn } from '../chat/turnLog.js'
 import { assertCanSend } from '../chat/chatBudget.service.js'
 import { tooLongForChat, CHAT_REPLY_MAX_CHARS } from '../../constants/chatBudget.js'
 import { chatConfigFor } from '../chat/chatProvider.js'
 import { AppError } from '../../lib/errors.js'
 import { getCarrier } from '../carrier/carrier.repository.js'
 import * as repo from './brokerChat.repository.js'
+import { talkFacts } from '../../constants/freightTerms.js'
 import { replyDelaySec, rateConAmount } from './replyTiming.js'
 import { bookPosting } from '../loadBoard/loadBoard.service.js'
 import {
@@ -20,6 +24,9 @@ import {
   leaksReasoning,
   FALLBACK_REPLY,
 } from './brokerChat.prompt.js'
+
+// Which version of the prompt builder answered (chat_turn_log, 056).
+const PROMPT_VERSION = promptVersionOf(fileURLToPath(new URL('./brokerChat.prompt.js', import.meta.url)))
 
 // Only the last N turns go to the model. The context window is not the
 // constraint (the free models carry 250K+); a broker who still remembers a
@@ -65,20 +72,30 @@ export async function openConversation({ postingId, userId }) {
 // Read one thread. openConversation creates-or-opens and is a POST; this
 // is the plain read the panel polls, so a refresh does not look like a
 // write. Same payload either way, so the client has one shape to render.
+// The dispatcher's typed words in a thread. Rate confirmations are
+// documents, not things anyone said.
+export function dispatcherTexts(messages) {
+  return (messages ?? []).filter((m) => m.role === 'dispatcher' && m.kind !== 'rate_con').map((m) => m.content)
+}
+
 export async function getThread({ conversationId, userId }) {
   const conversation = await repo.getConversation(conversationId, userId)
   if (!conversation) throw new AppError('CONVERSATION_NOT_FOUND')
 
   const posting = await repo.getPostingWithBroker(conversation.postingId)
 
+  const messages = await repo.listMessages(conversationId)
   return {
     conversation,
-    messages: await repo.listMessages(conversationId),
+    messages,
     broker: posting && {
       name: posting.name,
       contactName: posting.contactName,
       mcNumber: posting.mcNumber,
     },
+    // What the dispatcher has said, as facts: trade words used and the
+    // before-booking points raised (src/constants/freightTerms.js).
+    talk: posting ? talkFacts(dispatcherTexts(messages), posting.equipmentType) : null,
     awaitingReply: await repo.hasPendingReply(conversationId),
   }
 }
@@ -108,13 +125,26 @@ export async function sendMessage({ conversationId, userId, text }) {
     carrier,
     broker: { name: posting.name, contactName: posting.contactName, persona: posting.persona },
     posting,
+    // The dispatcher's own words so far, this one included.
+    talk: talkFacts([...dispatcherTexts(history), text], posting.equipmentType),
   })
+
+  // Every request this turn sends to the provider, counted where they are
+  // sent (aiClient's onRequest) and written onto the dispatcher's row once
+  // the turn is over -- the daily budget is their sum (055).
+  let spent = 0
+  const onRequest = () => { spent += 1 }
+  // For the turn's record (chat_turn_log): why the first reply was
+  // regenerated, and the error if the turn failed.
+  let regenerated = null
+  let failure = null
 
   let reply
   try {
     reply = await chatText({
       messages: buildMessages({ systemPrompt, history, newMessage: text }),
       config,
+      onRequest,
     })
 
     // Two ways a reply can be unusable, both regenerated once and then
@@ -142,6 +172,7 @@ export async function sendMessage({ conversationId, userId, text }) {
           ? 'showed your own reasoning instead of speaking as the broker'
           : `ran to ${reply.trim().length} characters when the limit is ${CHAT_REPLY_MAX_CHARS}`
       console.warn(`[brokerChat] retrying — reply ${why}`)
+      regenerated = why
       reply = await chatText({
         messages: buildMessages({
           systemPrompt: `${systemPrompt}\n\nYour last reply ${why}. Reply again as the broker, in character, one to three sentences only.`,
@@ -149,10 +180,12 @@ export async function sendMessage({ conversationId, userId, text }) {
           newMessage: text,
         }),
         config,
+        onRequest,
       })
       if (unusable(reply)) reply = FALLBACK_REPLY
     }
   } catch (err) {
+    failure = err.message
     console.error(`[brokerChat] model call failed: ${err.message}`)
     // The provider ran out before the app's own budget did. Saying the
     // broker cannot be reached would be a sentence about a person who is
@@ -160,12 +193,33 @@ export async function sendMessage({ conversationId, userId, text }) {
     // requests, which is a different fact with a different answer.
     if (err.quotaExhausted) {
       throw new AppError('CHAT_DAILY_LIMIT', {
-        message: "Provayder bugungi so'rovlar limitini tugatdi. Ertaga yangilanadi."
+        message: "The provider's daily request limit is used up. It resets tomorrow."
           + (err.providerMessage ? ` (${err.providerMessage})` : ''),
         source: 'provider',
       })
     }
+    // A provider 429 without an explicit daily-cap message may be a busy
+    // upstream model. The broker did not cause the failed response.
+    if (err.rateLimited) throw new AppError('CHAT_PROVIDER_BUSY')
     throw new AppError('CHAT_UNAVAILABLE')
+  } finally {
+    // Not allowed to replace the error the dispatcher is about to see, and
+    // not allowed to vanish either: a turn whose cost was not written is
+    // charged the default of one, which undercounts only that turn.
+    await repo.setProviderRequests(dispatcherMessage.id, spent).catch((e) => {
+      console.error(`[brokerChat] could not record ${spent} provider request(s) on message ${dispatcherMessage.id}: ${e.message}`)
+    })
+    // The turn's record, for grading and training (056). Same rule as
+    // above: never replaces the dispatcher's error, never vanishes.
+    await logTurn(turnRow({
+      chat: 'broker', conversationId, dispatcherMessageId: dispatcherMessage.id, userId,
+      model: config.model, promptVersion: PROMPT_VERSION, systemPrompt, history, text,
+      imageCount: 0, reply, regeneratedBecause: regenerated,
+      fellBack: reply === FALLBACK_REPLY, error: failure, providerRequests: spent,
+      onTheRoad: false,
+    })).catch((e) => {
+      console.error(`[brokerChat] could not write the turn log for message ${dispatcherMessage.id}: ${e.message}`)
+    })
   }
 
   // The reply is written now and shown later. Generating it up front means

@@ -1,0 +1,134 @@
+// Brokers that do not all sound like one broker.
+//
+// Azizbek, 2026-09-30: "every new broker chat gives the same answer,
+// like a template". Two causes, both fixed and both pinned here: the
+// prompt handed every broker the same list of questions to walk in the
+// same order, and each broker's character was one sentence -- two of
+// which contradicted the prompt's own rules.
+//
+// Each test names the mutation it kills. No database, no network.
+
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { join, dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+import { buildBrokerSystemPrompt, loadSituation } from '../src/modules/brokerChat/brokerChat.prompt.js'
+import { CITIES } from '../scripts/seed/cities.js'
+
+const CITY_NAMES = CITIES.map((c) => c.city ?? c.name).filter(Boolean)
+
+const here = dirname(fileURLToPath(import.meta.url))
+const migration = (name) => readFileSync(join(here, '..', 'src', 'db', 'migrations', name), 'utf8')
+
+const NOW = new Date('2026-09-30T13:53:00Z')
+const HOUR = 3600000
+const BROKER = { contactName: 'Renata Kovac', name: 'Ironwood Freight Partners', persona: 'Blunt and fast.' }
+const posting = (over = {}) => ({
+  id: 'p-1', originCity: 'Dover', originState: 'DE', destinationCity: 'Peoria', destinationState: 'IL',
+  distanceMi: 887, commodity: 'paper goods', weightLbs: 38000, equipmentType: 'Dry Van', equipmentLengthFt: 53,
+  rateHidden: false, rateUsd: 2244,
+  postedAt: new Date(NOW.getTime() - 3 * HOUR),
+  expiresAt: new Date(NOW.getTime() + 30 * HOUR),
+  pickupAt: new Date(NOW.getTime() + 40 * HOUR),
+  deliveryAt: new Date(NOW.getTime() + 60 * HOUR),
+  ...over,
+})
+
+// -- the situation: different loads, different conversations ---------------
+
+// Kills: a situation block that ignores the timestamps. The same broker
+// on a load posted twenty minutes ago and on one that has sat for two
+// days must not be told the same thing.
+test('a fresh load and a stale one are different situations', () => {
+  const fresh = loadSituation({ posting: posting({ postedAt: new Date(NOW.getTime() - 20 * 60000) }), now: NOW }).join('\n')
+  const stale = loadSituation({ posting: posting({ postedAt: new Date(NOW.getTime() - 50 * HOUR) }), now: NOW }).join('\n')
+
+  assert.match(fresh, /on the board for 20 minutes/)
+  assert.match(fresh, /just went up/)
+  assert.match(stale, /on the board for 2 days/)
+  assert.match(stale, /been sitting/)
+  assert.notEqual(fresh, stale)
+})
+
+// Kills: dropping the pickup pressure. A load that picks up in five hours
+// is a broker who needs a truck now; that is what changes a negotiation.
+test('a close pickup changes what the broker cares about', () => {
+  const soon = loadSituation({ posting: posting({ pickupAt: new Date(NOW.getTime() + 5 * HOUR), expiresAt: new Date(NOW.getTime() + 4 * HOUR) }), now: NOW }).join('\n')
+  const later = loadSituation({ posting: posting(), now: NOW }).join('\n')
+  assert.match(soon, /picks up in 5 hours/)
+  assert.match(soon, /pickup is close/)
+  assert.doesNotMatch(later, /pickup is close/)
+})
+
+// Kills: guessing when a timestamp is missing. No posted_at, no line --
+// an invented "on the board for 0 minutes" is a fact nobody recorded.
+test('a missing timestamp leaves its line out', () => {
+  const lines = loadSituation({ posting: posting({ postedAt: null, pickupAt: null, expiresAt: null }), now: NOW })
+  assert.deepEqual(lines, [])
+})
+
+// -- the prompt: character first, no checklist -----------------------------
+
+// Kills: putting the checklist back. It was the template: five topics in
+// one sentence, asked top to bottom on every call.
+test('the prompt no longer hands the broker a list to walk', () => {
+  const prompt = buildBrokerSystemPrompt({ broker: BROKER, posting: posting(), now: NOW })
+  assert.doesNotMatch(prompt, /then ask your own\s+question\. Ask only about things a dispatcher can answer from their own\s+board: what trailer/)
+  assert.match(prompt, /ask ONE thing/)
+  assert.match(prompt, /Never ask something they have already told you/)
+  assert.match(prompt, /Two brokers should never\s+sound alike/)
+})
+
+// Kills: building the situation and never putting it in the prompt.
+test('the situation reaches the prompt', () => {
+  const prompt = buildBrokerSystemPrompt({ broker: BROKER, posting: posting(), now: NOW })
+  assert.match(prompt, /WHERE THIS LOAD STANDS:/)
+  assert.match(prompt, /on the board for 3 hours/)
+})
+
+// -- the voices ------------------------------------------------------------
+
+const NAMES_013 = [...migration('013_brokers.sql').matchAll(/\('([^']+)', 'MC-\d+'/g)].map((m) => m[1])
+const PERSONAS_052 = [...migration('052_broker_voices.sql').matchAll(/UPDATE brokers SET persona = '((?:[^']|'')+)'\s+WHERE name = '([^']+)'/g)]
+  .map((m) => ({ persona: m[1].replaceAll("''", "'"), name: m[2] }))
+
+// Kills: a broker left with the one-line 013 voice. Twelve brokers, twelve
+// voices -- one missed is one broker still sounding like the template.
+test('every broker from 013 gets a voice in 052', () => {
+  assert.equal(NAMES_013.length, 12, `013 dan ${NAMES_013.length} ta broker o'qildi`)
+  const voiced = new Set(PERSONAS_052.map((p) => p.name))
+  const missing = NAMES_013.filter((n) => !voiced.has(n))
+  assert.deepEqual(missing, [], `ovozi yo'q brokerlar: ${missing.join(', ')}`)
+})
+
+// Kills: a voice that orders what the prompt forbids. Marcus "asks for
+// paperwork up front" and Thomas asked about insurance; given two orders
+// that cannot both be obeyed, the model obeyed neither.
+test('no voice asks for what the prompt forbids', () => {
+  // The words themselves, not a phrasing of them: 013's Thomas never
+  // said "asks for insurance", he "slips in questions about ... insurance".
+  const forbidden = /paperwork|insurance|W-9|MC number|authority/i
+  const offending = PERSONAS_052.filter((p) => forbidden.test(p.persona)).map((p) => p.name)
+  assert.deepEqual(offending, [], `promptga zid personalar: ${offending.join(', ')}`)
+})
+
+// Kills: a voice that states a fact. A rate, a lane or a date in a
+// persona is a second copy of something the posting owns.
+test('a voice is character, not facts', () => {
+  // Money, distances and durations -- and places and equipment: a voice
+  // that says "Dover" or "53-foot" hands the model a lane it will repeat
+  // on a load out of Houston.
+  const place = new RegExp(`\\b(${[...new Set(CITY_NAMES)].join('|')})\\b`)
+  const facty = PERSONAS_052
+    .filter((p) => /\$\d|\d+ ?(mi|miles|days|%)\b|\d+-?foot|dry van|reefer|flatbed/i.test(p.persona) || place.test(p.persona))
+    .map((p) => p.name)
+  assert.deepEqual(facty, [], `personada fakt bor: ${facty.join(', ')}`)
+})
+
+// Kills: two brokers with the same voice.
+test('no two brokers share a voice', () => {
+  const seen = new Set(PERSONAS_052.map((p) => p.persona))
+  assert.equal(seen.size, PERSONAS_052.length)
+})

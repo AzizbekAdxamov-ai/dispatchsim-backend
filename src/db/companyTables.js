@@ -46,6 +46,12 @@ export const KEEP = Object.freeze(new Set([
   // this company owns -- so it belongs with brokers/CITIES, not with the
   // drivers/trucks/loads a reset actually clears.
   'lane_routes',
+  // chat_turn_log (056) -- the record of how the chat models answered:
+  // the prompt, the reply, the grade. It is the training material
+  // (Azizbek, 2026-10-09), not the company's business; a reset starts the
+  // company over, it does not erase what the models were measured on. No
+  // foreign keys on purpose (see 056), so the walk never reaches it.
+  'chat_turn_log',
   // pre_trip_inspections (045) -- the pre-trip walk-around (49 CFR 392.7)
   // names the truck, driver and load it belongs to: company property, all
   // three, and reached by the walk from loads and trucks either way. It is

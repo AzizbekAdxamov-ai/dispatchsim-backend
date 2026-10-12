@@ -34,6 +34,22 @@ export const PER_TICK = Math.floor((TICK_SEC / 60) * RATE.GROUP_MSG_PER_MIN)
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
+// How long Telegram shows "typing…", and why the send has to wait for it.
+//
+// https://core.telegram.org/bots/api#sendchataction (checked 2026-09-30):
+// "The status is set for 5 seconds or less (when a message arrives from
+// your bot, Telegram clients clear its typing status)."
+//
+// The second half of that sentence is the whole point. The indicator was
+// first added (72de178) as typing-then-send with nothing in between, and
+// the arriving message cleared the status the instant it was set: the
+// feature was in the code and never once on a screen. The wait below is
+// the one number Telegram documents for this -- the full window, so the
+// indicator runs out exactly as the message lands. A driver's answer is
+// already minutes away (driverChat.replyTiming.js); five more seconds of
+// "typing…" is the part of that wait a person can actually see.
+export const TYPING_SHOWN_MS = 5000
+
 // Will this send ever work?
 //
 // On 2026-09-29 the answer was no, and the bot did not know how to ask.
@@ -73,7 +89,10 @@ export function lineFor({ driverName, truckId, content }) {
 // One pass. Returns the state to save -- the caller persists it, and
 // persists it after every message rather than at the end of the tick,
 // because the tick can be interrupted and the messages cannot be unsent.
-export async function pushDue({ state, chatId, userId, telegram, save, due = repo.dueDriverMessages, gapMs = RATE.MIN_GAP_MS }) {
+export async function pushDue({
+  state, chatId, userId, telegram, save,
+  due = repo.dueDriverMessages, gapMs = RATE.MIN_GAP_MS, typingMs = TYPING_SHOWN_MS,
+}) {
   const rows = await due({ userId, through: state.deliveredThrough, limit: PER_TICK })
   let next = state
 
@@ -106,11 +125,19 @@ export async function pushDue({ state, chatId, userId, telegram, save, due = rep
     // Telegram's side; the reply timing is 2-5 minutes, so a single call
     // here cannot bridge the whole wait -- it marks the moment the
     // driver picked the phone up, which is the part that reads as human.
-    try {
-      await telegram.sendChatAction?.(chatId, 'typing')
-    } catch {
-      // An indicator nobody saw is nothing lost; never fail a send for it.
+    let typing = false
+    if (telegram.sendChatAction) {
+      try {
+        await telegram.sendChatAction(chatId, 'typing')
+        typing = true
+      } catch {
+        // An indicator nobody saw is nothing lost; never fail a send for it.
+      }
     }
+    // Only after an indicator actually went out: waiting five seconds for
+    // a "typing…" that failed to appear would be a delay with nothing to
+    // show for it.
+    if (typing && typingMs > 0) await sleep(typingMs)
     try {
       sent = await telegram.sendMessage(
         chatId,

@@ -45,6 +45,7 @@ import { fromHosDomain, HOS_LOOKBACK_HOURS } from '../../constants/hosClock.js'
 import { dutyStatusWhileOpen } from '../../constants/loadEvents.js'
 import { eventLogBlocks, openWaitEndMs } from './eventBlocks.js'
 import { simDaysToMs } from '../../constants/simClock.js'
+import { clockDateTime } from '../../constants/appClock.js'
 import { AVG_MPG } from '../finance/finance.constants.js'
 
 function fact(code, detail, cfr = null) {
@@ -169,7 +170,7 @@ export async function replanAfterEvent({ loadId, eventAt, resolvedAt, eventType,
   })
 
   const updated = await loadsRepo.setLegalEtaAt(pool, { loadId, legalArrivalAt: plan.legalArrivalAt })
-  facts.push(fact('ETA_REPLANNED', `After ${label.toLowerCase()}, the HOS-legal arrival is ${plan.legalArrivalAt}.`))
+  facts.push(fact('ETA_REPLANNED', `After ${label.toLowerCase()}, the HOS-legal arrival is ${clockDateTime(plan.legalArrivalAt)} CT.`))
   await say()
   return { replanned: Boolean(updated), legalArrivalAt: updated ? plan.legalArrivalAt : null }
 }

@@ -18,6 +18,7 @@ import * as driverChat from '../modules/driverChat/driverChat.service.js'
 import { getCarrier } from '../modules/carrier/carrier.repository.js'
 import { getDriverContext } from '../modules/driverChat/driverChat.repository.js'
 import { statusText } from './status.js'
+import { isGroupChat, callName, stripBotMention } from './addressing.js'
 
 // The app, as the bot needs it. One object, so a test can replace it
 // whole: every call below goes through here and nothing reaches around
@@ -41,7 +42,7 @@ const HELP_LINES = [
   'Anything else is sent to the driver: reply to one of my messages, or pick a driver with /d first.',
 ]
 
-export function helpText(carrierName, driver = null) {
+export function helpText(carrierName, driver = null, { group = false } = {}) {
   const title = carrierName ? `${carrierName} — driver dispatch` : 'Driver dispatch'
   if (driver) {
     // One driver: nothing to choose, so nothing to explain about
@@ -52,6 +53,11 @@ export function helpText(carrierName, driver = null) {
       '',
       `You are talking to ${driver.truckId ? `${driver.name} · ${driver.truckId}` : driver.name}.`,
       'Just type. They answer when they can — a driver behind the wheel does not text back at once.',
+      // In a group the two people talking to each other are left alone
+      // (src/bot/addressing.js), and the way in has to be said once.
+      ...(group
+        ? [`In this group: reply to ${callName(driver.name)}'s message, or say "${callName(driver.name)}" — other talk is left alone.`]
+        : []),
       '',
       '/status — where they are right now, from the dispatch system',
       '/help — this',
@@ -98,15 +104,19 @@ function rosterText(rows) {
 // /d step and without the roster question. The one group talks to one
 // driver, which is the whole arrangement -- everything else (/d, /drivers,
 // replies) keeps working for anyone who wants the general case.
-export async function handleUpdate(fact, { state, app = realApp, userId, vision = false, fixedDriverName = null }) {
+export async function handleUpdate(fact, { state, app = realApp, userId, vision = false, fixedDriverName = null, botUsername = null }) {
   const replies = []
   const say = (text) => { replies.push(text) }
   let next = state
+
+  // "@Bot where are you" reaches the driver as "where are you".
+  if (botUsername && fact.text) fact = { ...fact, text: stripBotMention(fact.text, botUsername) }
 
   const intent = routeUpdate({
     text: fact.text ?? '',
     replyToTelegramMessageId: fact.replyToTelegramMessageId ?? null,
     currentDriverId: state.currentDriverId ?? null,
+    botUsername,
   })
 
   // One group, one driver.
@@ -141,7 +151,7 @@ export async function handleUpdate(fact, { state, app = realApp, userId, vision 
       }
       if (intent.kind === 'help') {
         const carrier = await app.getCarrier()
-        say(helpText(carrier?.name, context.driver))
+        say(helpText(carrier?.name, context.driver, { group: isGroupChat(fact.chatType, fact.chatId) }))
       } else {
         say(statusText(context))
       }
@@ -247,6 +257,35 @@ export async function handleUpdate(fact, { state, app = realApp, userId, vision 
   return { state: next, replies }
 }
 
+// What the chat is told when the model did not answer.
+//
+// These lines used to promise that "the reply will come when it is back".
+// Nothing makes that true: a failed model call is not queued and nothing
+// retries it -- the dispatcher's message is saved in the thread, and that
+// is all. A promise the program does not keep is worse than silence,
+// because the person waits for it. So the notice says what happened, with
+// the cause when there is one, and what the person has to do: send again.
+//
+// Pure, exported for the tests. Returns null for anything that is not one
+// of these failures -- those are bugs and stay loud.
+const CAUSE_MAX_CHARS = 220
+
+export function unansweredNotice(err) {
+  if (!(err instanceof AppError)) return null
+  if (err.code === 'CHAT_DAILY_LIMIT') {
+    return "The AI provider's daily limit is used up. Your message is saved in the app, but it will not be answered — send it again tomorrow."
+  }
+  if (err.code === 'CHAT_PROVIDER_BUSY') {
+    return 'The AI provider is busy right now. Your message is saved in the app, but nothing will retry it — send it again later.'
+  }
+  if (err.code === 'DRIVER_UNREACHABLE' || err.code === 'CHAT_UNAVAILABLE') {
+    const cause = typeof err.details?.cause === 'string' ? err.details.cause.trim() : ''
+    const why = cause ? ` (${cause.length > CAUSE_MAX_CHARS ? `${cause.slice(0, CAUSE_MAX_CHARS)}…` : cause})` : ''
+    return `The AI did not answer${why}. Your message is saved in the app, but nothing will retry it — send it again.`
+  }
+  return null
+}
+
 // The one door into the chat. The driver's ANSWER does not come back
 // here: driverChat.service writes it with a deliver_at in the future --
 // a driver answers when they can stop -- and outgoing.js carries it to
@@ -277,12 +316,9 @@ export async function deliver({ driverId, fact, say, app, userId, vision }) {
     // that actually happened. "The driver is not answering" would be a
     // lie about a person standing right there; the provider is what is
     // not answering. Anything else is a bug and stays loud.
-    if (err instanceof AppError && err.code === 'CHAT_DAILY_LIMIT') {
-      say("The AI provider's daily limit is used up. Messages still land in the app; replies resume tomorrow.")
-      return
-    }
-    if (err instanceof AppError && (err.code === 'DRIVER_UNREACHABLE' || err.code === 'CHAT_UNAVAILABLE')) {
-      say('The chat provider is not answering right now. Your message is in the app; the reply will come when it is back.')
+    const notice = unansweredNotice(err)
+    if (notice) {
+      say(notice)
       return
     }
     throw err

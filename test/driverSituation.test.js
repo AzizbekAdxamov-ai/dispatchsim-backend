@@ -65,7 +65,7 @@ test('fuel is a share of the tank', () => {
 test('times are on the operation clock, not UTC', () => {
   const out = text({ driver: DRIVER, load: LOAD })
   assert.match(out, /due into Denver, CO around 6:30 PM/)
-  assert.match(out, /It is 1:00 PM where the load is\./)
+  assert.match(out, /It is Tue, Sep 29, 1:00 PM \(Central time\) where the load is\./)
   assert.doesNotMatch(out, /23:30|18:00/)
 })
 
@@ -125,4 +125,40 @@ test('no carrier row still leaves a whole sentence', () => {
   })
   assert.match(prompt, /You are Marcus Webb, a company driver with a CDL-A\./)
   assert.doesNotMatch(prompt, /undefined|null/)
+})
+
+// Kills: lateness left to the model's wording -- 27 hours late came out as
+// "running a bit late" (2026-10-06 scenario run).
+test('a late driver is told to say how late in hours', () => {
+  const late = situationLines({
+    driver: { currentCity: 'Toledo', currentState: 'OH', dutyStatus: 'driving' },
+    load: { originCity: 'Nashville', originState: 'TN', destinationCity: 'New York', destinationState: 'NY', etaAt: '2026-10-06T13:20:00Z', deliveryAt: '2026-10-05T09:46:00Z' },
+    now: new Date('2026-10-06T13:00:00Z'),
+  }).join('\n')
+  assert.match(late, /past the appointment\. You know you are running late; if it comes up, say by how much in hours, never "a bit"\./)
+})
+
+// Kills: the general on-duty line ("fuelling, loading, a walkaround") on
+// a driver mid-run. On 2026-10-06 (fourth run) Grace, on the road near New
+// York, said "waiting on the dock, box is loaded".
+test('on duty on the road is a stop on the road, not a dock', () => {
+  const onRun = text({ driver: { ...DRIVER, dutyStatus: 'on-duty', onTheRoad: true }, load: LOAD })
+  assert.match(onRun, /stopped on the road for fuel or a walkaround\. You are not at a dock\./)
+  assert.doesNotMatch(onRun, /loading/)
+  const parked = text({ driver: { ...DRIVER, dutyStatus: 'on-duty' }, load: null })
+  assert.match(parked, /fuelling, loading, a walkaround/)
+})
+
+// Kills: "at the drop" from a driver on the road, "in a bit" for an hour
+// she has, "let me look at the paperwork", and "the shipper" at the
+// delivery end -- all from the fourth 2026-10-06 run.
+test('the driver says where and when as written, and promises no paperwork check', () => {
+  const p = buildDriverSystemPrompt({
+    driver: DRIVER, load: LOAD, now: NOW,
+    standing: { stage: 'ok', unpaidCount: 0, owedUsd: 0, daysOverdue: 0 },
+  })
+  assert.match(p, /on the road near a city is not at the dock there/)
+  assert.match(p, /the\s+hour you are due is an hour, not "a bit"/)
+  assert.match(p, /Saying you will look at the paperwork is the same promise\./)
+  assert.match(p, /Where you pick up is the shipper; where you deliver is the receiver\./)
 })

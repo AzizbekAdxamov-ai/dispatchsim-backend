@@ -64,6 +64,11 @@ export function toFacts(update) {
     fromTgUserId: message.from?.id ?? null,
     // reply_to_message exists only when someone actually replied.
     replyToTelegramMessageId: message.reply_to_message?.message_id ?? null,
+    // Who wrote the message being replied to. In a group with two people
+    // in it, a reply to the OTHER PERSON is part of their conversation,
+    // not something for the driver (src/bot/addressing.js).
+    replyToFromBot: message.reply_to_message?.from?.is_bot === true,
+    replyToUsername: message.reply_to_message?.from?.username ?? null,
   }
 }
 

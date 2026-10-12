@@ -111,35 +111,32 @@ test('the smoke script notices a fallback reply instead of printing it as succes
 })
 
 
-test('a provider 429 is reported as a budget, not as an unreachable person', () => {
-  // aiClient marks an exhausted 429. If the services did not read that
-  // mark, a student would be told the driver cannot be reached -- a
-  // sentence about a person who is standing right there, while the real
-  // problem is an account with no requests left and a different answer.
-  //
-  // This is the most likely failure with broker and driver on separate
-  // keys: OpenRouter states it governs capacity per user across accounts
-  // and keys, so the provider can stop answering while the app still
-  // believes it has two budgets. When the two disagree, the provider wins.
+test('each chat distinguishes explicit daily cap from provider throttle', () => {
+  // Kills: mapping a temporary 429 to tomorrow, or describing a provider
+  // throttle as a broker or driver who is unavailable.
   for (const [file, wrongCode] of [
     ['src/modules/brokerChat/brokerChat.service.js', 'CHAT_UNAVAILABLE'],
     ['src/modules/driverChat/driverChat.service.js', 'DRIVER_UNREACHABLE'],
   ]) {
     const text = src(file)
     assert.match(text, /if \(err\.quotaExhausted\)/, `${file}: kvota tugaganini ajratmayapti`)
+    assert.match(text, /if \(err\.rateLimited\) throw new AppError\('CHAT_PROVIDER_BUSY'\)/)
     // And the quota branch comes FIRST, or the generic error swallows it.
     const quotaAt = text.indexOf('err.quotaExhausted')
-    const genericAt = text.indexOf(`throw new AppError('${wrongCode}')`)
+    // Matched up to the code, not the closing paren: the driver's error
+    // now carries its cause as details (2026-09-30), and what this test
+    // guards is the ORDER of the two branches, not the argument list.
+    const genericAt = text.indexOf(`throw new AppError('${wrongCode}'`)
     assert.ok(quotaAt > -1 && genericAt > quotaAt,
       `${file}: umumiy xato kvota tekshiruvidan oldin turibdi`)
+    const busyAt = text.indexOf("if (err.rateLimited) throw new AppError('CHAT_PROVIDER_BUSY')")
+    assert.ok(busyAt > quotaAt && busyAt < genericAt)
   }
 })
 
-test('every exhausted 429 is marked, not only the ones with a long retry-after', () => {
-  // The mark used to depend on the provider sending a retry-after longer
-  // than the backoff ladder. A provider that just says 429 and nothing
-  // else would have fallen through to the generic error.
+test('provider daily-cap classification needs explicit evidence', () => {
+  // A final ambiguous 429 or long Retry-After cannot prove a daily cap.
   const client = src('scripts/seed/aiClient.js')
-  assert.match(client, /if \(response\.status === 429\) \{\s*\n\s*err\.quotaExhausted = true/,
-    "retry-after'siz 429 belgilanmayapti")
+  assert.match(client, /response\.status === 429 && isDailyCap\(why\)/)
+  assert.match(client, /err\.rateLimited = true/)
 })

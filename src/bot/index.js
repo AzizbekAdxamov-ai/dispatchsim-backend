@@ -193,6 +193,7 @@ async function main() {
         chatId: config.telegramChatId,
         vision: config.chatDriverVision,
         fixedDriverName,
+        botUsername: me.username ?? null,
         attempts,
       })
       attempts = 0

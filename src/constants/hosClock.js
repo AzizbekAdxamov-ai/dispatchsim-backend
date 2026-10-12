@@ -70,6 +70,19 @@
 import { REQUIRED_REST_HOURS } from './hos.js'
 import { REAL_MS_PER_SIM_DAY } from './simClock.js'
 
+// A duration as a person reads it: "816d 15h", "10h 05m", "45m". The limit
+// facts below said "1175939 minutes used since coming on duty" until
+// 2026-10-08 -- true, on the company clock, and unreadable.
+export function dutyDuration(min) {
+  const abs = Math.max(0, Math.round(min))
+  const d = Math.floor(abs / 1440)
+  const h = Math.floor((abs % 1440) / 60)
+  const m = abs % 60
+  if (d > 0) return `${d}d ${h}h`
+  if (h > 0) return `${h}h ${String(m).padStart(2, '0')}m`
+  return `${m}m`
+}
+
 // ---------------------------------------------------------------------
 // Constants -- every one a legal number, not a guess
 // ---------------------------------------------------------------------
@@ -463,35 +476,35 @@ export function hosState(events, now) {
     limits.push({
       code: 'DRIVING_LIMIT',
       cfr: '395.3(a)(3)',
-      detail: `${Math.round(drivingMinutesSinceRest)} of ${DRIVING_LIMIT_HOURS * 60} allowed driving minutes used since the last qualifying rest.`,
+      detail: `${dutyDuration(drivingMinutesSinceRest)} of the ${DRIVING_LIMIT_HOURS}h allowed driving used since the last qualifying rest.`,
     })
   }
   if (windowMinutesRemaining <= 0) {
     limits.push({
       code: 'DUTY_WINDOW',
       cfr: '395.3(a)(2)',
-      detail: `${DUTY_WINDOW_HOURS}-hour duty window elapsed; ${Math.round(windowMinutesUsed)} minutes used since coming on duty.`,
+      detail: `${DUTY_WINDOW_HOURS}-hour duty window elapsed; ${dutyDuration(windowMinutesUsed)} since coming on duty.`,
     })
   }
   if (!breakSatisfied) {
     limits.push({
       code: 'BREAK_REQUIRED',
       cfr: '395.3(a)(3)(ii)',
-      detail: `${Math.round(drivingMinutesSinceLastBreak)} driving minutes since the last break of ${BREAK_MINUTES}+ minutes; a break is required before driving again.`,
+      detail: `${dutyDuration(drivingMinutesSinceLastBreak)} driving since the last break of ${BREAK_MINUTES}+ minutes; a break is required before driving again.`,
     })
   }
   if (dutyMinutesInWindow7DayRemaining <= 0) {
     limits.push({
       code: 'WEEKLY_60_7',
       cfr: '395.3(b)(1)',
-      detail: `${Math.round(dutyMinutesInWindow7Day)} of ${WEEKLY_LIMIT_HOURS_7DAY * 60} allowed on-duty minutes used in the trailing 7 days.`,
+      detail: `${dutyDuration(dutyMinutesInWindow7Day)} on duty of the ${WEEKLY_LIMIT_HOURS_7DAY}h allowed in the trailing 7 days.`,
     })
   }
   if (dutyMinutesInWindow8DayRemaining <= 0) {
     limits.push({
       code: 'WEEKLY_70_8',
       cfr: '395.3(b)(2)',
-      detail: `${Math.round(dutyMinutesInWindow8Day)} of ${WEEKLY_LIMIT_HOURS_8DAY * 60} allowed on-duty minutes used in the trailing 8 days.`,
+      detail: `${dutyDuration(dutyMinutesInWindow8Day)} on duty of the ${WEEKLY_LIMIT_HOURS_8DAY}h allowed in the trailing 8 days.`,
     })
   }
 

@@ -12,7 +12,8 @@ import assert from 'node:assert/strict'
 
 import { createDeliveryTick, pushDue, isPermanentSendFailure, chatAdvice } from '../src/bot/outgoing.js'
 import { pollOnce, backoffMs, MAX_TURN_ATTEMPTS } from '../src/bot/loop.js'
-import { handleUpdate } from '../src/bot/incoming.js'
+import { handleUpdate, unansweredNotice } from '../src/bot/incoming.js'
+import { AppError } from '../src/lib/errors.js'
 import { EMPTY, newerPair, compareStamps, mergeState, claimOwnership } from '../src/bot/state.js'
 
 const defer = () => {
@@ -107,7 +108,8 @@ test('a message the app cannot take is kept — and then given up on, out loud',
   const broken = appFor(MARCUS, { sendMessage: boom }).app
 
   const early = telegramFake()
-  early.getUpdates = async () => [update(1)]
+  // Addressed by name: in a group only that reaches the driver (botAddressing.test.js).
+  early.getUpdates = async () => [update(1, { text: 'Marcus, where are you?' })]
   const savedEarly = []
   await assert.rejects(
     () => pollOnce({
@@ -120,7 +122,7 @@ test('a message the app cannot take is kept — and then given up on, out loud',
   assert.deepEqual(savedEarly, [], 'yetkazilmagan xabar o\'qilgan deb belgilandi')
 
   const late = telegramFake()
-  late.getUpdates = async () => [update(1)]
+  late.getUpdates = async () => [update(1, { text: 'Marcus, where are you?' })]
   const savedLate = []
   await pollOnce({
     telegram: late, state: { ...EMPTY }, save: (s) => savedLate.push(s),
@@ -385,4 +387,44 @@ test('the signature survives the saves that do not mention it', () => {
   const signed = mergeState({ ...EMPTY }, { owner: { pid: 7, startedAt: 'now' } })
   const after = mergeState(signed, { offset: 5 })
   assert.deepEqual(after.owner, { pid: 7, startedAt: 'now' })
+})
+
+// -- 7. A notice that does not promise what nobody will do ---------------
+
+// Kills: the old promise, "the reply will come when it is back". Nothing
+// retries a failed model call -- the message is saved and that is all --
+// so the line told the person to wait for a reply that was never coming.
+// Seen live on 2026-09-30.
+test('an unanswered message says to send it again, not to wait', () => {
+  const text = unansweredNotice(new AppError('DRIVER_UNREACHABLE', { cause: 'AI returned reasoning but no reply (2140 chars of reasoning, 880 completion tokens of a 880 budget).' }))
+  assert.match(text, /send it again/)
+  assert.doesNotMatch(text, /will come|when it is back|resume/i, 'yana bajarilmaydigan va\'da')
+})
+
+// Kills: dropping the cause. "Not answering" alone cannot tell a model
+// that spent its budget thinking from a provider that is down, and those
+// have different fixes.
+test('the notice carries the cause, trimmed', () => {
+  const long = 'x'.repeat(500)
+  const text = unansweredNotice(new AppError('DRIVER_UNREACHABLE', { cause: `AI returned reasoning but no reply ${long}` }))
+  assert.match(text, /AI returned reasoning but no reply/)
+  assert.ok(text.length < 400, `xabar juda uzun: ${text.length}`)
+
+  // No cause is still a sentence, not "()".
+  const bare = unansweredNotice(new AppError('CHAT_UNAVAILABLE'))
+  assert.doesNotMatch(bare, /\(\)/)
+})
+
+// Kills: a daily-limit notice that promises replies will resume on
+// their own.
+test('the daily limit says the message will not be answered', () => {
+  const text = unansweredNotice(new AppError('CHAT_DAILY_LIMIT'))
+  assert.match(text, /will not be answered/)
+  assert.match(text, /send it again tomorrow/)
+})
+
+// Kills: turning every error into a polite notice. A bug must stay loud.
+test('anything else is not a notice', () => {
+  assert.equal(unansweredNotice(new Error('boom')), null)
+  assert.equal(unansweredNotice(new AppError('DRIVER_NOT_FOUND')), null)
 })

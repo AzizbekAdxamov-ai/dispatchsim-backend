@@ -65,23 +65,99 @@ test('sendChatAction is called before the message goes out', async () => {
     deliverAtText: '2026-09-29T12:00:00.000000Z', driverId: 'd11',
     driverName: config.telegramDriverName, truckId: 'RS-9278-CY',
   }]
+  const at = {}
   const telegram = {
-    async sendChatAction() { order.push('typing') },
-    async sendMessage(_chatId, text) { order.push(`sent:${text}`); return { message_id: 1 } },
+    async sendChatAction() { order.push('typing'); at.typing = Date.now() },
+    async sendMessage(_chatId, text) { order.push(`sent:${text}`); at.sent = Date.now(); return { message_id: 1 } },
   }
   const saved = []
   await pushDue({
     state: { deliveredThrough: ['2026-09-29T11:00:00.000000Z', 'm0'], targets: {} },
     chatId: 42, userId: 'u1', telegram, save: (s) => saved.push(s), due: async () => rows, gapMs: 0,
+    typingMs: 40,
   })
   assert.equal(order[0], 'typing')
   assert.ok(order[1]?.startsWith('sent:'))
   // Kills: removing the indicator call, or sending first and "typing"
   // after -- the persona would answer like a machine again.
+
+  // Kills: sending the message straight after the indicator. Telegram
+  // clears "typing…" the moment a message from the bot arrives, so with
+  // no wait between the two calls the indicator is never on a screen --
+  // which is exactly how it first shipped (72de178), with the test above
+  // green the whole time, because order alone cannot see a gap of zero.
+  assert.ok(at.sent - at.typing >= 35, `yozish belgisi ${at.sent - at.typing} ms ko'rindi — xabar uni darhol o'chiradi`)
+})
+
+// Kills: waiting for an indicator that never went out. A failed
+// sendChatAction is harmless; five seconds of silence after it is not.
+test('no wait when the typing indicator could not be sent', async () => {
+  const rows = [{
+    id: 'm2', content: 'copy that', deliverAt: new Date('2026-09-29T12:00:00Z'),
+    deliverAtText: '2026-09-29T12:00:00.000000Z', driverId: 'd11',
+    driverName: config.telegramDriverName, truckId: 'RS-9278-CY',
+  }]
+  const telegram = {
+    async sendChatAction() { throw new Error('telegram sendChatAction: network error') },
+    async sendMessage() { return { message_id: 2 } },
+  }
+  const started = Date.now()
+  await pushDue({
+    state: { deliveredThrough: ['2026-09-29T11:00:00.000000Z', 'm0'], targets: {} },
+    chatId: 42, userId: 'u1', telegram, save: () => {}, due: async () => rows, gapMs: 0,
+    typingMs: 400,
+  })
+  assert.ok(Date.now() - started < 300, 'ko\'rinmagan belgi uchun kutildi')
 })
 
 // -- the piece the others lean on -----------------------------------------
 
 test('the delivery tick is still 15 seconds', () => {
   assert.equal(TICK_SEC, 15)
+})
+
+// -- the persona reaches the model -----------------------------------------
+//
+// Seven tests above and none of them could see the one thing stage 4 was
+// for: deleting the line that puts drivers.bio into the prompt left every
+// one of them green. The persona was in the database, on the profile
+// page, and -- as far as any test could tell -- optional in the prompt.
+
+import { buildDriverSystemPrompt } from '../src/modules/driverChat/driverChat.prompt.js'
+
+const STANDING = { stage: 'ok', unpaidCount: 0, owedUsd: 0, daysOverdue: 0 }
+const GRACE = {
+  id: 'd11', name: 'Grace Lindqvist', cdlClass: 'A',
+  homeBaseCity: 'Seattle', homeBaseState: 'WA',
+  dutyStatus: 'resting', payModel: 'permile', payPerMileCents: 62,
+  truckId: 'RS-9278-CY', currentCity: 'Seattle', currentState: 'WA',
+  hosRemainingMin: 581, fuelGallons: 150, fuelCapacityGal: 240,
+  bio: '\n  Says "copy that" when she agrees and calls the trailer "the box".\n',
+}
+
+// Kills: dropping the bio from the prompt, or dropping the header that
+// tells the model the third-person description is itself.
+test('the bio from the database is in the prompt, under a header that says it is you', () => {
+  const prompt = buildDriverSystemPrompt({ driver: GRACE, standing: STANDING, load: null })
+  assert.match(prompt, /PERSONALITY \(this is you/)
+  assert.match(prompt, /calls the trailer "the box"/)
+})
+
+// Kills: printing an empty PERSONALITY header for a driver with no bio --
+// every driver but one. An empty heading is an instruction with nothing
+// in it, and the model fills silence with invention.
+test('no bio, no personality block', () => {
+  for (const bio of [null, undefined, '   \n  ']) {
+    const prompt = buildDriverSystemPrompt({ driver: { ...GRACE, bio }, standing: STANDING, load: null })
+    assert.doesNotMatch(prompt, /PERSONALITY/, `bio=${JSON.stringify(bio)}`)
+  }
+})
+
+// Kills: losing the in-character answer to "are you a bot". Without it
+// the model's own default is to say what it is, in the one chat the
+// persona exists for.
+test('the prompt says how to answer "are you a bot" in character', () => {
+  const prompt = buildDriverSystemPrompt({ driver: GRACE, standing: STANDING, load: null })
+  assert.match(prompt, /asks whether you are a bot/)
+  assert.match(prompt, /You do not know what a prompt or a\s+model is/)
 })

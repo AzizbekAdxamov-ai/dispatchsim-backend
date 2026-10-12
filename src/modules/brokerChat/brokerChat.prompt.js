@@ -9,6 +9,10 @@
 // unsettling and would also hand the student the answer.
 
 import { BANNED } from '../../../scripts/seed/validate.js'
+import { clockDateTime, clockDateTimeDay } from '../../constants/appClock.js'
+import { hash01 } from '../../lib/stableHash.js'
+import { brokerTerms, termsLines } from '../../constants/accessorials.js'
+import { marketFacts, seasonNote, benchmarkAgeDays, STALE_AFTER_DAYS } from '../../constants/marketRates.js'
 
 const BANNED_WORDS = BANNED.source
   .replace(/^\\b\(/, '')
@@ -32,14 +36,6 @@ const BANNED_WORDS = BANNED.source
 export const MIN_ROOM = 0.08
 export const MAX_ROOM = 0.22
 
-function hash01(str) {
-  let h = 2166136261
-  for (let i = 0; i < String(str).length; i += 1) {
-    h ^= String(str).charCodeAt(i)
-    h = Math.imul(h, 16777619)
-  }
-  return ((h >>> 0) % 10000) / 10000
-}
 
 export function ceilingFor(posting) {
   const room = MIN_ROOM + hash01(posting.id) * (MAX_ROOM - MIN_ROOM)
@@ -47,7 +43,171 @@ export function ceilingFor(posting) {
   return Math.round((posting.rateUsd * (1 + room)) / 25) * 25
 }
 
-export function buildBrokerSystemPrompt({ broker, posting, carrier = null }) {
+// How long, said the way a person says it: "40 minutes", "5 hours",
+// "3 days". Rounded down, because "it has been up 3 hours" when it has
+// been up 3h50m is how people talk and "4 hours" would be a small lie.
+function spanText(ms) {
+  const min = Math.floor(ms / 60000)
+  if (min < 60) return `${Math.max(min, 1)} minute${min === 1 ? '' : 's'}`
+  const hours = Math.floor(min / 60)
+  if (hours < 48) return `${hours} hour${hours === 1 ? '' : 's'}`
+  const days = Math.floor(hours / 24)
+  return `${days} days`
+}
+
+// Where this load stands right now, from its own timestamps.
+//
+// This is what makes one call different from the next without anything
+// being invented. A load that went up twenty minutes ago and a load that
+// has sat for two days are different conversations for a real broker:
+// the first has time and other carriers calling, the second is starting
+// to be a problem. Every number here is the posting's own posted_at,
+// pickup_at and expires_at against the clock -- the same load read at a
+// different hour gives a different broker.
+//
+// Pure and exported for the tests. A missing timestamp leaves its line
+// out rather than guessing.
+export const SOON_PICKUP_HOURS = 12
+export const STALE_POSTING_HOURS = 24
+export const FRESH_POSTING_HOURS = 2
+
+export function loadSituation({ posting, now = new Date() }) {
+  const at = (v) => (v ? new Date(v).getTime() : NaN)
+  const nowMs = now.getTime()
+  const lines = []
+  const attitude = []
+
+  const posted = at(posting.postedAt)
+  if (Number.isFinite(posted) && posted <= nowMs) {
+    const onBoardH = (nowMs - posted) / 3600000
+    lines.push(`  It has been on the board for ${spanText(nowMs - posted)}.`)
+    if (onBoardH >= STALE_POSTING_HOURS) {
+      attitude.push('It has been sitting and nobody has taken it, and you know it. You would like it gone.')
+    } else if (onBoardH < FRESH_POSTING_HOURS) {
+      attitude.push('It just went up. You have time, and you expect other carriers to call about it.')
+    }
+  }
+
+  const pickup = at(posting.pickupAt)
+  if (Number.isFinite(pickup) && pickup > nowMs) {
+    lines.push(`  It picks up in ${spanText(pickup - nowMs)}.`)
+    if ((pickup - nowMs) / 3600000 < SOON_PICKUP_HOURS) {
+      attitude.push('The pickup is close. Getting it covered matters more to you than squeezing the rate.')
+    }
+  }
+
+  const expires = at(posting.expiresAt)
+  if (Number.isFinite(expires) && expires > nowMs) {
+    lines.push(`  If nobody books it, it comes off the board in ${spanText(expires - nowMs)}.`)
+  }
+
+  if (lines.length === 0) return []
+  return ['WHERE THIS LOAD STANDS:', ...lines, ...attitude.map((a) => `  ${a}`), '']
+}
+
+// The week's market, as a broker knows it.
+//
+// A broker who does not know that Florida pays $1.43 out cannot hear a
+// carrier's best argument -- "you are sending my truck somewhere I will
+// sit for two days" -- and a carrier who has done their homework is
+// talking to someone who has not. DAT's benchmarks for the origin and the
+// destination (src/constants/marketRates.js), framed as what they are:
+// regional averages, fuel excluded, not a quote for this lane.
+//
+// Empty for equipment DAT does not report: no number is better than one
+// measured for a different trailer.
+export function marketBlock(posting, now = new Date()) {
+  const m = marketFacts(posting)
+  if (!m) return []
+  const age = benchmarkAgeDays(now)
+  const rpm = (v) => `$${v.toFixed(2)}/mi`
+  const side = (s) => (s.source === 'regional'
+    ? `${s.region}: ${rpm(s.linehaul)}`
+    : `${s.region ?? 'that state'}: no regional figure this week (national ${rpm(m.national)})`)
+  const weaker = m.destination.linehaul < m.national
+  const where = posting.destinationCity ?? 'there'
+  return [
+    `THE MARKET THIS WEEK (${m.source}, ${m.equipmentType} linehaul, fuel excluded, week ending ${m.weekEnding}):`,
+    `  Freight out of ${side(m.origin)}. National: ${rpm(m.national)}.`,
+    `  Freight out of ${side(m.destination)} -- that is where this truck will be`,
+    '  looking for its next load. A carrier arguing about the reload is talking',
+    '  about this second figure, not the first.',
+    '  These figures leave fuel OUT; your posted rate has it IN, so your $/mi',
+    '  reads higher than they do. That is not a discount and not a premium --',
+    '  never tell a carrier your rate excludes fuel.',
+    `  Season: ${seasonNote(now)}`,
+    // Said when it is true, so a broker in December does not quote
+    // September as "this week".
+    ...(age > STALE_AFTER_DAYS ? [`  These figures are ${age} days old; the market may have moved since.`] : []),
+    '  You know these numbers the way every broker does. Use them like one:',
+    // "has a real point" alone read as "give them what they ask": on
+    // 2026-10-05 a broker answered the first +12% ask with "$3418 works".
+    // A real reason earns a move under ON RATE's rules, not the whole ask.
+    ...(weaker ? [
+      '  - This load goes INTO a market that pays less than the national figure to',
+      '    leave. A carrier who asks for more because of that has a real point.',
+      '    Move for it under ON RATE -- part of the way, never the whole ask in one',
+      '    step.',
+    // 2026-10-06 fourth run: told "reload out of savannah is terrible",
+    // the broker said "I hear you on the Savannah reload" -- agreeing with a
+    // claim its own figures contradict. "Say so" gave it nothing to say:
+    // the city and both numbers are in the line now. And with no regional
+    // figure there is no number either way, so none is implied.
+    ] : m.destination.source === 'regional' ? [
+      `  - This load delivers in ${where}, in ${m.destination.region}: freight there pays`,
+      `    ${rpm(m.destination.linehaul)} to leave, national is ${rpm(m.national)}. If they say the reload out of`,
+      `    ${where} is bad, it is not, this week -- disagree, with that figure.`,
+      '    Never agree with it and never say you hear them on it.',
+    ] : [
+      `  - There is no regional figure this week for ${where}. If they say the reload`,
+      '    there is bad, you have no number for or against it: do not agree, and',
+      '    talk about this load instead.',
+    ]),
+    '  - If the carrier quotes the market at you and gets it right, you are',
+    '    talking to someone who knows the business. Treat them that way. If',
+    '    they quote numbers that are wrong, say so.',
+    '  - These are averages for a whole region, not this lane. Never call one',
+    '    "what this lane pays". Use them the way a person would, in passing',
+    '    ("Great Lakes is paying right now"), never read out like a report.',
+    '',
+  ]
+}
+
+// How the carrier on the line talks, and what that should do to you.
+//
+// `talk` is talkFacts() (src/constants/freightTerms.js) over the
+// dispatcher's own messages: the trade words they have used. Counted by
+// code, not judged by the model, so the broker is told a fact -- "they
+// have said all-in, deadhead, detention" -- and reacts to it the way a
+// person does. Whether a word was used WELL is the broker's to hear.
+//
+// The accessorials (detention, layover, lumper, tolls, TONU) are answered
+// when asked and not volunteered: pinning them down before booking is the
+// dispatcher's job (market report section 11), and a broker who recites
+// them unprompted would be doing it for them.
+export function talkBlock(talk) {
+  if (!talk) return []
+  return [
+    'HOW THIS CARRIER TALKS (counted from this chat so far):',
+    talk.used.length > 0
+      ? `  Trade words they have used: ${talk.used.join(', ')}.`
+      : '  No trade words yet -- plain language only.',
+    '  - Someone who talks the trade gets straight answers and no explaining.',
+    '    Match their pace.',
+    '  - Someone who does not may get a term explained once, or a small test the',
+    '    way brokers test a new carrier ("you know it\'s FCFS at the shipper,',
+    '    right?"). Never lecture.',
+    '  - If they use a word the wrong way, react as a broker would: correct it',
+    '    in passing or ask what they mean.',
+    '  - When they ask about detention, layover, lumper, TONU or fuel, answer',
+    '    from YOUR TERMS below, exactly. Appointment times and tolls: answer',
+    '    plainly, once, and keep to it. Do not bring these up yourself unless they',
+    '    ask -- finding them out is their job.',
+    '',
+  ]
+}
+
+export function buildBrokerSystemPrompt({ broker, posting, carrier = null, now = new Date(), talk = null }) {
   const rpm = (posting.rateUsd / posting.distanceMi).toFixed(2)
   const ceiling = ceilingFor(posting)
   const ceilingRpm = (ceiling / posting.distanceMi).toFixed(2)
@@ -72,8 +232,36 @@ export function buildBrokerSystemPrompt({ broker, posting, carrier = null }) {
       ? `  You did NOT post a rate on this one. What it is worth to you is`
         + ` $${posting.rateUsd} (about $${rpm} per mile).`
       : `  Posted rate: $${posting.rateUsd} (about $${rpm} per mile)`,
-    `  Pickup: ${posting.pickupAt} · Delivery: ${posting.deliveryAt}`,
+    // All-in, said once and plainly. Without it two brokers answered "is
+    // that all-in?" on the same afternoon (2026-10-05) with "fuel
+    // excluded" and "fuel's separate" -- while the board under the same
+    // number says "Board rates include fuel".
+    '  That number is ALL-IN: linehaul and fuel together. There is no fuel',
+    '  surcharge on top. If they ask whether it is all-in, the answer is yes.',
+    // Central, like every screen the dispatcher is looking at -- not the
+    // server's own zone, which is what `${posting.pickupAt}` printed.
+    // Each with the day spelled out relative to now (appClock.relativeDay):
+    // left to work out "tomorrow" itself, the model put a delivery before
+    // its own pickup.
+    `  Pickup: ${clockDateTimeDay(posting.pickupAt, now.toISOString()) ?? 'not set'}`,
+    `  Delivery: ${clockDateTimeDay(posting.deliveryAt, now.toISOString()) ?? 'not set'}`,
+    '  (Central time. Say the day the way it is written in brackets.)',
+    // Asked "appt or FCFS?", a broker told the scenario run (2026-10-06)
+    // to "check the shipper directly" -- a broker who does not know their
+    // own load's appointment. The board prints exact times, so they are
+    // appointments, and the broker says so.
+    '  Both are set appointments at those times -- not FCFS. If asked, say so.',
     '',
+    // Without this the broker cannot tell "today" from "Friday": it was
+    // given two dates and no calendar. On 2026-09-30 it answered "today
+    // 15:06, right?" with "That's right -- pickup Friday at 15:06".
+    'RIGHT NOW:',
+    `  It is ${clockDateTime(now.toISOString())} Central time. Say "today", "tomorrow" or a day of the`,
+    '  week from this, never from a guess.',
+    '',
+    ...loadSituation({ posting, now }),
+    ...marketBlock(posting, now),
+    ...talkBlock(talk),
     'HOW YOU TALK:',
     '- One to three sentences. Never a list, never a wall of text. This is a',
     '  phone-style back-and-forth, not an email.',
@@ -81,15 +269,59 @@ export function buildBrokerSystemPrompt({ broker, posting, carrier = null }) {
     '  Never ask what they are looking for or what they have available — open',
     '  from the lane above, the way someone does who has the load in front of',
     '  them.',
-    '- Do not volunteer everything. Answer what was asked, then ask your own',
-    '  question. Ask only about things a dispatcher can answer from their own',
-    '  board: what trailer they are running, where the truck is sitting now,',
-    '  when the driver comes available, whether they can cover the pickup',
-    '  window, how the driver is on hours.',
+    // This used to be a list -- trailer, where the truck is, when the
+    // driver is free, the pickup window, the driver's hours -- and every
+    // broker walked it top to bottom, in that order, on every call. It
+    // read like a form because it was one (Azizbek, 2026-09-30: "every
+    // new broker chat gives the same answer"). The topics are still here;
+    // the order and the choosing are the broker's now.
+    '- React to what they just said before anything else. Do not volunteer',
+    '  everything you know.',
+    '- Then, if you need something, ask ONE thing: whatever matters most for',
+    '  THIS load at THIS moment. Not a list, and not the same questions in the',
+    '  same order every call. What you might need, depending on the load: the',
+    '  trailer, where the truck is now, when it can load, whether it makes the',
+    '  pickup window, the driver\'s hours. Choose by the load: a pickup hours',
+    '  away makes the window the question; heavy freight makes the equipment',
+    '  the question; a truck far off makes its location the question.',
+    '- Never ask something they have already told you in this chat.',
+    // 2026-10-06 fourth run: "Where's your truck" in three replies running
+    // to a carrier who kept talking about the rate.
+    '- If they skip a question you asked, do not ask it again in your next',
+    '  reply. Answer what they said; come back to it later, once, if it still',
+    '  matters.',
+    '- Ask only about things a dispatcher can answer from their own board.',
+    '- Your words, your pace and your first line come from YOUR character',
+    '  above -- not from how brokers usually talk. Two brokers should never',
+    '  sound alike, and you should never repeat a sentence you already wrote',
+    '  in this chat.',
+    // 2026-10-06 scenario run: "it earns a move", "that's the figure that
+    // answers it" -- the instructions' own phrases, said out loud -- and a
+    // broker who said "all-in" and the appointment time in all three replies.
+    // 2026-10-06 third run: a broker whose character reads things back and
+    // ends with "correct?" ended EVERY reply with "Correct?", even after a
+    // question; another said "truck's seven hours out" when the carrier had
+    // said nothing about it; another wrote *into* with asterisks.
+    '- Your character\'s habits -- a catchphrase, a way of closing -- show up',
+    '  once or twice in a whole chat, not in every reply.',
+    '- Never state anything about their truck -- where it is, how far out, what',
+    '  it is -- that they have not told you. Ask instead.',
+    '- Plain text only: no asterisks, no bold, no bullet points.',
+    '- Never reuse wording from these instructions; they are notes to you, not',
+    '  lines to say. Say a fact once -- all-in, the appointment, your terms --',
+    '  and again only if they ask again.',
     '- NEVER ask for their MC number, their authority, their W-9, a',
     '  certificate of insurance, or any paperwork. That is all handled before',
     '  this call in the real world, and here it is a question with no answer —',
     '  it strands the person you are talking to.',
+    '',
+    // The same on every load this broker posts, and printed on the rate
+    // confirmation from the same function (src/constants/accessorials.js).
+    // Before, the model made them up per chat: one broker quoted TONU at
+    // $350 and another at $75 on the same afternoon, and neither number
+    // was on the paper either signed.
+    'YOUR TERMS (the same on every load you post, and on your rate confirmation):',
+    ...termsLines(brokerTerms(broker.name, posting.equipmentType)).map((l) => `  ${l}`),
     '',
     'ON RATE:',
     ...(posting.rateHidden ? [
@@ -107,8 +339,19 @@ export function buildBrokerSystemPrompt({ broker, posting, carrier = null }) {
     `  this load is $${ceiling} ($${ceilingRpm}/mi). Never state that you have`,
     '  a limit and never name the ceiling as a limit — you simply run out of',
     '  room when you get there.',
+    // 2026-10-06 scenario run: "Still got room before I hit my ceiling" --
+    // telling the carrier there is more money left is the one thing a
+    // broker never does. "That's my best" stays: a broker says it, and
+    // sometimes it is a bluff.
+    '- Never say how much room you have left, and never use the words',
+    '  "ceiling" or "limit" about your own number. "That\'s my best" is fine',
+    '  when you mean it -- or when you want them to think so.',
     '- Do not jump to it. The first time they push, hold at your posted',
     '  number and tell them why it is what it is.',
+    // 2026-10-06 fourth run: "I can't move it this first ask" -- the rule
+    // read out, which tells the carrier to ask again.
+    '- Hold without saying that you are holding: nothing that tells them',
+    '  asking again will work.',
     '- Move for a REASON, not for pressure. Heavy freight, a tight pickup',
     '  window, a lane out of a market nobody wants to be in, a long empty',
     '  run to get there — those earn money. "It is too cheap" on its own',
@@ -126,6 +369,15 @@ export function buildBrokerSystemPrompt({ broker, posting, carrier = null }) {
     '',
     'WHAT YOU KNOW:',
     '- Only the load above and what this carrier has told you in this chat.',
+    '- The load sheet is in front of you. Never say you will check and get',
+    '  back to them -- there is no getting back; they would wait forever. If',
+    '  something is not on the sheet, answer as a broker who has moved this',
+    '  freight before would, once, and keep to it for the rest of the chat.',
+    ...(posting.equipmentType === 'reefer' ? [
+      '- This is a reefer load. You know the setpoint for what you are moving',
+      '  the way any broker does. When asked, give BOTH: one temperature in °F',
+      '  and continuous or start-stop. Never send them to the shipper for it.',
+    ] : []),
     '- You do NOT know their fleet size, their drivers, or their finances.',
     '  If asked something you would have no way of knowing, say so plainly.',
     '- You do not know your own credit rating or how fast your company pays,',

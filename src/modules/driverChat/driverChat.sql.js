@@ -31,6 +31,7 @@ export const GET_CONVERSATION_SQL = `
 export const GET_DRIVER_CONTEXT_SQL = `
   SELECT d.id, d.name, d.cdl_class AS "cdlClass",
          d.bio,
+         d.preferences,
          d.home_base_city AS "homeBaseCity", d.home_base_state AS "homeBaseState",
          d.duty_status AS "dutyStatus",
          d.current_city AS "currentCity", d.current_state AS "currentState",
@@ -41,13 +42,14 @@ export const GET_DRIVER_CONTEXT_SQL = `
          t.fuel_gallons AS "fuelGallons", t.fuel_capacity_gal AS "fuelCapacityGal",
          l.id AS "loadId", l.origin_city AS "originCity", l.origin_state AS "originState",
          l.destination_city AS "destinationCity", l.destination_state AS "destinationState",
-         l.distance_mi AS "distanceMi", l.eta_at AS "etaAt", l.delivery_at AS "deliveryAt"
+         l.distance_mi AS "distanceMi", l.eta_at AS "etaAt", l.delivery_at AS "deliveryAt",
+         l.dispatched_at AS "dispatchedAt"
     FROM drivers d
     LEFT JOIN trucks t ON t.driver_id = d.id
     LEFT JOIN LATERAL (
            SELECT x.id, x.origin_city, x.origin_state,
                   x.destination_city, x.destination_state, x.distance_mi,
-                  x.eta_at, x.delivery_at
+                  x.eta_at, x.delivery_at, x.dispatched_at
              FROM loads x
             WHERE x.driver_id = d.id AND x.status <> 'done'
             ORDER BY x.dispatched_at DESC NULLS LAST

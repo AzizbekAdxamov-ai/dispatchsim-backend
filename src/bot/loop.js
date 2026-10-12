@@ -7,6 +7,7 @@
 
 import { batchUpdates, factsForBatch, lastUpdateId } from './parse.js'
 import { handleUpdate } from './incoming.js'
+import { addressedToDriver, callName } from './addressing.js'
 
 export const POLL_TIMEOUT_SEC = 50
 
@@ -89,6 +90,9 @@ export function isTransient(err) {
 export async function pollOnce({
   telegram, state, save, userId, chatId, vision,
   fixedDriverName = null, app = undefined,
+  // The bot's own @handle (getMe at boot). Lets a group reach it by
+  // mention and tells its commands from another bot's.
+  botUsername = null,
   // How many times the loop has already come back to this same message.
   // index.js counts; pollOnce decides what the count means.
   attempts = 0,
@@ -103,11 +107,18 @@ export async function pollOnce({
     // drivers. Read past, never answered.
     if (fact && String(fact.chatId) !== String(chatId)) {
       console.warn(`[bot] ignoring a message from chat ${fact.chatId}`)
+    } else if (fact && !addressedToDriver(fact, { botUsername, driverName: fixedDriverName })) {
+      // The people in the group talking to each other. Read past, not
+      // answered and not charged -- and said in the log, so a message
+      // that WAS meant for the driver and did not reach her has a line
+      // somewhere naming why.
+      const who = callName(fixedDriverName)
+      console.log(`[bot] group talk, not addressed to ${who ?? 'the bot'} — left alone (reply to the bot${who ? `, or say "${who}"` : ''} to reach ${who ?? 'a driver'})`)
     } else if (fact) {
       if (fact.photos?.length > 0) await attachPhotos(fact, telegram)
       try {
         const result = await handleUpdate(fact, {
-          state: next, userId, vision, fixedDriverName, ...(app ? { app } : {}),
+          state: next, userId, vision, fixedDriverName, botUsername, ...(app ? { app } : {}),
         })
         next = result.state
         for (const line of result.replies) {

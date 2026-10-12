@@ -12,7 +12,7 @@
 // subtracted; "running late, call the receiver" would be a judgement,
 // and judging is the student's job, not the screen's.
 
-import { clockTime, hoursMinutes } from '../constants/appClock.js'
+import { clockTime, clockWhen, hoursMinutes } from '../constants/appClock.js'
 import { fuelPercent, minutesLate } from '../modules/driverChat/driverChat.prompt.js'
 
 const DUTY = Object.freeze({
@@ -43,7 +43,7 @@ export function statusText({ driver, load, now = new Date() }) {
     lines.push(`Load ${load.id}: ${load.originCity}, ${load.originState} → ${load.destinationCity}, ${load.destinationState}`)
     if (load.etaAt) {
       const late = minutesLate(load)
-      lines.push(`ETA ${clockTime(load.etaAt)}${late != null ? ` — ${hoursMinutes(late)} past the appointment` : ''}`)
+      lines.push(`ETA ${clockWhen(load.etaAt, now.toISOString())}${late != null ? ` — ${hoursMinutes(late)} past the appointment` : ''}`)
     }
   } else {
     lines.push('')

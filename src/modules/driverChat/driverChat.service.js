@@ -15,6 +15,9 @@
 //   has just been paid -- because that is what happened.
 
 import { chatText } from '../../../scripts/seed/aiClient.js'
+import { fileURLToPath } from 'node:url'
+import { promptVersionOf } from '../../lib/promptVersion.js'
+import { turnRow, logTurn } from '../chat/turnLog.js'
 import { assertCanSend } from '../chat/chatBudget.service.js'
 import { tooLongForChat, CHAT_REPLY_MAX_CHARS } from '../../constants/chatBudget.js'
 import { chatConfigFor } from '../chat/chatProvider.js'
@@ -31,6 +34,9 @@ import {
   leaksReasoning,
   FALLBACK_REPLY,
 } from './driverChat.prompt.js'
+
+// Which version of the prompt builder answered (chat_turn_log, 056).
+const PROMPT_VERSION = promptVersionOf(fileURLToPath(new URL('./driverChat.prompt.js', import.meta.url)))
 
 // Only the last N turns go to the model. A driver who still remembers a
 // throwaway line from forty messages ago does not read like a person.
@@ -112,11 +118,25 @@ export async function sendMessage({ conversationId, userId, text, images }) {
     carrier,
   })
 
+  // Every request this turn sends to the provider, counted where they are
+  // sent (aiClient's onRequest) and written onto the dispatcher's row once
+  // the turn is over -- the daily budget is their sum (055).
+  let spent = 0
+  const onRequest = () => { spent += 1 }
+  // For the turn's record (chat_turn_log): why the first reply was
+  // regenerated, and the error if the turn failed.
+  let regenerated = null
+  let failure = null
+  let answeredModel = config.model
+  const onModel = (model) => { answeredModel = model }
+
   let reply
   try {
     reply = await chatText({
       messages: buildMessages({ systemPrompt, history, newMessage: text, images }),
       config,
+      onRequest,
+      onModel,
     })
 
     // Two ways a reply is unusable, both regenerated once and then replaced
@@ -138,6 +158,7 @@ export async function sendMessage({ conversationId, userId, text, images }) {
           ? 'showed your own reasoning instead of speaking as the driver'
           : `ran to ${reply.trim().length} characters when the limit is ${CHAT_REPLY_MAX_CHARS}`
       console.warn(`[driverChat] retrying — reply ${why}`)
+      regenerated = why
       reply = await chatText({
         messages: buildMessages({
           systemPrompt: `${systemPrompt}\n\nYour last reply ${why}. Reply again as the driver, in character, one to three sentences only.`,
@@ -146,10 +167,13 @@ export async function sendMessage({ conversationId, userId, text, images }) {
           images,
         }),
         config,
+        onRequest,
+        onModel,
       })
       if (unusable(reply)) reply = FALLBACK_REPLY
     }
   } catch (err) {
+    failure = err.message
     console.error(`[driverChat] model call failed: ${err.message}`)
     // The provider ran out before the app's own budget did. Saying the
     // driver cannot be reached would be a sentence about a person who is
@@ -157,12 +181,39 @@ export async function sendMessage({ conversationId, userId, text, images }) {
     // requests, which is a different fact with a different answer.
     if (err.quotaExhausted) {
       throw new AppError('CHAT_DAILY_LIMIT', {
-        message: "Provayder bugungi so'rovlar limitini tugatdi. Ertaga yangilanadi."
+        message: "The provider's daily request limit is used up. It resets tomorrow."
           + (err.providerMessage ? ` (${err.providerMessage})` : ''),
         source: 'provider',
       })
     }
-    throw new AppError('DRIVER_UNREACHABLE')
+    // A temporary provider throttle says nothing about the driver's
+    // availability or the account's daily budget.
+    if (err.rateLimited) throw new AppError('CHAT_PROVIDER_BUSY')
+    // The cause rides along. aiClient composes these messages itself and
+    // never copies a provider's response body into them (see its own
+    // header), so there is no key or header in here to leak -- and without
+    // it the Telegram notice could only say "not answering", which on
+    // 2026-09-30 left nobody able to tell a model that spent its whole
+    // budget thinking from a provider that was down.
+    throw new AppError('DRIVER_UNREACHABLE', { cause: err.message })
+  } finally {
+    // Not allowed to replace the error the dispatcher is about to see, and
+    // not allowed to vanish either: a turn whose cost was not written is
+    // charged the default of one, which undercounts only that turn.
+    await repo.setProviderRequests(dispatcherMessage.id, spent).catch((e) => {
+      console.error(`[driverChat] could not record ${spent} provider request(s) on message ${dispatcherMessage.id}: ${e.message}`)
+    })
+    // The turn's record, for grading and training (056). Same rule as
+    // above: never replaces the dispatcher's error, never vanishes.
+    await logTurn(turnRow({
+      chat: 'driver', conversationId, dispatcherMessageId: dispatcherMessage.id, userId,
+      model: answeredModel, promptVersion: PROMPT_VERSION, systemPrompt, history, text,
+      imageCount: Array.isArray(images) ? images.length : 0, reply, regeneratedBecause: regenerated,
+      fellBack: reply === FALLBACK_REPLY, error: failure, providerRequests: spent,
+      onTheRoad: Boolean(context.driver.onTheRoad),
+    })).catch((e) => {
+      console.error(`[driverChat] could not write the turn log for message ${dispatcherMessage.id}: ${e.message}`)
+    })
   }
 
   // Written now, shown later. A second question sent during the wait
