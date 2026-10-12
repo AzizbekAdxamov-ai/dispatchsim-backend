@@ -1,0 +1,311 @@
+// Scripted conversations with the REAL broker and driver prompts and the
+// REAL model -- the way a dispatcher actually types, using the trade's
+// words -- written to a transcript for review.
+//
+//   npm run chat:scenarios                       # both, ~20 model requests
+//   npm run chat:scenarios -- broker             # broker only (~13)
+//   npm run chat:scenarios -- driver             # Grace only (~7)
+//   npm run chat:scenarios -- broker --times 3   # every scenario 3 times (~39)
+//
+// --times runs the same conversations on the same loads again, so a
+// finding can be counted ("S4 agreed in 2 of 3") instead of seen once.
+// A plan larger than the provider's daily budget is refused before the
+// first request: these requests are not written anywhere the app's own
+// budget can see, so they are taken out of the same day silently.
+//
+// Why a script and not the app: the conversations have to be the same
+// every run so two runs can be compared, and they have to hit the exact
+// prompt builders the app uses (system prompt, market block, the terms
+// the carrier used, the broker's own accessorial terms; Grace's place,
+// her requests, her empty run). Nothing is written to the database: no
+// threads, no messages, no budget rows. The provider's own daily limit
+// still applies -- each turn is one request -- so the count is printed
+// first.
+//
+// The transcript goes to ../reports/chat-scenarios-<time>.md. Every reply
+// carries the same checks the services run before showing a reply:
+// banned word, leaked reasoning, too long. Here they are reported, not
+// regenerated -- the point is to see what the model does. On top of those,
+// the checks in scenarioChecks.js -- each one a failure seen in a real run
+// -- and a count of them at the end.
+
+import 'dotenv/config'
+import { writeFileSync, mkdirSync } from 'node:fs'
+import { join, dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { pool, query } from '../src/db/pool.js'
+import { chatConfigFor } from '../src/modules/chat/chatProvider.js'
+import { chatText } from './seed/aiClient.js'
+import { tooLongForChat, dailyBudgetFor } from '../src/constants/chatBudget.js'
+import appConfig from '../src/config.js'
+import { brokerReply, driverReply, BROKER_EXPECT, DRIVER_EXPECT, summarize } from './scenarioChecks.js'
+import { marketFacts } from '../src/constants/marketRates.js'
+import { relativeDay, APP_TIMEZONE } from '../src/constants/appClock.js'
+import { talkFacts } from '../src/constants/freightTerms.js'
+import { brokerTerms, termsLines } from '../src/constants/accessorials.js'
+import * as brokerRepo from '../src/modules/brokerChat/brokerChat.repository.js'
+import * as bp from '../src/modules/brokerChat/brokerChat.prompt.js'
+import * as dp from '../src/modules/driverChat/driverChat.prompt.js'
+import { getDriverContext } from '../src/modules/driverChat/driverChat.repository.js'
+import { driverStanding } from '../src/modules/payroll/payroll.service.js'
+import { getCarrier } from '../src/modules/carrier/carrier.repository.js'
+
+const here = dirname(fileURLToPath(import.meta.url))
+const args = process.argv.slice(2)
+const only = args.find((a) => a === 'broker' || a === 'driver') ?? 'both'
+const timesArg = args.find((a) => a.startsWith('--times'))
+const times = timesArg
+  ? Number(timesArg.includes('=') ? timesArg.split('=')[1] : args[args.indexOf(timesArg) + 1])
+  : 1
+if (!Number.isInteger(times) || times < 1) {
+  console.error('--times wants a whole number of runs, 1 or more.')
+  process.exit(1)
+}
+const out = []
+const say = (line = '') => { out.push(line); console.log(line) }
+let requests = 0
+let retries = 0
+const results = []
+
+// Turns per scenario set -- the dispatcher lines below, counted.
+const TURNS = { broker: 13, driver: 7 }
+
+function flags(text, prompt, findings = []) {
+  const f = []
+  const banned = prompt.trippedBannedWord(text)
+  if (banned) f.push(`BANNED WORD: ${banned}`)
+  if (prompt.leaksReasoning(text)) f.push('LEAKS REASONING')
+  if (tooLongForChat(text)) f.push(`TOO LONG (${text.trim().length} chars)`)
+  if (text.startsWith('(FAILED')) f.push('FAILED')
+  f.push(...findings.map((x) => `CHECK: ${x}`))
+  return f.length ? ` **[${f.join(' · ')}]**` : ''
+}
+
+// Counted where requests are actually sent (aiClient onRequest), so a
+// second try and a backoff retry are in the number.
+async function ask(config, messages) {
+  try {
+    return (await chatText({
+      messages,
+      config,
+      onRequest: () => { requests += 1 },
+      onRetry: () => { retries += 1 },
+    })).trim()
+  } catch (err) {
+    return `(FAILED: ${err.message})`
+  }
+}
+
+// -- Broker -----------------------------------------------------------------
+
+async function openPostings() {
+  const r = await query(`
+    SELECT p.id, p.origin_state AS "originState", p.destination_state AS "destinationState",
+           p.equipment_type AS "equipmentType", p.pickup_at AS "pickupAt", p.broker_id AS "brokerId"
+      FROM load_postings p
+     WHERE p.status = 'open' AND p.broker_id IS NOT NULL
+       AND p.posted_at <= now() AND p.expires_at > now() + interval '15 minutes'
+     ORDER BY p.posted_at DESC LIMIT 400`)
+  return r.rows
+}
+
+function pick(rows, used, test) {
+  const row = rows.find((p) => !used.has(p.id) && test(p))
+  if (row) used.add(row.id)
+  return row ?? null
+}
+
+// "tomorrow" or the weekday, the two ways the pickup day can rightly be said.
+function pickupDayPattern(pickupAt) {
+  const iso = new Date(pickupAt).toISOString()
+  const rel = relativeDay(iso, new Date().toISOString())
+  const weekday = new Intl.DateTimeFormat('en-US', { weekday: 'long', timeZone: APP_TIMEZONE }).format(new Date(pickupAt))
+  return [rel, weekday, weekday.slice(0, 3)].filter(Boolean).join('|')
+}
+
+async function brokerConversation({ key, title, posting, lines }, carrier, config, run) {
+  const m = marketFacts(posting)
+  const terms = brokerTerms(posting.name, posting.equipmentType)
+  say(`### ${title}${times > 1 ? ` — run ${run}/${times}` : ''}`)
+  say(`${posting.originCity}, ${posting.originState} → ${posting.destinationCity}, ${posting.destinationState} · ${posting.equipmentType} · ${posting.distanceMi} mi · $${posting.rateUsd} ($${(posting.rateUsd / posting.distanceMi).toFixed(2)}/mi)${posting.rateHidden ? ' · CALL FOR RATE' : ''}`)
+  say(`Broker: ${posting.contactName} at ${posting.name} (${posting.creditRating}) · pickup ${relativeDay(new Date(posting.pickupAt).toISOString(), new Date().toISOString())}`)
+  // A side with no regional figure carries the national one; printed as
+  // the region's own, it read as a fact DAT never published (Upper
+  // Mountain, 2026-10-06).
+  const side = (s) => (s.source === 'regional' ? `${s.region} $${s.linehaul}` : `${s.region ?? 'that state'} (no regional figure)`)
+  if (m) say(`Market: out of ${side(m.origin)} · reload out of ${side(m.destination)} · national $${m.national}`)
+  say(`Broker's terms: ${termsLines(terms).join(' ')}`)
+  say('')
+  const expect = BROKER_EXPECT[key]?.({
+    posting, market: m, terms, ask: Math.round(posting.rateUsd * 1.12), pickupDay: pickupDayPattern(posting.pickupAt),
+  }) ?? {}
+  const history = []
+  let previous = null
+  for (const [turn, raw] of lines.entries()) {
+    const text = typeof raw === 'function' ? raw(posting, m) : raw
+    const dispatcherSoFar = [...history.filter((h) => h.role === 'dispatcher').map((h) => h.content), text]
+    const systemPrompt = bp.buildBrokerSystemPrompt({
+      carrier,
+      broker: { name: posting.name, contactName: posting.contactName, persona: posting.persona },
+      posting,
+      talk: talkFacts(dispatcherSoFar, posting.equipmentType),
+    })
+    const reply = await ask(config, bp.buildMessages({ systemPrompt, history, newMessage: text }))
+    const findings = reply.startsWith('(FAILED')
+      ? ['no reply']
+      : [...brokerReply(reply, previous), ...(expect[turn]?.(reply) ?? [])]
+    results.push({ scenario: key, run, findings })
+    say(`- **D:** \`${text}\``)
+    say(`- **B:** ${reply}${flags(reply, bp, findings)}`)
+    history.push({ role: 'dispatcher', content: text }, { role: 'broker', content: reply })
+    previous = reply
+  }
+  const talk = talkFacts(history.filter((h) => h.role === 'dispatcher').map((h) => h.content), posting.equipmentType)
+  say(`- _Counted trade words:_ ${talk.used.join(', ') || 'none'} · _raised:_ ${talk.confirm.filter((c) => c.raised).map((c) => c.label).join(', ') || 'none'}`)
+  say('')
+}
+
+// The loads are chosen once and every run uses the same ones -- a count
+// across runs means something only if the runs are of the same thing.
+async function planBroker() {
+  const rows = await openPostings()
+  if (rows.length === 0) { say('No open postings. Run: npm run refresh:postings'); return [] }
+  const used = new Set()
+  const plan = []
+  const add = async (key, title, row, lines) => {
+    if (!row) { say(`_${key} skipped: no open posting fits._\n`); return null }
+    const posting = await brokerRepo.getPostingWithBroker(row.id)
+    plan.push({ key, title, posting, lines })
+    return posting
+  }
+  const weak = (p) => { const m = marketFacts(p); return m && m.destination.linehaul < m.national }
+  const strong = (p) => { const m = marketFacts(p); return m && m.destination.source === 'regional' && m.destination.linehaul >= m.national }
+  const tomorrow = (p) => relativeDay(new Date(p.pickupAt).toISOString(), new Date().toISOString()) === 'tomorrow'
+
+  await add('S1', 'S1 — rookie, plain words', pick(rows, used, (p) => p.equipmentType === 'dry-van'),
+    ['hi i want this load', 'how much u pay', 'can u pay more'])
+  const s2 = await add('S2', 'S2 — casual pro, trade words', pick(rows, used, (p) => p.equipmentType === 'dry-van'), [
+    'hey bro, that all in? im like 60 dh',
+    'whats detention after free time, tonu if they cancel? layover?',
+    'appt or fcfs at pu? any lumper at delivery?',
+  ])
+  await add('S3', 'S3 — hard negotiator, weak reload (real argument)', pick(rows, used, weak), [
+    (p, m) => `DAT has ${m.destination.region.toLowerCase()} at ${m.destination.linehaul}, reload out of there is dead, ill be deadheading out. need $${Math.round(p.rateUsd * 1.12)}`,
+    'meet me in the middle?',
+  ])
+  await add('S4', 'S4 — false claim, strong destination', pick(rows, used, strong),
+    [(p) => `reload out of ${p.destinationCity.toLowerCase()} is terrible bro, i need more`])
+  await add('S5', 'S5 — wrong market number', pick(rows, used, (p) => marketFacts(p)?.origin.source === 'regional'),
+    [(p, m) => `DAT shows ${m.origin.region.toLowerCase()} ${p.equipmentType} at ${(m.origin.linehaul + 1.8).toFixed(2)} linehaul this week so ur way under`])
+  await add('S6', 'S6 — reefer', pick(rows, used, (p) => p.equipmentType === 'reefer'), ['what temp? continuous or cycle? ill pre-cool'])
+  await add('S7', 'S7 — days and times', pick(rows, used, tomorrow), ["when's pu and delivery?"])
+  if (s2) {
+    await add('S8', 'S8 — same broker as S2, terms again (must match S2)', pick(rows, used, (p) => p.brokerId === s2.brokerId),
+      ['same q — detention, tonu, layover on this one?'])
+  }
+  return plan
+}
+
+async function runBroker(carrier) {
+  const config = chatConfigFor('broker')
+  say(`## Broker (model: ${config.model})`)
+  say('')
+  const plan = await planBroker()
+  for (let run = 1; run <= times; run++) {
+    for (const s of plan) await brokerConversation(s, carrier, config, run)
+  }
+}
+
+// -- Grace --------------------------------------------------------------------
+
+async function driverConversation({ key, title, load, lines }, base, config, run) {
+  say(`### ${title}${times > 1 ? ` — run ${run}/${times}` : ''}`)
+  say(load ? `Load in the prompt: ${load.originCity}, ${load.originState} → ${load.destinationCity}, ${load.destinationState}${load.hypothetical ? ' (HYPOTHETICAL — not in the database)' : ''}` : 'No load in the prompt.')
+  say('')
+  const expect = DRIVER_EXPECT[key]?.({
+    city: base.driver.currentCity, hasEta: Boolean(load?.etaAt), fuelPct: dp.fuelPercent(base.driver),
+  }) ?? {}
+  const history = []
+  let previous = null
+  for (const [turn, text] of lines.entries()) {
+    const systemPrompt = dp.buildDriverSystemPrompt({ driver: base.driver, standing: base.standing, load, carrier: base.carrier })
+    const reply = await ask(config, dp.buildMessages({ systemPrompt, history, newMessage: text }))
+    const findings = reply.startsWith('(FAILED')
+      ? ['no reply']
+      : [...driverReply(reply, previous, { onTheRoad: base.driver.onTheRoad }), ...(expect[turn]?.(reply) ?? [])]
+    results.push({ scenario: key, run, findings })
+    say(`- **D:** \`${text}\``)
+    say(`- **G:** ${reply}${flags(reply, dp, findings)}`)
+    history.push({ role: 'dispatcher', content: text }, { role: 'driver', content: reply })
+    previous = reply
+  }
+  say('')
+}
+
+async function runDriver(carrier) {
+  const config = chatConfigFor('driver')
+  say(`## Grace (model: ${config.model})`)
+  say('')
+  const name = process.env.TELEGRAM_DRIVER_NAME || 'Grace Lindqvist'
+  const id = (await query('SELECT id FROM drivers WHERE name = $1', [name])).rows[0]?.id
+  if (!id) { say(`No driver named ${name}.`); return }
+  const ctx = await getDriverContext(id)
+  const base = { driver: ctx.driver, standing: await driverStanding(null, id), carrier }
+  say(`Database: parked in ${ctx.driver.parkedCity ?? '?'}, ${ctx.driver.parkedState ?? '?'} · now ${ctx.driver.onTheRoad ? 'on the road near' : 'in'} ${ctx.driver.currentCity}, ${ctx.driver.currentState} · ${ctx.driver.dutyStatus} · load: ${ctx.load ? `${ctx.load.originCity} → ${ctx.load.destinationCity}` : 'none'}`)
+  say('')
+
+  const now = Date.now()
+  const nyc = {
+    id: 'TEST-NY', originCity: 'Nashville', originState: 'TN', destinationCity: 'New York', destinationState: 'NY',
+    distanceMi: 895, dispatchedAt: new Date(now - 3600e3), etaAt: new Date(now + 8 * 3600e3), deliveryAt: new Date(now + 9 * 3600e3),
+    hypothetical: true,
+  }
+  const plan = [
+    { key: 'G1', title: 'G1 — casual hello', load: ctx.load, lines: ['Grace hey bro how r u doin?', 'got a load for u in a min'] },
+    { key: 'G2', title: 'G2 — trade words', load: ctx.load, lines: ['Grace whats ur eta, any detention at the shipper?', 'Grace where u at'] },
+    { key: 'G3', title: 'G3 — the New York load (once, not again)', load: nyc, lines: ['Grace ur on the NYC load', 'Grace whats ur fuel at', 'Grace got a dallas load next'] },
+  ]
+  for (let run = 1; run <= times; run++) {
+    for (const s of plan) await driverConversation(s, base, config, run)
+  }
+}
+
+// -- Run ----------------------------------------------------------------------
+
+const planned = times * ((only !== 'driver' ? TURNS.broker : 0) + (only !== 'broker' ? TURNS.driver : 0))
+const budgets = [...new Set([only !== 'driver' && 'broker', only !== 'broker' && 'driver'].filter(Boolean))]
+  .map((w) => dailyBudgetFor(chatConfigFor(w).baseUrl, appConfig.chatRequestsPerDay))
+const budget = Math.min(...budgets)
+if (planned > budget) {
+  console.error(`Planned ~${planned} requests; the provider's daily budget is ${budget}. `
+    + 'Run fewer times, or broker and driver on separate days.')
+  await pool.end()
+  process.exit(1)
+}
+
+const carrier = await getCarrier()
+const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')
+say(`# Chat scenarios — ${new Date().toISOString()}`)
+say(`Planned requests: ~${planned}${times > 1 ? ` (${times} runs)` : ''} of a daily budget of ${budget}. A second try adds one.`)
+say('')
+try {
+  if (only !== 'driver') await runBroker(carrier)
+  if (only !== 'broker') await runDriver(carrier)
+} finally {
+  const { lines, clean } = summarize(results, times)
+  say('## Checks')
+  say('')
+  say(lines.length ? '| Scenario | Finding | Runs |\n|---|---|---|' : 'No check flagged anything.')
+  for (const l of lines) say(l)
+  if (lines.length) say('')
+  if (clean.length) say(`Nothing flagged in: ${clean.join(', ')}.`)
+  say('A check is a pattern: read the flagged line before calling it a failure.')
+  say('')
+  say(`---\nRequests sent: ${requests}${retries ? ` (${retries} second ${retries === 1 ? 'try' : 'tries'})` : ''}`)
+  const dir = join(here, '..', '..', 'reports')
+  mkdirSync(dir, { recursive: true })
+  const file = join(dir, `chat-scenarios-${stamp}.md`)
+  writeFileSync(file, out.join('\n') + '\n')
+  console.log(`\nWritten: ${file}`)
+  await pool.end()
+}
