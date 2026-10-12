@@ -7,6 +7,7 @@ import * as loadEventsRepo from '../loadEvents/loadEvents.repository.js'
 import { pool } from '../../db/pool.js'
 import { AppError } from '../../lib/errors.js'
 import { computeProgress, computeTimeline } from '../../lib/loadTimeline.js'
+import { liveTrackingFor } from '../tracking/tracking.service.js'
 
 export async function listLoads({ status, equipmentType, search, page, limit }) {
   const offset = (page - 1) * limit
@@ -25,9 +26,15 @@ export async function getLoadById(id) {
     throw new AppError('LOAD_NOT_FOUND')
   }
 
+  // On the road: the map's position (liveTracking.js), and the percentage
+  // is that position's -- not the share of pickup..delivery that has
+  // passed, which read 100% for a truck still at the shipper (600010,
+  // 2026-10-08). Off the road: the old reading, which is 0 or 100 there.
+  const tracking = await liveTrackingFor(load)
   return {
     ...load,
-    progress: computeProgress(load),
+    progress: tracking ? Math.round(tracking.fraction * 100) : computeProgress(load),
+    tracking,
     timeline: computeTimeline(load),
   }
 }

@@ -13,7 +13,10 @@ import { query } from '../../db/pool.js'
 // Statuses mirror the loads page's Active tab: 'ontime', 'warn' and 'crit'
 // are all on the road -- a late truck is a truck, and the page states
 // lateness as a field instead of filtering it out.
-export const IN_TRANSIT_BOARD_SQL = `
+// The board's SELECT without its ORDER BY, so one load can be read with
+// exactly the board's columns and filter (inTransitOne, for a load's own
+// page) -- the page and the map then cannot disagree about where it is.
+export const IN_TRANSIT_BASE_SQL = `
   SELECT l.id, l.status,
          l.origin_city AS "originCity", l.origin_state AS "originState",
          l.destination_city AS "destinationCity", l.destination_state AS "destinationState",
@@ -44,6 +47,9 @@ export const IN_TRANSIT_BOARD_SQL = `
          -- one unresolved row per load.
          (SELECT e.occurred_at FROM load_events e
            WHERE e.load_id = l.id AND e.resolved_at IS NULL) AS "eventOpenedAt",
+         -- Which kind, for saying what stopped the truck (loadEvents.js).
+         (SELECT e.event_type FROM load_events e
+           WHERE e.load_id = l.id AND e.resolved_at IS NULL) AS "eventType",
          -- The lane's own alternative-0 route (034), if one has ever been
          -- fetched for this exact origin/destination pair. LEFT JOIN, not a
          -- subselect returning a scalar: lane_routes.geometry is the ONLY
@@ -114,7 +120,16 @@ export const IN_TRANSIT_BOARD_SQL = `
      AND l.dispatched_at IS NOT NULL
      AND l.eta_at IS NOT NULL
      AND l.status IN ('ontime', 'warn', 'crit')
+`
+
+export const IN_TRANSIT_BOARD_SQL = `${IN_TRANSIT_BASE_SQL}
    ORDER BY l.eta_at ASC`
+
+export async function inTransitOne(id) {
+  const result = await query(`${IN_TRANSIT_BASE_SQL}
+     AND l.id = $1`, [id])
+  return result.rows[0] ?? null
+}
 
 export async function inTransitBoard() {
   const result = await query(IN_TRANSIT_BOARD_SQL)

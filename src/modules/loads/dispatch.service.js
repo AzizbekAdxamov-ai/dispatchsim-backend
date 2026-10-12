@@ -74,6 +74,8 @@ function dvirRngFor(loadId) {
 }
 import { fromHosDomain, driverHosSnapshot, HOS_LOOKBACK_HOURS } from '../../constants/hosClock.js'
 import * as complianceService from '../compliance/compliance.service.js'
+import { readPreferences, hasRequests, preferenceConflicts, avoidedPlaces } from '../../constants/driverPreferences.js'
+import { deliveredTo, emptyRunCheck } from './whereabouts.js'
 
 // How long the run takes, in simulated days, from the window the broker
 // promised. Floored at half a day so a short local run still has a
@@ -123,6 +125,29 @@ export function fuelCostFor(distanceMi) {
 // ---------------------------------------------------------------------
 // Pre-dispatch compliance check -- what the confirm window shows
 // ---------------------------------------------------------------------
+
+// The driver's own requests against this lane (drivers.preferences, 054),
+// as one dispatch-check line. 'warn', never 'fail': a request is the
+// driver's, the decision is the dispatcher's, and the driver will say
+// what she thinks if she is sent anyway (driverChat.prompt.js). No line
+// at all for a driver who has asked for nothing -- an "ok" there would
+// read as a check that something was cleared.
+export function preferenceCheck(driverRow, load) {
+  if (!driverRow) return null
+  const prefs = readPreferences(driverRow.preferences)
+  if (!hasRequests(prefs)) return null
+  const conflicts = preferenceConflicts(prefs, load)
+  return {
+    key: 'preferences',
+    state: conflicts.length > 0 ? 'warn' : 'ok',
+    label: "Driver's requests",
+    detail: conflicts.length > 0
+      ? `${driverRow.name} has asked not to run to ${conflicts.map((c) => `${c.place} (${c.end})`).join(' or ')}`
+        + (prefs.why ? `. ${prefs.why}` : '')
+      : `Nothing on this lane ${driverRow.name} has asked to avoid (${avoidedPlaces(prefs).join(', ')})`,
+    cfr: null,
+  }
+}
 
 // GET /loads/:id/dispatch-check?driverId=... -- the facts a dispatcher
 // sees BEFORE dispatching, gathered from the same sources the dispatch
@@ -194,7 +219,7 @@ export async function dispatchCheck({ loadId, driverId }, opts = {}) {
       state: doc.status === 'valid' ? 'ok' : (doc.status === 'expiring' ? 'warn' : 'fail'),
       label: def?.label ?? doc.type,
       detail: doc.status === 'expiring'
-        ? `Renewal due in ${doc.daysLeft} simulated days`
+        ? `Renewal due in ${doc.daysLeft} company days`
         : doc.status === 'valid' ? null : 'Not current -- the next audit asks about this',
       cfr: def?.cfr ?? null,
     })
@@ -289,6 +314,15 @@ export async function dispatchCheck({ loadId, driverId }, opts = {}) {
       })
     }
   }
+
+  const requests = preferenceCheck(driverRow, load)
+  if (requests) checks.push(requests)
+
+  // How far the empty truck has to come to the pickup. Missing before
+  // 2026-10-05: a driver in Seattle was dispatched to Nashville and the
+  // check said nothing about 2,400 empty miles.
+  const emptyRun = emptyRunCheck(driverRow, load)
+  if (emptyRun) checks.push(emptyRun)
 
   const canDispatch = checks.every((c) => c.state !== 'fail')
 
@@ -502,10 +536,14 @@ async function planAndSaveStops({ load, driver, truckId }) {
   const routes = await routingRepo.getRoutes(lane)
   const primary = routes.find((r) => r.alternativeIndex === 0)
   if (!primary) {
+    // The command is for whoever runs the server, so it goes to the log.
+    // It was in the fact text until 2026-10-08, and the fact text is what a
+    // student reads on the load's Trip plan.
+    console.warn(`[dispatch] no cached route for ${laneText} -- npm run routes:warm fills it`)
     await outcome('no-route', [{
       code: 'NO_CACHED_ROUTE',
       cfr: null,
-      detail: `No road route is cached for ${laneText} (npm run routes:warm fills it). ${NOT_HOS_ETA}`,
+      detail: `No road route is known for ${laneText} yet. ${NOT_HOS_ETA}`,
     }])
     return
   }
@@ -886,6 +924,12 @@ export async function deliverArrivedLoads() {
         // Returns the fuel the LEDGER owes (the burn the tank did not
         // cover); null when there is no truck to write to.
         const runFuelUsd = load.truckId ? await applyRunToTruck(client, load) : null
+
+        // And the driver is where the truck is. Same transaction, same
+        // place: a driver left in Seattle after a New York delivery is the
+        // "two screens disagree" failure in its plainest form.
+        const landed = deliveredTo(load)
+        if (load.driverId && landed) await loadsRepo.moveDriverTo(client, { driverId: load.driverId, ...landed })
 
         // Fuel comes out on arrival, not on payment: the run cost money
         // weeks before the broker settles, and that gap is the squeeze

@@ -12,6 +12,7 @@ import { AppError } from '../../lib/errors.js'
 import { CITIES, roadMiles } from '../../../scripts/seed/cities.js'
 import { resolveCity, cityCompletions, rankPostings, hotLanes } from './laneSearch.js'
 import { simplifyPath } from '../routing/simplify.js'
+import { liveTracking } from './liveTracking.js'
 import * as routingService from '../routing/routing.service.js'
 
 // How much a board-poll route line may deviate (in miles, simplify.js's
@@ -123,6 +124,8 @@ export function shapeBoard(rows, now = new Date()) {
       stopPlanFacts: load.stopPlanFacts ?? [],
       truck: load.truck, // { id, make, model } or null
       openEvent: Boolean(load.eventOpenedAt),
+      eventOpenedAt: load.eventOpenedAt ?? null,
+      eventType: load.eventType ?? null,
       // The facility the load is AT right now, or null between stops --
       // straight off tracking.repository.js's own currentStop subselect,
       // minus the lat/lon it carries only for position.js's freeze (the
@@ -228,6 +231,17 @@ export function idleTrucksToBoard(trucks) {
       }
     })
     .filter(Boolean)
+}
+
+// One load's live position, for its own page -- the board's row for it,
+// shaped by the same shapeBoard, so the page and the map agree. null when
+// the load is not on the road (not dispatched, delivered) or cannot be
+// placed; the page then shows no live panel rather than a guess.
+export async function liveTrackingFor({ id }, now = new Date()) {
+  const row = await repo.inTransitOne(id)
+  if (!row) return null
+  const [positioned] = shapeBoard([row], now).positioned
+  return positioned ? liveTracking(positioned, now) : null
 }
 
 export async function inTransitBoard() {

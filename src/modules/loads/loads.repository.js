@@ -404,6 +404,8 @@ export async function getDriverForDispatch(client, driverId) {
   // and the write read the SAME shape, one opinion about the driver.
   const result = await client.query(
     `SELECT d.id, d.name, d.hos_remaining_min AS "hosRemainingMin",
+            d.preferences,
+            d.current_city AS "currentCity", d.current_state AS "currentState",
             t.id AS "truckId", t.make AS "truckMake", t.model AS "truckModel",
             (SELECT count(*) FROM loads l
               WHERE l.driver_id = d.id AND l.status <> 'done')::int AS "activeLoads"
@@ -413,6 +415,20 @@ export async function getDriverForDispatch(client, driverId) {
     [driverId],
   )
   return result.rows[0] ?? null
+}
+
+// The driver is where the load ended (src/modules/loads/whereabouts.js
+// deliveredTo). Written in the delivery's own transaction, beside the
+// truck's location -- the two are one fact about one place. Until
+// 2026-10-05 nothing wrote these columns at all.
+export async function moveDriverTo(client, { driverId, city, state, lat, lon, label }) {
+  await client.query(
+    `UPDATE drivers
+        SET current_city = $2, current_state = $3, current_lat = $4, current_lon = $5,
+            current_location = $6, updated_at = now()
+      WHERE id = $1`,
+    [driverId, city, state, lat, lon, label],
+  )
 }
 
 // Loads whose ETA has passed and that have not been marked delivered.

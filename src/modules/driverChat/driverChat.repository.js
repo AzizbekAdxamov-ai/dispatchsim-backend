@@ -2,6 +2,7 @@
 
 import { query } from '../../db/pool.js'
 import * as SQL from './driverChat.sql.js'
+import { withLivePlace } from './livePlace.js'
 
 export async function openConversation(driverId, userId) {
   const result = await query(SQL.OPEN_CONVERSATION_SQL, [driverId, userId])
@@ -19,9 +20,9 @@ export async function getDriverContext(driverId) {
   const result = await query(SQL.GET_DRIVER_CONTEXT_SQL, [driverId])
   const r = result.rows[0]
   if (!r) return null
-  return {
+  return withLivePlace({
     driver: {
-      id: r.id, name: r.name, cdlClass: r.cdlClass, bio: r.bio,
+      id: r.id, name: r.name, cdlClass: r.cdlClass, bio: r.bio, preferences: r.preferences,
       homeBaseCity: r.homeBaseCity, homeBaseState: r.homeBaseState,
       dutyStatus: r.dutyStatus, payModel: r.payModel,
       payPercentBp: r.payPercentBp, payPerMileCents: r.payPerMileCents,
@@ -35,9 +36,10 @@ export async function getDriverContext(driverId) {
         id: r.loadId, originCity: r.originCity, originState: r.originState,
         destinationCity: r.destinationCity, destinationState: r.destinationState,
         distanceMi: r.distanceMi, etaAt: r.etaAt, deliveryAt: r.deliveryAt,
+        dispatchedAt: r.dispatchedAt,
       }
       : null,
-  }
+  })
 }
 
 export async function listMessages(conversationId) {
@@ -89,4 +91,11 @@ export async function listThreads(userId) {
 export async function conversationsForDriver(driverId) {
   const result = await query(SQL.CONVERSATIONS_FOR_DRIVER_SQL, [driverId])
   return result.rows
+}
+
+// What one dispatcher turn cost at the provider (055): every request its
+// reply took, second tries included. Written after the reply, success or
+// failure -- a failed call that sent three requests still spent three.
+export async function setProviderRequests(messageId, n) {
+  await query('UPDATE driver_messages SET provider_requests = $2 WHERE id = $1', [messageId, n])
 }
