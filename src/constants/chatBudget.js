@@ -109,6 +109,38 @@ export function chatMaxTokens() {
   return CHAT_REPLY_TOKENS * (1 + REASONING_ALLOWANCE)
 }
 
+// A cap on the THINKING, so the reply always has room.
+//
+// max_tokens covers thinking and reply together. A reasoning model that
+// thinks until the budget runs out returns no reply at all: the
+// 2026-10-06 scenario run lost one turn in twenty that way ("6398 chars of
+// reasoning, 2000 completion tokens of a 2000 budget"), and in the app
+// that is a dispatcher with no answer. OpenRouter accepts a separate cap
+// on reasoning (reasoning.max_tokens, https://openrouter.ai/docs/use-
+// cases/reasoning-tokens, checked 2026-10-06; ignored by models that do
+// not reason). Set to the whole budget minus one reply, the reply is
+// always left its CHAT_REPLY_TOKENS whatever CHAT_MAX_TOKENS says.
+// null for providers that do not take the field -- an unknown parameter
+// is an error on some of them.
+//
+// CHAT_REASONING=off asks for no thinking at all (reasoning.effort "none",
+// same docs page, checked 2026-10-11) -- for a chat model whose reasoning
+// is optional, like google/gemma-4-31b-it. Sending a max_tokens cap to such
+// a model is not neutral: OpenRouter infers "enabled" from it and switches
+// the thinking ON. Returned as the string 'off' so the request builder
+// (aiClient.completionBody) can tell "no cap" from "no thinking".
+export function chatReasoningMode() {
+  const raw = String(process.env.CHAT_REASONING ?? '').trim().toLowerCase()
+  return raw === 'off' ? 'off' : 'on'
+}
+
+export function chatReasoningCap(baseUrl) {
+  const key = String(baseUrl || '').trim().replace(/\/+$/, '')
+  if (key !== DEFAULT_CHAT_BASE_URL) return null
+  if (chatReasoningMode() === 'off') return 'off'
+  return Math.max(0, chatMaxTokens() - CHAT_REPLY_TOKENS)
+}
+
 // The reply's own limit, in characters, because that is what we can
 // actually measure on a string. Four characters per token is the usual
 // rough figure for English; it is an approximation and is named as one.
@@ -134,8 +166,11 @@ export function tooLongForChat(text) {
 // reads the resulting number as a fact about the provider.
 export const SAFETY_MARGIN = 0.1
 
-export function dailyBudgetFor(baseUrl) {
-  return Math.floor(providerFor(baseUrl).requestsPerDay * (1 - SAFETY_MARGIN))
+// `perDay` is CHAT_REQUESTS_PER_DAY when it is set (config.js says when
+// that is honest to do), otherwise the provider's published limit.
+export function dailyBudgetFor(baseUrl, perDay = null) {
+  const limit = Number.isInteger(perDay) && perDay > 0 ? perDay : providerFor(baseUrl).requestsPerDay
+  return Math.floor(limit * (1 - SAFETY_MARGIN))
 }
 
 // -- How one key's budget is shared ------------------------------------
@@ -165,9 +200,26 @@ export function fairShare(budget, activeUsersToday) {
 // the conclusion to them.
 export function budgetMessage({ used, share, seats, accountUsed, budget, scope }) {
   const whose = scope === 'both' ? 'chat' : scope === 'broker' ? 'broker chat' : 'driver chat'
+  // English, like every line a student reads (2026-10-08 audit: these
+  // were the only Uzbek sentences in the app's screens).
   if (accountUsed >= budget) {
-    return `Bugungi ${whose} byudjeti tugadi: ${accountUsed}/${budget} ta so'rov ishlatildi. Ertaga yangilanadi.`
+    return `Today's ${whose} budget is used up: ${accountUsed}/${budget} requests. It resets tomorrow.`
   }
-  return `Bugungi ulushingiz tugadi: ${used}/${share} ta xabar. `
-    + `Bugun ${seats} ta dispecher ishlayapti, kunlik ${budget} ta so'rov shuncha kishiga bo'lingan.`
+  // Requests, not messages: since 055 `used` counts provider requests, and
+  // one message can cost more than one.
+  return `Your share for today is used up: ${used}/${share} requests. `
+    + `${seats} ${seats === 1 ? 'dispatcher is' : 'dispatchers are'} working today, and the ${budget} daily requests are split between them.`
+}
+
+// Is a 429 OpenRouter's per-ACCOUNT daily cap on free models, or one
+// model's upstream host refusing free traffic right now?
+//
+// Only the first means every other free model will refuse too. OpenRouter
+// names its own cap ("Rate limit exceeded: free-models-per-day. Add 10
+// credits to unlock 1000 free model requests per day"); an upstream
+// refusal arrives as "Provider returned error" and says nothing about a
+// day. scripts/chat-diag.js used to read every 429 as the first kind and
+// stop -- on 2026-09-30, with five requests of fifty spent.
+export function isDailyCap(message) {
+  return /free-models-per-day|per[ -]day|daily/i.test(String(message ?? ''))
 }

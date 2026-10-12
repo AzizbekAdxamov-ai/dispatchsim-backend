@@ -17,14 +17,21 @@ import { AppError } from '../../lib/errors.js'
 import { DAILY_USAGE_SQL } from './chatBudget.sql.js'
 import { chatConfigFor, walletScopeFor } from './chatProvider.js'
 import { dailyBudgetFor, providerFor, fairShare, budgetMessage } from '../../constants/chatBudget.js'
+import appConfig from '../../config.js'
+
+// Whether the person asking is already in `seats`: by turns sent, since a
+// turn that cost no request (055: the call never left) still took a seat.
+export function seatsCounting(seats, myTurns) {
+  return seats + (myTurns === 0 ? 1 : 0)
+}
 
 export async function dailyUsage(userId, which) {
   const config = chatConfigFor(which)
   const scope = walletScopeFor(which)
-  const budget = dailyBudgetFor(config.baseUrl)
+  const budget = dailyBudgetFor(config.baseUrl, appConfig.chatRequestsPerDay)
 
   const { rows } = await query(DAILY_USAGE_SQL, [userId, scope])
-  const { used, account_used: accountUsed, seats } = rows[0]
+  const { used, account_used: accountUsed, my_turns: myTurns, seats } = rows[0]
 
   // seats counts people who have already sent something today. A
   // dispatcher opening their first thread is not in it yet, and dividing
@@ -32,7 +39,7 @@ export async function dailyUsage(userId, which) {
   // spoken for -- with nobody at all on the board, a share of the whole
   // budget. They are added to the divisor, and the same adjusted number is
   // what the message reports, so the arithmetic on screen adds up.
-  const seatsWithMe = seats + (used === 0 ? 1 : 0)
+  const seatsWithMe = seatsCounting(seats, myTurns)
 
   return {
     which,

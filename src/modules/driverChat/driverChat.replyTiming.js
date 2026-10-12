@@ -12,6 +12,9 @@
 // lane on I-40.
 
 // [min, max] seconds.
+import config from '../../config.js'
+import { compressDelay, tableSpan, DRIVER_FAST_CAP_SEC } from '../../constants/replySpeed.js'
+
 export const DRIVER_REPLY_SEC = Object.freeze({
   // Behind the wheel. They see it at the next stop.
   driving: [120, 300],
@@ -48,8 +51,15 @@ function between(rng, [lo, hi]) {
 
 // Seconds until the driver's reply should become visible.
 // rng is injectable so tests can pin it; production passes Math.random.
-export function driverReplyDelaySec(dutyStatus, rng = Math.random) {
+//
+// `fast` is CHAT_FAST_REPLIES, exactly as for the broker (replyTiming.js):
+// the same draw, squeezed so the answer is in the chat within a minute.
+export function driverReplyDelaySec(dutyStatus, rng = Math.random, fast = config.chatFastReplies) {
   const s = status(dutyStatus)
-  if (rng() < NO_SIGNAL_CHANCE[s]) return Math.round(between(rng, NO_SIGNAL_DELAY_SEC))
-  return Math.round(between(rng, DRIVER_REPLY_SEC[s]))
+  const raw = rng() < NO_SIGNAL_CHANCE[s]
+    ? Math.round(between(rng, NO_SIGNAL_DELAY_SEC))
+    : Math.round(between(rng, DRIVER_REPLY_SEC[s]))
+  return fast ? compressDelay(raw, DRIVER_SPAN, DRIVER_FAST_CAP_SEC) : raw
 }
+
+export const DRIVER_SPAN = tableSpan(...Object.values(DRIVER_REPLY_SEC), NO_SIGNAL_DELAY_SEC)

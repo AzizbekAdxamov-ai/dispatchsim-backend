@@ -48,6 +48,7 @@ export const ERROR_CODES = {
   CONVERSATION_NOT_FOUND: { status: 404, message: 'Conversation not found' },
   BROKER_UNAVAILABLE:     { status: 409, message: 'This posting has no broker on file' },
   CHAT_DAILY_LIMIT:       { status: 429, message: 'Daily message limit reached, try again tomorrow' },
+  CHAT_PROVIDER_BUSY:     { status: 503, message: 'The chat provider is busy right now. Try again later.' },
   CHAT_UNAVAILABLE:       { status: 503, message: 'The broker cannot be reached right now' },
   // The same outage, said about the right person. Reusing the broker's
   // wording in the driver chat would put a message on screen about someone
@@ -69,6 +70,13 @@ export const ERROR_CODES = {
   LISTING_ALREADY_BOUGHT: { status: 409, message: 'This listing has already been purchased' },
   LISTING_EXPIRED:        { status: 410, message: 'This listing has expired' },
   TRUCK_HAS_DRIVER:       { status: 409, message: 'This truck already has a driver assigned' },
+  // Returned by truckListings.repository.js's assignDriver since the day it
+  // was written -- and missing from this catalog until 2026-09-30, so the
+  // AppError constructor threw "Unknown AppError code" and the person
+  // assigning a truck got a 500 instead of this sentence. The frontend
+  // (AssignDriverPanel.jsx) had a message ready for it the whole time.
+  // test/errorCodes.test.js now reads every code the source throws.
+  TRUCK_NOT_IDLE:         { status: 409, message: 'This truck is not idle — it is working or in the shop' },
   DRIVER_HAS_TRUCK:       { status: 409, message: 'This driver already has a truck assigned' },
   NOT_AGREED_YET:         { status: 409, message: 'No agreement on file — agree on a rate first' },
   ALREADY_BOOKED:         { status: 409, message: 'This rate confirmation has already been accepted' },

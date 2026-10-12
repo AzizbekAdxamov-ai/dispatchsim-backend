@@ -79,6 +79,21 @@ test('a different model on one key is still one wallet', () => {
   assert.equal(chatConfigFor('driver').model, 'some/model')
 })
 
+test('only Grace on OpenRouter receives a distinct fallback model', () => {
+  process.env.CHAT_API_KEY = 'key-one'
+  process.env.CHAT_MODEL = 'some/model'
+  const driver = chatConfigFor('driver')
+  assert.equal(driver.fallbackModel, 'nvidia/nemotron-3-super-120b-a12b:free')
+  assert.equal(chatConfigFor('broker').fallbackModel, undefined)
+
+  process.env.CHAT_DRIVER_MODEL = driver.fallbackModel
+  assert.equal(chatConfigFor('driver').fallbackModel, undefined)
+
+  process.env.CHAT_DRIVER_BASE_URL = 'https://api.groq.com/openai/v1'
+  process.env.CHAT_DRIVER_MODEL = 'some/model'
+  assert.equal(chatConfigFor('driver').fallbackModel, undefined)
+})
+
 test('each chat inherits what its own family does not set', () => {
   process.env.CHAT_BASE_URL = 'https://openrouter.ai/api/v1'
   process.env.CHAT_API_KEY = 'key-one'

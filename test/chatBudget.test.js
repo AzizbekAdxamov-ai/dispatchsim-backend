@@ -103,6 +103,8 @@ test('the two walls are told apart, and both carry their numbers', () => {
   assert.match(account, /900/)
   assert.match(mine, /112/)
   assert.match(mine, /8/)
+  // Kills: the share still called messages after 055 made it requests.
+  assert.match(mine, /112\/112 requests\./)
 
   // The account wall wins even when the personal share is untouched: a
   // student who has sent three messages is not told they used up a share
@@ -261,4 +263,297 @@ test('no service hard-codes a token budget of its own', () => {
     const code = src(f).split('\n').filter((l) => !l.trim().startsWith('//')).join('\n')
     assert.doesNotMatch(code, /maxTokens:\s*\d+/, `${f} o'z token chegarasini yozib qo'ygan`)
   }
+})
+
+// Kills: reading every 429 as "the daily limit is gone". An upstream
+// provider throttling one free model is not the account's cap, and
+// treating it as one stops the diagnosis at the first busy model.
+test('a 429 is the daily cap only when it says so', async () => {
+  const { isDailyCap } = await import('../src/constants/chatBudget.js')
+  assert.equal(isDailyCap('Rate limit exceeded: free-models-per-day. Add 10 credits to unlock 1000 free model requests per day'), true)
+  assert.equal(isDailyCap('Provider returned error'), false)
+  assert.equal(isDailyCap('qwen/qwen3.8-27b:free is temporarily rate-limited upstream. Please retry shortly'), false)
+  assert.equal(isDailyCap(undefined), false)
+})
+
+// Kills: no cap on thinking (a reasoning model spent all 2000 tokens on
+// it and returned no reply -- 2026-10-06 scenario run), a cap that leaves
+// the reply less than its own budget, or the field sent to a provider
+// that may reject it.
+// Run with CHAT_REASONING unset: the cap is what these hold, and a .env
+// with CHAT_REASONING=off (2026-10-11) must not decide the result.
+test('reasoning is capped so the reply keeps its budget, and only on OpenRouter', () => withReasoning(null, async () => {
+  const { chatReasoningCap, chatMaxTokens, CHAT_REPLY_TOKENS } = await import('../src/constants/chatBudget.js')
+  const { completionBody } = await import('../scripts/seed/aiClient.js')
+  assert.equal(chatReasoningCap(OPENROUTER), chatMaxTokens() - CHAT_REPLY_TOKENS)
+  assert.equal(chatReasoningCap(`${OPENROUTER}/`), chatMaxTokens() - CHAT_REPLY_TOKENS)
+  assert.equal(chatReasoningCap(GROQ), null)
+  assert.deepEqual(completionBody({ model: 'm', messages: [], temperature: 0.9, maxTokens: 880, reasoningMaxTokens: 660 }).reasoning, { max_tokens: 660 })
+  assert.equal('reasoning' in completionBody({ model: 'm', messages: [], temperature: 0.9, maxTokens: 880 }), false)
+}))
+
+// Kills: chatText not passing the cap at all (completionBody would carry
+// it, the real request would not).
+// Run with CHAT_REASONING unset: the cap is what these hold, and a .env
+// with CHAT_REASONING=off (2026-10-11) must not decide the result.
+test('a chat request to OpenRouter carries the reasoning cap', () => withReasoning(null, async () => {
+  const { chatText } = await import('../scripts/seed/aiClient.js')
+  const { chatReasoningCap } = await import('../src/constants/chatBudget.js')
+  const realFetch = globalThis.fetch
+  let sent = null
+  globalThis.fetch = async (_url, opts) => {
+    sent = JSON.parse(opts.body)
+    return { ok: true, json: async () => ({ choices: [{ message: { content: 'copy that' } }] }) }
+  }
+  try {
+    const reply = await chatText({ messages: [{ role: 'user', content: 'hi' }], config: { baseUrl: OPENROUTER, apiKey: 'x', model: 'm' } })
+    assert.equal(reply, 'copy that')
+    assert.deepEqual(sent.reasoning, { max_tokens: chatReasoningCap(OPENROUTER) })
+  } finally {
+    globalThis.fetch = realFetch
+  }
+}))
+
+// A fake provider: answers in turn from `replies`, records each body.
+function fakeProvider(replies) {
+  const bodies = []
+  let i = 0
+  const fetch = async (_url, opts) => {
+    bodies.push(JSON.parse(opts.body))
+    const r = replies[Math.min(i++, replies.length - 1)]
+    return { ok: true, json: async () => r }
+  }
+  return { fetch, bodies }
+}
+const THOUGHT_ONLY = { choices: [{ message: { content: '', reasoning: 'x'.repeat(5000) }, finish_reason: 'length' }], usage: { completion_tokens: 2000 } }
+const CUT_OFF = { choices: [{ message: { content: 'Shipper in Nashville is clear - you mean the' }, finish_reason: 'length' }] }
+const GOOD = { choices: [{ message: { content: 'copy that' }, finish_reason: 'stop' }] }
+
+async function withFetch(fake, fn) {
+  const real = globalThis.fetch
+  globalThis.fetch = fake.fetch
+  try { return await fn() } finally { globalThis.fetch = real }
+}
+
+// Kills: no second try when thinking ate the budget (2026-10-06: two of
+// twenty turns lost), or a second try with the same budget.
+test('a reply lost to thinking is tried once more with twice the room', async () => {
+  const { chatText } = await import('../scripts/seed/aiClient.js')
+  const fake = fakeProvider([THOUGHT_ONLY, GOOD])
+  const reply = await withFetch(fake, () => chatText({ messages: [], config: { baseUrl: OPENROUTER, apiKey: 'x', model: 'm' }, maxTokens: 2000 }))
+  assert.equal(reply, 'copy that')
+  assert.equal(fake.bodies.length, 2)
+  assert.equal(fake.bodies[1].max_tokens, 4000)
+})
+
+// Kills: a second request the caller is never told about. The budget is
+// counted in requests; the scenario run reported 20 when 21 were sent.
+test('the caller is told about the second request, and only when there is one', async () => {
+  const { chatText } = await import('../scripts/seed/aiClient.js')
+  const config = { baseUrl: OPENROUTER, apiKey: 'x', model: 'm' }
+  let told = 0
+  await withFetch(fakeProvider([THOUGHT_ONLY, GOOD]), () => chatText({ messages: [], config, maxTokens: 2000, onRetry: () => { told += 1 } }))
+  assert.equal(told, 1)
+  await withFetch(fakeProvider([GOOD]), () => chatText({ messages: [], config, maxTokens: 2000, onRetry: () => { told += 1 } }))
+  assert.equal(told, 1)
+})
+
+// Kills: a cut-off half sentence shown as if it were the answer.
+test('a reply cut off mid-sentence is not returned; it is tried again', async () => {
+  const { chatText } = await import('../scripts/seed/aiClient.js')
+  const fake = fakeProvider([CUT_OFF, GOOD])
+  const reply = await withFetch(fake, () => chatText({ messages: [], config: { baseUrl: OPENROUTER, apiKey: 'x', model: 'm' }, maxTokens: 2000 }))
+  assert.equal(reply, 'copy that')
+})
+
+// Kills: retrying forever, or swallowing the second failure.
+test('a second failure is thrown, after exactly two requests', async () => {
+  const { chatText } = await import('../scripts/seed/aiClient.js')
+  const fake = fakeProvider([THOUGHT_ONLY, THOUGHT_ONLY, GOOD])
+  await assert.rejects(
+    withFetch(fake, () => chatText({ messages: [], config: { baseUrl: OPENROUTER, apiKey: 'x', model: 'm' }, maxTokens: 2000 })),
+    /reasoning but no reply/,
+  )
+  assert.equal(fake.bodies.length, 2)
+})
+
+// -- 055: the budget counts requests, not turns ------------------------------
+
+// Kills: onRequest not passed to the second try (a turn that cost two
+// requests charged as one), or called per chatText rather than per request.
+test('every request sent is counted, the second try included', async () => {
+  const { chatText } = await import('../scripts/seed/aiClient.js')
+  const config = { baseUrl: OPENROUTER, apiKey: 'x', model: 'm' }
+  let sent = 0
+  await withFetch(fakeProvider([THOUGHT_ONLY, GOOD]), () => chatText({ messages: [], config, maxTokens: 2000, onRequest: () => { sent += 1 } }))
+  assert.equal(sent, 2)
+  sent = 0
+  await withFetch(fakeProvider([GOOD]), () => chatText({ messages: [], config, maxTokens: 2000, onRequest: () => { sent += 1 } }))
+  assert.equal(sent, 1)
+})
+
+// -- CHAT_REASONING=off (2026-10-11, for google/gemma-4-31b-it:free) --------
+
+async function withReasoning(value, fn) {
+  const before = process.env.CHAT_REASONING
+  // '' rather than delete: a module imported inside fn may load .env
+  // (dotenv), and dotenv fills only variables that are not set at all.
+  process.env.CHAT_REASONING = value ?? ''
+  try { return await fn() } finally {
+    if (before == null) delete process.env.CHAT_REASONING
+    else process.env.CHAT_REASONING = before
+  }
+}
+
+// Kills: 'off' sent as a cap (OpenRouter would switch thinking ON), or a
+// cap still sent when thinking is off.
+test('reasoning off is asked for as effort "none", never as a cap', async () => {
+  const { completionBody } = await import('../scripts/seed/aiClient.js')
+  const { chatReasoningCap } = await import('../src/constants/chatBudget.js')
+  const body = completionBody({ model: 'm', messages: [], temperature: 0.9, maxTokens: 2000, reasoningMaxTokens: 'off' })
+  assert.deepEqual(body.reasoning, { effort: 'none' })
+  await withReasoning('off', () => {
+    assert.equal(chatReasoningCap(OPENROUTER), 'off')
+    assert.equal(chatReasoningCap('https://api.groq.com/openai/v1'), null)
+  })
+  await withReasoning(null, () => {
+    assert.equal(typeof chatReasoningCap(OPENROUTER), 'number')
+  })
+})
+
+// Kills: the second try going back to a thinking cap.
+test('with reasoning off, the first request and the second try both ask for none', async () => {
+  const { chatText } = await import('../scripts/seed/aiClient.js')
+  const fake = fakeProvider([CUT_OFF, GOOD])
+  await withReasoning('off', () => withFetch(fake, () => chatText({ messages: [], config: { baseUrl: OPENROUTER, apiKey: 'x', model: 'm' }, maxTokens: 2000 })))
+  assert.equal(fake.bodies.length, 2)
+  assert.deepEqual(fake.bodies[0].reasoning, { effort: 'none' })
+  assert.deepEqual(fake.bodies[1].reasoning, { effort: 'none' })
+})
+
+// Kills: treating a long Retry-After as proof of a daily cap. An upstream
+// model can ask for a minute without exhausting the account's day.
+test('upstream 429 with a long Retry-After stops promptly as a rate limit', async () => {
+  const { chatText } = await import('../scripts/seed/aiClient.js')
+  let sent = 0
+  const fake = { fetch: async () => {
+    sent += 1
+    return { ok: false, status: 429, headers: { get: () => '60' }, text: async () => JSON.stringify({ error: { message: 'Provider returned error: temporarily rate-limited upstream' } }) }
+  } }
+  await assert.rejects(withFetch(fake, () => chatText({ messages: [], config: { baseUrl: OPENROUTER, apiKey: 'secret-key', model: 'm' }, onRequest: () => {} })), (err) => {
+    assert.equal(err.rateLimited, true)
+    assert.equal(err.quotaExhausted, undefined)
+    assert.equal(err.retryAfterMs, 60000)
+    return true
+  })
+  assert.equal(sent, 1)
+})
+
+// Kills: marking every final 429 as a daily cap. With no provider proof,
+// four attempts still say only that this model is rate limited.
+test('ambiguous 429 after all retries is not a daily cap', async () => {
+  const { chatText } = await import('../scripts/seed/aiClient.js')
+  let sent = 0
+  const fake = { fetch: async () => {
+    sent += 1
+    return { ok: false, status: 429, headers: { get: () => null }, text: async () => JSON.stringify({ error: { message: 'Provider returned error' } }) }
+  } }
+  await assert.rejects(withFetch(fake, () => chatText({ messages: [], config: { baseUrl: OPENROUTER, apiKey: 'secret-key', model: 'm' } })), (err) => {
+    assert.equal(err.rateLimited, true)
+    assert.equal(err.quotaExhausted, undefined)
+    assert.match(err.message, /attempt 4\/4/)
+    return true
+  })
+  assert.equal(sent, 4)
+})
+
+// Kills: retrying an explicit account daily cap, spending more requests
+// that cannot succeed before the provider's next daily window.
+test('explicit provider daily cap stops after one request', async () => {
+  const { chatText } = await import('../scripts/seed/aiClient.js')
+  let sent = 0
+  const fake = { fetch: async () => {
+    sent += 1
+    return { ok: false, status: 429, headers: { get: () => null }, text: async () => JSON.stringify({ error: { message: 'Rate limit exceeded: free-models-per-day' } }) }
+  } }
+  await assert.rejects(withFetch(fake, () => chatText({ messages: [], config: { baseUrl: OPENROUTER, apiKey: 'secret-key', model: 'm' } })), (err) => {
+    assert.equal(err.quotaExhausted, true)
+    assert.equal(err.rateLimited, undefined)
+    assert.match(err.message, /attempt 1\/4/)
+    return true
+  })
+  assert.equal(sent, 1)
+})
+
+function throttled(message) {
+  return { ok: false, status: 429, headers: { get: () => null }, text: async () => JSON.stringify({ error: { message } }) }
+}
+
+test('Grace switches after one transient 429 and records the model that answered', async () => {
+  const { chatText } = await import('../scripts/seed/aiClient.js')
+  const models = []
+  const answered = []
+  let sent = 0
+  const fake = { fetch: async (_url, opts) => {
+    models.push(JSON.parse(opts.body).model)
+    return models.length === 1 ? throttled('upstream model is busy') : { ok: true, json: async () => GOOD }
+  } }
+  const reply = await withFetch(fake, () => chatText({
+    messages: [], config: { baseUrl: OPENROUTER, apiKey: 'x', model: 'primary', fallbackModel: 'backup' },
+    onRequest: () => { sent += 1 }, onModel: (model) => { answered.push(model) },
+  }))
+  assert.equal(reply, 'copy that')
+  assert.deepEqual(models, ['primary', 'backup'])
+  assert.equal(sent, 2)
+  assert.deepEqual(answered, ['backup'])
+})
+
+test('an explicit daily cap never calls the fallback', async () => {
+  const { chatText } = await import('../scripts/seed/aiClient.js')
+  let sent = 0
+  const fake = { fetch: async () => { sent += 1; return throttled('free-models-per-day') } }
+  await assert.rejects(withFetch(fake, () => chatText({
+    messages: [], config: { baseUrl: OPENROUTER, apiKey: 'x', model: 'primary', fallbackModel: 'backup' },
+  })), (err) => err.quotaExhausted === true)
+  assert.equal(sent, 1)
+})
+
+test('a fallback 429 stops after two requests', async () => {
+  const { chatText } = await import('../scripts/seed/aiClient.js')
+  let sent = 0
+  const fake = { fetch: async () => { sent += 1; return throttled('upstream model is busy') } }
+  await assert.rejects(withFetch(fake, () => chatText({
+    messages: [], config: { baseUrl: OPENROUTER, apiKey: 'x', model: 'primary', fallbackModel: 'backup' },
+  })), (err) => err.rateLimited === true)
+  assert.equal(sent, 2)
+})
+
+test('a fallback 503 does not start a second retry chain', async () => {
+  const { chatText } = await import('../scripts/seed/aiClient.js')
+  let sent = 0
+  const fake = { fetch: async () => {
+    sent += 1
+    return sent === 1 ? throttled('upstream model is busy')
+      : { ok: false, status: 503, headers: { get: () => null }, text: async () => '' }
+  } }
+  await assert.rejects(withFetch(fake, () => chatText({
+    messages: [], config: { baseUrl: OPENROUTER, apiKey: 'x', model: 'primary', fallbackModel: 'backup' },
+  })), /HTTP 503/)
+  assert.equal(sent, 2)
+})
+
+test('a configured fallback leaves ordinary network and 5xx retries intact', async () => {
+  const { chatText } = await import('../scripts/seed/aiClient.js')
+  const models = []
+  const fake = { fetch: async (_url, opts) => {
+    models.push(JSON.parse(opts.body).model)
+    if (models.length === 1) throw new Error('temporary connection issue')
+    if (models.length === 2) return { ok: false, status: 503, headers: { get: () => null }, text: async () => '' }
+    return { ok: true, json: async () => GOOD }
+  } }
+  const reply = await withFetch(fake, () => chatText({
+    messages: [], config: { baseUrl: OPENROUTER, apiKey: 'x', model: 'primary', fallbackModel: 'backup' },
+  }))
+  assert.equal(reply, 'copy that')
+  assert.deepEqual(models, ['primary', 'primary', 'primary'])
 })

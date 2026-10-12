@@ -16,26 +16,37 @@
 //   seats        how many people dispatched today, which is what the
 //                budget is divided by
 //
-// role = 'dispatcher' is what makes a row a request. The driver's and the
-// broker's own turns are replies to those requests, not requests of their
-// own, and counting them would double every number here.
+// role = 'dispatcher' is what makes a row a turn. The driver's and the
+// broker's own turns are replies to those turns, not turns of their own,
+// and counting them would double every number here.
+//
+// A turn is not one request (055). Its reply can cost a second try when the
+// model ran out of room, a regeneration when the reply was unusable, and a
+// backoff retry inside either. Counting rows charged one for all of that,
+// and the 10% headroom was the only thing between the count and the
+// provider's wall. Each dispatcher row now carries the requests its reply
+// actually cost, and the budget is their sum.
+//
+//   my_turns   whether this dispatcher has a seat yet -- by turns, not by
+//              requests, because a turn that cost nothing still sat down
 export const DAILY_USAGE_SQL = `
   WITH turns AS (
-    SELECT c.user_id
+    SELECT c.user_id, m.provider_requests AS n
       FROM driver_messages m
       JOIN driver_conversations c ON c.id = m.conversation_id
      WHERE m.role = 'dispatcher'
        AND m.created_at >= date_trunc('day', now())
        AND $2::text IN ('both', 'driver')
     UNION ALL
-    SELECT c.user_id
+    SELECT c.user_id, m.provider_requests
       FROM broker_messages m
       JOIN broker_conversations c ON c.id = m.conversation_id
      WHERE m.role = 'dispatcher'
        AND m.created_at >= date_trunc('day', now())
        AND $2::text IN ('both', 'broker')
   )
-  SELECT count(*) FILTER (WHERE user_id = $1)::int AS used,
-         count(*)::int                             AS account_used,
-         count(DISTINCT user_id)::int              AS seats
+  SELECT coalesce(sum(n) FILTER (WHERE user_id = $1), 0)::int AS used,
+         coalesce(sum(n), 0)::int                           AS account_used,
+         count(*) FILTER (WHERE user_id = $1)::int           AS my_turns,
+         count(DISTINCT user_id)::int                       AS seats
     FROM turns`

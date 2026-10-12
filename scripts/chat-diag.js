@@ -10,7 +10,8 @@
 
 import 'dotenv/config'
 import { chatConfigFor, describeChat } from '../src/modules/chat/chatProvider.js'
-import { providerFor, dailyBudgetFor, chatMaxTokens } from '../src/constants/chatBudget.js'
+import { providerFor, dailyBudgetFor, chatMaxTokens, isDailyCap } from '../src/constants/chatBudget.js'
+import appConfig from '../src/config.js'
 
 
 // Which chat to diagnose. They can be on different keys now, so a
@@ -90,7 +91,7 @@ function describeReply(data) {
   if (content !== '') return `reply: ${JSON.stringify(content.slice(0, 60))}`
   if (reasoning !== '') {
     return `javob BO'SH -- ${reasoning.length} belgi fikrlashga ketdi, `
-      + `${usage?.completion_tokens ?? '?'}/${chatMaxTokens()} token ishlatildi `
+      + `${usage?.completion_tokens ?? '?'} token ishlatildi (ruxsat: ${chatMaxTokens()}) `
       + '(reasoning modeli: max_tokens kam, yoki bu model mos emas)'
   }
   return `javob BO'SH -- fikrlash ham yo'q (${usage?.completion_tokens ?? '?'} token)`
@@ -194,7 +195,7 @@ const ENOUGH = 3
 
 console.log('\n4) which free models actually answer')
 console.log(`   eng ko'pi bilan ${PROBE_LIMIT} ta so'rov sarflanadi (${ENOUGH} tasi ishlasa to'xtaydi)`)
-console.log(`   ${provider.name}: kuniga ${provider.requestsPerDay}, ilova byudjeti ${dailyBudgetFor(config.baseUrl)}`)
+console.log(`   ${provider.name}: kuniga ${appConfig.chatRequestsPerDay ?? provider.requestsPerDay}${appConfig.chatRequestsPerDay ? ' (CHAT_REQUESTS_PER_DAY)' : ''}, ilova byudjeti ${dailyBudgetFor(config.baseUrl, appConfig.chatRequestsPerDay)}`)
 if (provider.note) console.log(`   ${provider.note}`)
 console.log('')
 
@@ -228,7 +229,15 @@ try {
         body: JSON.stringify({
           model: id,
           messages: [{ role: 'user', content: 'Say the single word: ok' }],
-          max_tokens: 10,
+          // The app's own budget, not a token-saving 10. With 10, a
+          // reasoning model spends all ten thinking and answers with
+          // nothing -- and this section reported the configured model as
+          // BROKEN on 2026-09-30, one line below section 3 showing the same
+          // model answer "ok" with the real budget. A probe that tests a
+          // different request than the app sends tests nothing about the
+          // app. Free models cost $0 per token; the budget that matters is
+          // requests, and that is the same either way.
+          max_tokens: chatMaxTokens(),
         }),
       })
       if (probe.ok) {
@@ -246,11 +255,19 @@ try {
       } else {
         const why = (await safeErrorMessage(probe)).slice(0, 90)
         console.log(`   ${probe.status}  ${id}  -> ${why}`)
-        // A 429 here means the budget is already gone. Every further probe
-        // would return the same thing and spend a request to say it.
-        if (probe.status === 429) {
-          console.log('   (429 -- kunlik limit tugagan, qolgan modellar sinalmadi)')
+        // Two different 429s, and only one of them is the daily limit.
+        // OpenRouter's own cap on the ACCOUNT names itself
+        // (free-models-per-day); "Provider returned error" is the model's
+        // upstream host throttling free traffic for everyone -- the next
+        // model may answer fine. This used to call every 429 "the daily
+        // limit is gone" and stop, on a day the account had spent five
+        // requests of fifty.
+        if (probe.status === 429 && isDailyCap(why)) {
+          console.log('   (429 -- akkauntning kunlik limiti tugagan, qolgan modellar sinalmadi)')
           break
+        }
+        if (probe.status === 429) {
+          console.log('   (429 -- shu modelning provayderi band; bu kunlik limit emas, keyingisi sinaladi)')
         }
       }
     } catch (e) {

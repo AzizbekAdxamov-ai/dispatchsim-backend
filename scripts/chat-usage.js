@@ -14,6 +14,7 @@ import { pool } from '../src/db/pool.js'
 import { DAILY_USAGE_SQL } from '../src/modules/chat/chatBudget.sql.js'
 import { chatConfigFor, walletScopeFor, describeChat } from '../src/modules/chat/chatProvider.js'
 import { providerFor, dailyBudgetFor, fairShare } from '../src/constants/chatBudget.js'
+import appConfig from '../src/config.js'
 
 const WATCH = process.argv.includes('--watch')
 const WATCH_SECONDS = 30
@@ -44,7 +45,7 @@ async function report() {
     seen.add(scope)
 
     const provider = providerFor(config.baseUrl)
-    const budget = dailyBudgetFor(config.baseUrl)
+    const budget = dailyBudgetFor(config.baseUrl, appConfig.chatRequestsPerDay)
     const { rows } = await pool.query(DAILY_USAGE_SQL, [
       '00000000-0000-0000-0000-000000000000', scope,
     ])
@@ -67,18 +68,19 @@ async function report() {
   // cannot show.
   const perUser = await pool.query(`
     WITH turns AS (
-      SELECT c.user_id, 'driver' AS chat FROM driver_messages m
+      SELECT c.user_id, 'driver' AS chat, m.provider_requests AS n FROM driver_messages m
         JOIN driver_conversations c ON c.id = m.conversation_id
        WHERE m.role = 'dispatcher' AND m.created_at >= date_trunc('day', now())
       UNION ALL
-      SELECT c.user_id, 'broker' FROM broker_messages m
+      SELECT c.user_id, 'broker', m.provider_requests FROM broker_messages m
         JOIN broker_conversations c ON c.id = m.conversation_id
        WHERE m.role = 'dispatcher' AND m.created_at >= date_trunc('day', now())
     )
     SELECT u.email,
-           count(*) FILTER (WHERE chat = 'broker')::int AS broker,
-           count(*) FILTER (WHERE chat = 'driver')::int AS driver,
-           count(*)::int AS total
+           -- Requests, not turns (055): the same unit as the budget above.
+           coalesce(sum(n) FILTER (WHERE chat = 'broker'), 0)::int AS broker,
+           coalesce(sum(n) FILTER (WHERE chat = 'driver'), 0)::int AS driver,
+           sum(n)::int AS total
       FROM turns t JOIN users u ON u.id = t.user_id
      GROUP BY u.email ORDER BY total DESC LIMIT 10`)
 

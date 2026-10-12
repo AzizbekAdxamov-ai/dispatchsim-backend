@@ -9,14 +9,13 @@
 // HTTP status and attempt number, nothing from the request or response
 // body that could carry it back out.
 
-import { chatMaxTokens } from '../../src/constants/chatBudget.js'
+import { chatMaxTokens, chatReasoningCap, CHAT_REPLY_TOKENS, isDailyCap } from '../../src/constants/chatBudget.js'
 import { sleep } from './config.js'
 
 const MAX_ATTEMPTS = 4
 
-// The longest this client will ever wait between attempts. Also the line
-// between "slow down" and "come back tomorrow": a provider asking for
-// longer than this is out of quota, not throttling.
+// The longest this client will ever wait between attempts. A long wait is
+// not evidence of a daily cap; upstream model throttling can also last.
 const MAX_BACKOFF_WAIT_MS = 30000
 const BASE_DELAY_MS = 1000
 
@@ -81,7 +80,27 @@ async function safeProviderMessage(response, apiKey) {
 }
 
 // Returns the assistant message's raw text content (not yet JSON-parsed).
-async function requestCompletion({ system, user, messages, config, temperature = 0.8, maxTokens }) {
+// The request body, on its own so a test can read it without a network.
+// `reasoningMaxTokens` is sent only when given (chatReasoningCap decides,
+// per provider).
+export function completionBody({ model, messages, temperature, maxTokens, reasoningMaxTokens = null }) {
+  return {
+    model,
+    messages,
+    temperature,
+    ...(maxTokens ? { max_tokens: maxTokens } : {}),
+    ...(reasoningMaxTokens === 'off'
+      ? { reasoning: { effort: 'none' } }
+      : reasoningMaxTokens != null ? { reasoning: { max_tokens: reasoningMaxTokens } } : {}),
+  }
+}
+
+// `onRequest` is called once per HTTP request actually sent -- every
+// attempt, the backoff retries included. The daily budget is a count of
+// requests (055), and the only place that knows how many went out is here.
+// A 429 that was refused is counted too: whether the provider charged it is
+// the provider's business, and counting high stops early rather than late.
+async function requestCompletion({ system, user, messages, config, temperature = 0.8, maxTokens, reasoningMaxTokens = null, onRequest = null, stopOnRateLimit = false, maxAttempts = MAX_ATTEMPTS }) {
   const url = `${config.baseUrl}/chat/completions`
   // `messages` wins when given (multi-turn conversation); system/user is the
   // single-shot shape the seed generator uses. One retry/backoff
@@ -90,17 +109,15 @@ async function requestCompletion({ system, user, messages, config, temperature =
     { role: 'system', content: system },
     { role: 'user', content: user },
   ]
-  const body = JSON.stringify({
-    model: config.model,
-    messages: payloadMessages,
-    temperature,
-    ...(maxTokens ? { max_tokens: maxTokens } : {}),
-  })
+  const body = JSON.stringify(completionBody({
+    model: config.model, messages: payloadMessages, temperature, maxTokens, reasoningMaxTokens,
+  }))
 
   let lastNetworkError = null
 
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     let response
+    onRequest?.()
     try {
       response = await fetch(url, {
         method: 'POST',
@@ -115,8 +132,8 @@ async function requestCompletion({ system, user, messages, config, temperature =
       // like any other transient failure; only the attempt count is
       // reported, never the underlying error object (it can echo the
       // request back, including headers, on some fetch implementations).
-      lastNetworkError = new Error(`AI request failed: network error (attempt ${attempt}/${MAX_ATTEMPTS})`)
-      if (attempt === MAX_ATTEMPTS) throw lastNetworkError
+      lastNetworkError = new Error(`AI request failed: network error (attempt ${attempt}/${maxAttempts})`)
+      if (attempt === maxAttempts) throw lastNetworkError
       await sleep(backoffDelayMs(attempt))
       continue
     }
@@ -136,18 +153,30 @@ async function requestCompletion({ system, user, messages, config, temperature =
         const reasoning = typeof message?.reasoning === 'string' ? message.reasoning : ''
         const usage = data?.usage
         if (reasoning.trim() !== '') {
-          throw new Error(
+          const err = new Error(
             `AI returned reasoning but no reply (${reasoning.length} chars of reasoning, `
             + `${usage?.completion_tokens ?? '?'} completion tokens of a ${maxTokens ?? '?'} budget). `
             + 'This model needs a larger max_tokens, a lower reasoning effort, or replacing.',
           )
+          err.outOfRoom = true
+          throw err
         }
         throw new Error('AI response had no message content')
+      }
+      // Cut off mid-sentence: the budget ran out after the reply had
+      // started. On 2026-10-06 Grace's reply ended "you mean the" -- a
+      // half sentence is worse than none, because it looks like an answer.
+      if (data?.choices?.[0]?.finish_reason === 'length') {
+        const err = new Error(`AI reply was cut off at the ${maxTokens ?? '?'}-token budget (${content.trim().length} chars)`)
+        err.outOfRoom = true
+        throw err
       }
       return content
     }
 
     const retryAfterMs = parseRetryAfterMs(response.headers.get('retry-after'))
+    const why = response.status === 429 || response.status < 500
+      ? await safeProviderMessage(response, config.apiKey) : null
 
     // A 429 is two different situations wearing one status code, and
     // retrying the wrong one is expensive.
@@ -160,21 +189,28 @@ async function requestCompletion({ system, user, messages, config, temperature =
     // all of them 429, all of them spent -- and then did it again on the
     // next backend restart.
     //
-    // The provider tells us which one it is. A retry-after longer than the
-    // backoff ladder could ever wait is a quota, not a rate limit.
-    const quotaExhausted = response.status === 429
-      && retryAfterMs != null && retryAfterMs > MAX_BACKOFF_WAIT_MS
-    if (quotaExhausted) {
-      const err = new Error(
-        `AI quota exhausted — provider asks for ${Math.round(retryAfterMs / 1000)}s`,
-      )
+    // Only an explicit daily-cap message proves that the account's day is
+    // spent. Retry-After is a timing hint, not a quota classification.
+    if (response.status === 429 && isDailyCap(why)) {
+      const err = new Error(`AI request failed with HTTP 429 (attempt ${attempt}/${maxAttempts})`)
       err.quotaExhausted = true
+      err.providerMessage = why
+      err.retryAfterMs = retryAfterMs
+      throw err
+    }
+
+    // A long wait is not useful to someone awaiting a chat reply. Surface
+    // the throttle immediately instead of blocking for up to 30 seconds.
+    if (response.status === 429 && (stopOnRateLimit || (retryAfterMs != null && retryAfterMs > MAX_BACKOFF_WAIT_MS))) {
+      const err = new Error(`AI provider rate limited the request with HTTP 429 (attempt ${attempt}/${maxAttempts})`)
+      err.rateLimited = true
+      err.providerMessage = why
       err.retryAfterMs = retryAfterMs
       throw err
     }
 
     const retryable = response.status === 429 || response.status >= 500
-    if (!retryable || attempt === MAX_ATTEMPTS) {
+    if (!retryable || attempt === maxAttempts) {
       // The whole body still never reaches the message -- some providers
       // echo request metadata, including the Authorization header, back in
       // error bodies. But "HTTP 400" alone is a dead end, and on
@@ -185,25 +221,16 @@ async function requestCompletion({ system, user, messages, config, temperature =
       // So ONE field is read -- the provider's own error.message -- and
       // the key is scrubbed out of it before it goes anywhere. A 4xx is
       // the request being wrong, and the request is ours to fix.
-      const why = await safeProviderMessage(response, config.apiKey)
+      const detail = why ?? await safeProviderMessage(response, config.apiKey)
       const err = new Error(
-        `AI request failed with HTTP ${response.status} (attempt ${attempt}/${MAX_ATTEMPTS})`
-        + (why ? `: ${why}` : ''),
+        `AI request failed with HTTP ${response.status} (attempt ${attempt}/${maxAttempts})`
+        + (detail ? `: ${detail}` : ''),
       )
-      // A 429 that survived every retry is the provider saying no more
-      // today, whatever its retry-after header claimed. Marked, because
-      // the caller has to say something different about it: "cannot reach
-      // the driver" is a sentence about a driver, and the driver is fine.
-      //
-      // This matters more than it used to. With broker and driver on
-      // separate keys the app believes it has two daily budgets, but
-      // OpenRouter states that it governs capacity per user across
-      // accounts and keys -- so the provider may stop answering while the
-      // app still thinks there is room. When the two disagree, the
-      // provider wins, and the screen should say so.
+      // An ambiguous 429 is still a provider refusal, but it does not
+      // prove a daily cap even after all retries have been used.
       if (response.status === 429) {
-        err.quotaExhausted = true
-        err.providerMessage = why ?? null
+        err.rateLimited = true
+        err.providerMessage = detail ?? null
       }
       throw err
     }
@@ -254,6 +281,50 @@ export async function chatJson({ system, user, config }) {
 // Read through a function rather than imported as a constant so a
 // CHAT_MAX_TOKENS override in .env takes effect without a restart-order
 // dependency, and so chat-diag.js probes with exactly what the chat sends.
-export async function chatText({ messages, config, temperature = 0.9, maxTokens = chatMaxTokens() }) {
-  return requestCompletion({ messages, config, temperature, maxTokens })
+//
+// One second try when the model ran out of room -- thinking that ate the
+// whole budget, or a reply cut off mid-sentence. The reasoning cap is not
+// honoured by every model behind OpenRouter: the 2026-10-06 runs still
+// lost 2 turns of 20 with it set. The retry doubles the budget; on the
+// free tier the limit is requests, not tokens, so it costs one request and
+// only when the first one failed. A second failure is thrown as it is.
+//
+// `onRetry` is told when that second request is sent: the daily budget is
+// counted in requests, and a retry nobody counts is one the count is wrong by.
+export async function chatText({ messages, config, temperature = 0.9, maxTokens = chatMaxTokens(), onRetry = null, onRequest = null, onModel = null }) {
+  const cap = chatReasoningCap(config.baseUrl)
+  // Only a caller that explicitly supplied a different model uses this
+  // path. An upstream throttle is specific to the model; a proved daily
+  // quota belongs to the account and must never trigger another request.
+  const fallbackModel = config.fallbackModel && config.fallbackModel !== config.model
+    ? config.fallbackModel : null
+  let fallbackUsed = false
+  const complete = async (modelConfig, tokens, reasoningCap, stopOnRateLimit = false, maxAttempts = MAX_ATTEMPTS) => {
+    const reply = await requestCompletion({
+      messages, config: modelConfig, temperature, maxTokens: tokens,
+      reasoningMaxTokens: reasoningCap, onRequest, stopOnRateLimit, maxAttempts,
+    })
+    onModel?.(modelConfig.model)
+    return reply
+  }
+  const completeWithFallback = async (tokens, reasoningCap) => {
+    try {
+      return await complete(config, tokens, reasoningCap, Boolean(fallbackModel))
+    } catch (err) {
+      if (!fallbackModel || !err.rateLimited || err.quotaExhausted) throw err
+      onRetry?.()
+      fallbackUsed = true
+      // A busy fallback cannot become another long retry chain. Primary
+      // network and 5xx retries still follow the normal client policy.
+      return complete({ ...config, model: fallbackModel }, tokens, reasoningCap, true, 1)
+    }
+  }
+  try {
+    return await completeWithFallback(maxTokens, cap)
+  } catch (err) {
+    if (!err.outOfRoom || fallbackUsed) throw err
+    console.warn(`[ai] ${err.message} -- retrying once with ${maxTokens * 2} tokens`)
+    onRetry?.()
+    return completeWithFallback(maxTokens * 2, cap == null || cap === 'off' ? cap : maxTokens * 2 - CHAT_REPLY_TOKENS)
+  }
 }

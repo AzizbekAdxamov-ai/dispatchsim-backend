@@ -15,6 +15,9 @@
 
 // [min, max] seconds. Read as: A answers while you are still looking at
 // the screen, D makes you go do something else.
+import config from '../../config.js'
+import { compressDelay, tableSpan, BROKER_FAST_CAP_SEC } from '../../constants/replySpeed.js'
+
 export const REPLY_DELAY_SEC = Object.freeze({
   A: [20, 60],
   B: [60, 120],
@@ -47,11 +50,22 @@ function between(rng, [lo, hi]) {
 
 // Seconds until a reply from this broker should become visible.
 // rng is injectable so tests can pin it; production passes Math.random.
-export function replyDelaySec(creditRating, rng = Math.random) {
+//
+// `fast` is CHAT_FAST_REPLIES (config.js): the same draw, squeezed into a
+// minute end to end by src/constants/replySpeed.js. A parameter so the
+// tests can check both sides without touching the environment.
+export function replyDelaySec(creditRating, rng = Math.random, fast = config.chatFastReplies) {
   const r = rate(creditRating)
-  if (rng() < QUIET_CHANCE[r]) return Math.round(between(rng, QUIET_DELAY_SEC))
-  return Math.round(between(rng, REPLY_DELAY_SEC[r]))
+  const raw = rng() < QUIET_CHANCE[r]
+    ? Math.round(between(rng, QUIET_DELAY_SEC))
+    : Math.round(between(rng, REPLY_DELAY_SEC[r]))
+  return fast ? compressDelay(raw, BROKER_SPAN, BROKER_FAST_CAP_SEC) : raw
 }
+
+// Every broker delay there is, from the quickest A to the quietest
+// broker -- the range fast mode squeezes, computed from the tables above
+// so a new rating cannot fall outside it.
+export const BROKER_SPAN = tableSpan(...Object.values(REPLY_DELAY_SEC), QUIET_DELAY_SEC)
 
 // What the rate confirmation actually says. Returns the agreed number
 // unchanged most of the time; when it does not match, the cut is rounded

@@ -71,6 +71,39 @@ if (finance !== 'on' && finance !== 'off') {
 }
 const financeEnabled = finance === 'on'
 
+// Fast replies: every broker and driver answer inside a minute, end to
+// end. A switch for a test day (Azizbek, 2026-10-01: "max one minute,
+// today only"), not a setting to leave on -- the delays ARE the job: a
+// dispatcher's skill is working four loads while nobody answers. Off is
+// the default and anything but on/off stops the app, like FINANCE.
+// The arithmetic is src/constants/replySpeed.js.
+// CHAT_REASONING: 'off' asks the model not to think before it answers
+// (src/constants/chatBudget.js chatReasoningMode). Blank or 'on' keeps the
+// capped thinking a reasoning model needs.
+const rawReasoning = (process.env.CHAT_REASONING ?? '').trim().toLowerCase()
+if (rawReasoning !== '' && rawReasoning !== 'on' && rawReasoning !== 'off') {
+  errors.push(`CHAT_REASONING must be 'on' or 'off' (or left blank, which means on) (got: ${process.env.CHAT_REASONING})`)
+}
+
+const rawFast = process.env.CHAT_FAST_REPLIES
+const fast = rawFast && rawFast.trim() !== '' ? rawFast.trim().toLowerCase() : 'off'
+if (fast !== 'on' && fast !== 'off') {
+  errors.push(`CHAT_FAST_REPLIES must be 'on' or 'off' (or left blank, which means off) (got: ${rawFast})`)
+}
+
+// How many chat requests a day the provider really allows this account.
+// Blank means the provider's published number (src/constants/chatBudget.js
+// PROVIDERS -- for OpenRouter's free models, 50). Set it ONLY to a number
+// the provider has actually granted: OpenRouter raises free models to
+// 1,000 a day once $10 of credit has been bought, and the app cannot see
+// that purchase. A number higher than the truth does not buy requests; it
+// only moves the wall from the app's clear message to the provider's 429.
+const rawPerDay = (process.env.CHAT_REQUESTS_PER_DAY ?? '').trim()
+const chatRequestsPerDay = rawPerDay === '' ? null : Number(rawPerDay)
+if (rawPerDay !== '' && (!Number.isInteger(chatRequestsPerDay) || chatRequestsPerDay <= 0)) {
+  errors.push(`CHAT_REQUESTS_PER_DAY must be a whole number above zero, or blank (got: ${rawPerDay})`)
+}
+
 // Telegram. Only `npm run bot` reads any of this -- the API server runs
 // exactly as it did before the bot existed, and starts with all three
 // blank.
@@ -161,6 +194,8 @@ export default {
   isProd,
   defaultRole,
   financeEnabled,
+  chatFastReplies: fast === 'on',
+  chatRequestsPerDay,
   telegramEnabled: telegramSet.length === telegramParts.length,
   telegramBotToken,
   telegramChatId,
