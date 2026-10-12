@@ -11,6 +11,12 @@ import { AppError } from '../../lib/errors.js'
 import { computeProgress } from '../../lib/loadTimeline.js'
 import { fuelPercent } from '../driverChat/driverChat.prompt.js'
 import config from '../../config.js'
+// The assignment itself belongs to fleet and stays there: the idle check,
+// the row lock, the UNIQUE-violation translation. The dispatcher's button
+// calls that same function -- a second copy of "who may drive what" would
+// be a second rule, and the two would disagree the first time either
+// changed.
+import { assignDriver as assignTruckToDriver } from '../fleet/truckListings.service.js'
 
 function withCurrentLoadProgress(driver) {
   if (!driver.currentLoad) return driver
@@ -62,4 +68,55 @@ export async function getDriverById(id) {
     ...withTelegramFlag(withTruckFuelPercent(withCurrentLoadProgress(driver))),
     recentLoads,
   }
+}
+
+// Why a driverless truck cannot be taken, in the words the page shows.
+// A fact about the truck, not advice: the dispatcher decides what to do
+// about a truck in the shop.
+const NOT_ASSIGNABLE = Object.freeze({
+  active: 'Marked as working without a driver',
+  maintenance: 'In the shop',
+})
+
+// Pure: rows in, options out. Exported for the tests.
+export function truckOptionsFromRows(rows) {
+  return rows.map((t) => {
+    const assignable = t.status === 'idle'
+    return {
+      id: t.id,
+      make: t.make,
+      model: t.model,
+      year: t.year,
+      status: t.status,
+      locationCity: t.locationCity ?? null,
+      locationState: t.locationState ?? null,
+      assignable,
+      reason: assignable ? null : (NOT_ASSIGNABLE[t.status] ?? `Status: ${t.status}`),
+    }
+  })
+}
+
+async function requireDriver(id) {
+  const driver = await driversRepo.getDriverById(id)
+  if (!driver) throw new AppError('DRIVER_NOT_FOUND')
+  return driver
+}
+
+export async function truckOptionsFor(driverId) {
+  const driver = await requireDriver(driverId)
+  return {
+    // Said up front rather than discovered on click: a driver who already
+    // has a truck gets DRIVER_HAS_TRUCK from the assignment anyway, but
+    // the page can say so before anyone tries.
+    driverHasTruck: Boolean(driver.truck),
+    trucks: truckOptionsFromRows(await driversRepo.truckOptions()),
+  }
+}
+
+export async function assignTruck({ driverId, truckId }) {
+  // Checked here, not left to the foreign key: trucks.driver_id REFERENCES
+  // drivers(id), so a missing driver would reach the client as a raw
+  // 23503 instead of "Driver not found".
+  await requireDriver(driverId)
+  return assignTruckToDriver({ truckId, driverId })
 }

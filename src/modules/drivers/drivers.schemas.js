@@ -14,3 +14,11 @@ export const listQuerySchema = z
 // Route param for GET /drivers/:id. Matches migration 005's
 // `drivers_id_format` CHECK ('d1', 'd23', ...).
 export const driverIdSchema = z.string().regex(/^d[0-9]{1,4}$/)
+
+// Same bounds as fleet's assignDriverSchema uses for its id -- trucks.id
+// is the plate, free text up to 32.
+export const assignTruckSchema = z
+  .object({
+    truckId: z.string().trim().min(1).max(32),
+  })
+  .strict()

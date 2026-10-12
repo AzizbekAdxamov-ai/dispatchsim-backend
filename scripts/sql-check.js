@@ -46,6 +46,7 @@ import * as complianceSql from '../src/modules/compliance/compliance.sql.js'
 import { buildListPostingsSql, buildCountPostingsSql } from '../src/modules/loadBoard/loadBoard.repository.js'
 import * as carrierSql from '../src/modules/carrier/carrier.sql.js'
 import { REACHABLE_SQL } from '../src/db/companyTables.js'
+import { TRUCK_OPTIONS_SQL } from '../src/modules/drivers/drivers.repository.js'
 // fresh-start.js deletes on import for the same reason reset-company.js
 // does, so its statements live in a module. These are the ones that run
 // against a live company database with nothing to undo them -- the last
@@ -447,6 +448,8 @@ for (const [name, filters] of BOARD_SEARCHES) {
 for (const [name, sql] of FRESH_RELEASE) STATEMENTS.push([`fresh-start: release ${name}`, sql])
 for (const [name, sql] of FRESH_WIPE) STATEMENTS.push([`fresh-start: delete ${name}`, sql])
 STATEMENTS.push(['fresh-start: reset kept driver', RESET_KEPT_DRIVER])
+
+STATEMENTS.push(['drivers: truck options for a driver', TRUCK_OPTIONS_SQL])
 
 const client = await pool.connect()
 let failed = 0

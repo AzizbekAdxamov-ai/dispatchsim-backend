@@ -46,6 +46,7 @@ const DRIVER_COLUMNS = `
   d.pay_percent_bp     AS "payPercentBp",
   d.pay_per_mile_cents AS "payPerMileCents",
   d.bio,
+  d.preferences,
   d.created_at         AS "createdAt",
   d.updated_at         AS "updatedAt"
 `
@@ -106,6 +107,25 @@ export async function listDrivers({ limit = 100, offset = 0 } = {}) {
      LIMIT $1 OFFSET $2`,
     [limit, offset],
   )
+  return result.rows
+}
+
+// Trucks nobody drives, for the dispatcher's "Assign truck" on a driver's
+// page. Every driverless truck is listed, not only the idle ones: a truck
+// that is 'active' or in 'maintenance' with no driver cannot be assigned
+// (truckListings.repository.js's rule, reused, not repeated), and a list
+// that silently left it out would say "no trucks" about a truck that is
+// sitting right there. The service marks which can be taken and why the
+// others cannot. Exported for scripts/sql-check.js.
+export const TRUCK_OPTIONS_SQL = `
+  SELECT t.id, t.make, t.model, t.year, t.status,
+         t.location_city AS "locationCity", t.location_state AS "locationState"
+    FROM trucks t
+   WHERE t.driver_id IS NULL
+   ORDER BY (t.status = 'idle') DESC, t.id`
+
+export async function truckOptions() {
+  const result = await query(TRUCK_OPTIONS_SQL)
   return result.rows
 }
 
