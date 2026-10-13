@@ -164,11 +164,12 @@ if (chatDriverVision !== 'on' && chatDriverVision !== 'off') {
   errors.push(`CHAT_DRIVER_VISION must be 'on' or 'off' (or left blank, which means off) (got: ${rawChatDriverVision})`)
 }
 
-// Second model the driver chat may try once when its primary is throttled
+// Second model each chat may try once when its primary is throttled
 // by the provider (a transient 429). Blank = no fallback at all: the chat
 // surfaces the provider-busy error with no second request. Any other value
 // is taken as a model id; the provider decides whether it exists.
 const chatDriverFallbackModel = (process.env.CHAT_DRIVER_FALLBACK_MODEL ?? '').trim()
+const chatBrokerFallbackModel = (process.env.CHAT_BROKER_FALLBACK_MODEL ?? '').trim()
 
 if (errors.length > 0) {
   console.error('Invalid configuration:')
@@ -209,4 +210,5 @@ export default {
   telegramDriverName,
   chatDriverVision: chatDriverVision === 'on',
   chatDriverFallbackModel: chatDriverFallbackModel === '' ? null : chatDriverFallbackModel,
+  chatBrokerFallbackModel: chatBrokerFallbackModel === '' ? null : chatBrokerFallbackModel,
 }

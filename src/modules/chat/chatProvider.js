@@ -34,19 +34,26 @@ function read(which) {
   })
 }
 
-export function chatConfigFor(which) {
-  const { config, errors } = read(which)
-  if (!config) throw new AppError(FAILURE[which], errors.join('; '))
-  // Grace alone can switch when her primary free model is throttled, and
-  // only when CHAT_DRIVER_FALLBACK_MODEL names one (blank = no fallback).
-  // Keep this on OpenRouter, where the shared free wallet is known; a
-  // custom provider must use only its configured model.
-  const fallbackModel = appConfig.chatDriverFallbackModel
-  const openRouter = config.baseUrl.replace(/\/+$/, '') === DEFAULT_CHAT_BASE_URL.replace(/\/+$/, '')
-  if (which === 'driver' && openRouter && fallbackModel && config.model !== fallbackModel) {
+// Attach the chat's own fallback model when one is configured.
+function withFallback(which, config) {
+  // Each chat can switch when its primary model is throttled, and only when
+  // its own CHAT_*_FALLBACK_MODEL names one (blank = no fallback). The
+  // fallback is a model id on the SAME base URL and key as the primary, so
+  // it works on any provider; whether that provider has the model is for
+  // .env to get right.
+  const fallbackModel = which === 'driver'
+    ? appConfig.chatDriverFallbackModel
+    : appConfig.chatBrokerFallbackModel
+  if (fallbackModel && config.model !== fallbackModel) {
     return { ...config, fallbackModel }
   }
   return config
+}
+
+export function chatConfigFor(which) {
+  const { config, errors } = read(which)
+  if (!config) throw new AppError(FAILURE[which], errors.join('; '))
+  return withFallback(which, config)
 }
 
 // Do the two chats spend from one allowance or two?
@@ -76,13 +83,15 @@ export function walletScopeFor(which) {
 // enough to see at a glance that two chats hold the same key or different
 // ones, and not enough to be a key.
 export function describeChat(which) {
-  const { config, errors } = read(which)
-  if (!config) return { which, ok: false, errors }
+  const { config: base, errors } = read(which)
+  if (!base) return { which, ok: false, errors }
+  const config = withFallback(which, base)
   return {
     which,
     ok: true,
     baseUrl: config.baseUrl,
     model: config.model,
+    fallbackModel: config.fallbackModel ?? null,
     keyFingerprint: `${config.apiKey.slice(0, 4)}…(${config.apiKey.length})`,
     wallet: walletScopeFor(which),
   }

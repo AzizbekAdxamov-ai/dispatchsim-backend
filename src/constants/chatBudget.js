@@ -29,6 +29,9 @@ export const DEFAULT_CHAT_BASE_URL = 'https://openrouter.ai/api/v1'
 
 export const PROVIDERS = Object.freeze({
   'https://openrouter.ai/api/v1': {
+    id: 'openrouter',
+    // One daily cap for the whole account: when it is hit, every model refuses.
+    dailyCapScope: 'account',
     name: 'OpenRouter (free models)',
     // 20 rpm. 50 requests/day under $10 lifetime credit, 1,000/day at or
     // above it. The 50 is the one that applies without credits, so it is
@@ -45,6 +48,10 @@ export const PROVIDERS = Object.freeze({
       + '"we govern capacity globally".',
   },
   'https://api.groq.com/openai/v1': {
+    id: 'groq',
+    // Limits are counted per model: one model at its daily cap says nothing
+    // about the next one.
+    dailyCapScope: 'model',
     name: 'Groq (developer plan)',
     requestsPerMinute: 30,
     requestsPerDay: 1000,
@@ -58,6 +65,8 @@ export const PROVIDERS = Object.freeze({
 // is throttled to something that cannot exhaust anything, and the app says
 // which base URL it does not know rather than inventing a limit for it.
 export const UNKNOWN_PROVIDER = Object.freeze({
+  id: 'unknown',
+  dailyCapScope: 'account',
   name: 'unknown provider',
   requestsPerMinute: 10,
   requestsPerDay: 50,
@@ -69,6 +78,17 @@ export const UNKNOWN_PROVIDER = Object.freeze({
 export function providerFor(baseUrl) {
   const key = String(baseUrl || '').trim().replace(/\/+$/, '')
   return PROVIDERS[key] ?? UNKNOWN_PROVIDER
+}
+
+// Does a daily-cap 429 cover the whole account ('account') or only the model
+// that was asked ('model')? Unknown providers are assumed account-wide: the
+// cautious answer is to stop rather than spend a second request.
+export function dailyCapScope(baseUrl) {
+  return providerFor(baseUrl).dailyCapScope
+}
+
+export function isGroq(baseUrl) {
+  return providerFor(baseUrl).id === 'groq'
 }
 
 // -- How long one reply may be, and how much thinking it may cost -------
@@ -139,6 +159,24 @@ export function chatReasoningCap(baseUrl) {
   if (key !== DEFAULT_CHAT_BASE_URL) return null
   if (chatReasoningMode() === 'off') return 'off'
   return Math.max(0, chatMaxTokens() - CHAT_REPLY_TOKENS)
+}
+
+// Groq's way to keep thinking out of the reply and short
+// (https://console.groq.com/docs/reasoning, checked 2026-10-13). It differs
+// by model family, and a wrong field is a 400, so each family gets its own:
+//   qwen     reasoning_format 'parsed' moves thinking out of content;
+//            reasoning_effort 'none' turns it off, 'low' keeps it brief.
+//   gpt-oss  reasoning_effort low/medium/high only; it rejects both
+//            reasoning_format and 'none'.
+// Anything else on Groq (llama and the like) does not reason: send nothing.
+export function groqReasoningParams(baseUrl, model) {
+  if (!isGroq(baseUrl)) return {}
+  const name = String(model ?? '')
+  if (/qwen/i.test(name)) {
+    return { reasoning_format: 'parsed', reasoning_effort: chatReasoningMode() === 'off' ? 'none' : 'low' }
+  }
+  if (/gpt-oss/i.test(name)) return { reasoning_effort: 'low' }
+  return {}
 }
 
 // The reply's own limit, in characters, because that is what we can

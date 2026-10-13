@@ -9,7 +9,7 @@
 // HTTP status and attempt number, nothing from the request or response
 // body that could carry it back out.
 
-import { chatMaxTokens, chatReasoningCap, CHAT_REPLY_TOKENS, isDailyCap } from '../../src/constants/chatBudget.js'
+import { chatMaxTokens, chatReasoningCap, CHAT_REPLY_TOKENS, dailyCapScope, groqReasoningParams, isDailyCap } from '../../src/constants/chatBudget.js'
 import { sleep } from './config.js'
 
 const MAX_ATTEMPTS = 4
@@ -83,7 +83,7 @@ async function safeProviderMessage(response, apiKey) {
 // The request body, on its own so a test can read it without a network.
 // `reasoningMaxTokens` is sent only when given (chatReasoningCap decides,
 // per provider).
-export function completionBody({ model, messages, temperature, maxTokens, reasoningMaxTokens = null }) {
+export function completionBody({ model, messages, temperature, maxTokens, reasoningMaxTokens = null, providerParams = {} }) {
   return {
     model,
     messages,
@@ -92,6 +92,7 @@ export function completionBody({ model, messages, temperature, maxTokens, reason
     ...(reasoningMaxTokens === 'off'
       ? { reasoning: { effort: 'none' } }
       : reasoningMaxTokens != null ? { reasoning: { max_tokens: reasoningMaxTokens } } : {}),
+    ...providerParams,
   }
 }
 
@@ -111,6 +112,8 @@ async function requestCompletion({ system, user, messages, config, temperature =
   ]
   const body = JSON.stringify(completionBody({
     model: config.model, messages: payloadMessages, temperature, maxTokens, reasoningMaxTokens,
+    // Per model config, so a fallback from another family gets its own params.
+    providerParams: groqReasoningParams(config.baseUrl, config.model),
   }))
 
   let lastNetworkError = null
@@ -141,7 +144,12 @@ async function requestCompletion({ system, user, messages, config, temperature =
     if (response.ok) {
       const data = await response.json()
       const message = data?.choices?.[0]?.message
-      const content = message?.content
+      let content = message?.content
+      // Some models (qwen on Groq among them) put a CLOSED <think>…</think>
+      // block in front of the reply. It is thinking, not the answer: strip
+      // it. An UNCLOSED one is left alone on purpose -- that is a reply cut
+      // inside its thinking, and leaksReasoning must still see it.
+      if (typeof content === 'string') content = content.replace(/^\s*<think>[\s\S]*?<\/think>\s*/i, '')
       if (typeof content !== 'string' || content.trim() === '') {
         // A reasoning model spends max_tokens on its own thinking first and
         // returns what is left as content -- so a budget that is generous
@@ -294,8 +302,10 @@ export async function chatJson({ system, user, config }) {
 export async function chatText({ messages, config, temperature = 0.9, maxTokens = chatMaxTokens(), onRetry = null, onRequest = null, onModel = null }) {
   const cap = chatReasoningCap(config.baseUrl)
   // Only a caller that explicitly supplied a different model uses this
-  // path. An upstream throttle is specific to the model; a proved daily
-  // quota belongs to the account and must never trigger another request.
+  // path. A short throttle is specific to the model, so it switches. A
+  // proved daily cap switches only where the provider counts it per model
+  // (Groq); an account-wide cap (OpenRouter, or a provider nobody has
+  // looked up) means the fallback would be refused too, so it stops.
   const fallbackModel = config.fallbackModel && config.fallbackModel !== config.model
     ? config.fallbackModel : null
   let fallbackUsed = false
@@ -311,7 +321,8 @@ export async function chatText({ messages, config, temperature = 0.9, maxTokens 
     try {
       return await complete(config, tokens, reasoningCap, Boolean(fallbackModel))
     } catch (err) {
-      if (!fallbackModel || !err.rateLimited || err.quotaExhausted) throw err
+      const perModelCap = err.quotaExhausted && dailyCapScope(config.baseUrl) === 'model'
+      if (!fallbackModel || !((err.rateLimited && !err.quotaExhausted) || perModelCap)) throw err
       onRetry?.()
       fallbackUsed = true
       // A busy fallback cannot become another long retry chain. Primary

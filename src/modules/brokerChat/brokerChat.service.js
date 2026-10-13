@@ -139,6 +139,10 @@ export async function sendMessage({ conversationId, userId, text }) {
   // regenerated, and the error if the turn failed.
   let regenerated = null
   let failure = null
+  // The model that actually answered, which is the fallback when the
+  // primary was throttled; the turn log records that one.
+  let answeredModel = config.model
+  const onModel = (model) => { answeredModel = model }
 
   let reply
   try {
@@ -149,6 +153,7 @@ export async function sendMessage({ conversationId, userId, text }) {
       messages: buildMessages({ systemPrompt, history, newMessage: text }),
       config,
       onRequest,
+      onModel,
     }))
 
     // Two ways a reply can be unusable, both regenerated once and then
@@ -185,6 +190,7 @@ export async function sendMessage({ conversationId, userId, text }) {
         }),
         config,
         onRequest,
+        onModel,
       }))
       if (unusable(reply)) reply = FALLBACK_REPLY
     }
@@ -217,7 +223,7 @@ export async function sendMessage({ conversationId, userId, text }) {
     // above: never replaces the dispatcher's error, never vanishes.
     await logTurn(turnRow({
       chat: 'broker', conversationId, dispatcherMessageId: dispatcherMessage.id, userId,
-      model: config.model, promptVersion: PROMPT_VERSION, systemPrompt, history, text,
+      model: answeredModel, promptVersion: PROMPT_VERSION, systemPrompt, history, text,
       imageCount: 0, reply, regeneratedBecause: regenerated,
       fellBack: reply === FALLBACK_REPLY, error: failure, providerRequests: spent,
       onTheRoad: false,

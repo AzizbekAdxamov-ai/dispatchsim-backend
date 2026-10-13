@@ -33,6 +33,7 @@ const VARS = [
 beforeEach(() => {
   for (const v of VARS) delete process.env[v]
   appConfig.chatDriverFallbackModel = null
+  appConfig.chatBrokerFallbackModel = null
 })
 
 test('one shared key means one shared wallet', () => {
@@ -87,23 +88,70 @@ test('a different model on one key is still one wallet', () => {
   assert.equal(chatConfigFor('driver').model, 'some/model')
 })
 
-// Kills: handing the fallback to the broker chat, offering a fallback equal
-// to the model already in use, or sending it to a non-OpenRouter provider
-// (which would get an OpenRouter-only model id).
-test('only Grace on OpenRouter receives a distinct fallback model', () => {
-  appConfig.chatDriverFallbackModel = FALLBACK
+// Kills: one chat reading the other's fallback variable (the broker given
+// Grace's model or the reverse), so each chat switches to a model chosen
+// for the other.
+test('each chat reads its own fallback model', () => {
+  appConfig.chatDriverFallbackModel = 'driver/backup'
+  appConfig.chatBrokerFallbackModel = 'broker/backup'
   process.env.CHAT_API_KEY = 'key-one'
   process.env.CHAT_MODEL = 'some/model'
-  const driver = chatConfigFor('driver')
-  assert.equal(driver.fallbackModel, FALLBACK)
+  assert.equal(chatConfigFor('driver').fallbackModel, 'driver/backup')
+  assert.equal(chatConfigFor('broker').fallbackModel, 'broker/backup')
+  assert.equal(describeChat('broker').fallbackModel, 'broker/backup')
+
+  appConfig.chatDriverFallbackModel = null
+  assert.equal(chatConfigFor('driver').fallbackModel, undefined)
+  assert.equal(chatConfigFor('broker').fallbackModel, 'broker/backup')
+})
+
+// Kills: keeping the old OpenRouter-only gate, which silently dropped the
+// fallback on Groq and left a busy primary with no second model.
+test('the fallback is kept on Groq', () => {
+  appConfig.chatDriverFallbackModel = 'openai/gpt-oss-20b'
+  appConfig.chatBrokerFallbackModel = 'openai/gpt-oss-20b'
+  process.env.CHAT_BASE_URL = 'https://api.groq.com/openai/v1'
+  process.env.CHAT_API_KEY = 'key-one'
+  process.env.CHAT_MODEL = 'qwen/qwen3-32b'
+  assert.equal(chatConfigFor('driver').fallbackModel, 'openai/gpt-oss-20b')
+  assert.equal(chatConfigFor('broker').fallbackModel, 'openai/gpt-oss-20b')
+})
+
+// Kills: offering a fallback equal to the model already in use, which would
+// repeat the same throttled request and spend a budgeted call on it.
+test('a fallback equal to the primary means no fallback, for both chats', () => {
+  appConfig.chatDriverFallbackModel = FALLBACK
+  appConfig.chatBrokerFallbackModel = FALLBACK
+  process.env.CHAT_API_KEY = 'key-one'
+  process.env.CHAT_MODEL = FALLBACK
+  assert.equal(chatConfigFor('driver').fallbackModel, undefined)
   assert.equal(chatConfigFor('broker').fallbackModel, undefined)
+  assert.equal(describeChat('broker').fallbackModel, null)
+})
 
-  process.env.CHAT_DRIVER_MODEL = FALLBACK
-  assert.equal(chatConfigFor('driver').fallbackModel, undefined)
+// Kills: a hardcoded broker fallback that applies when
+// CHAT_BROKER_FALLBACK_MODEL is blank, so the broker silently doubles
+// requests nobody asked for.
+test('with the broker fallback blank, broker chatText never tries another model', async () => {
+  process.env.CHAT_API_KEY = 'key-one'
+  process.env.CHAT_MODEL = 'some/model'
+  const broker = chatConfigFor('broker')
+  assert.equal(broker.fallbackModel, undefined)
 
-  process.env.CHAT_DRIVER_BASE_URL = 'https://api.groq.com/openai/v1'
-  process.env.CHAT_DRIVER_MODEL = 'some/model'
-  assert.equal(chatConfigFor('driver').fallbackModel, undefined)
+  const { chatText } = await import('../scripts/seed/aiClient.js')
+  const real = globalThis.fetch
+  const models = []
+  globalThis.fetch = async (_url, opts) => {
+    models.push(JSON.parse(opts.body).model)
+    return { ok: false, status: 429, headers: { get: (h) => (/retry-after/i.test(h) ? '0' : null) }, text: async () => JSON.stringify({ error: { message: 'upstream model is busy' } }) }
+  }
+  try {
+    await assert.rejects(chatText({ messages: [], config: broker }), (err) => err.rateLimited === true)
+  } finally {
+    globalThis.fetch = real
+  }
+  assert.ok(models.length >= 1)
+  assert.deepEqual([...new Set(models)], ['some/model'])
 })
 
 // Kills: a hardcoded fallback model that applies when CHAT_DRIVER_FALLBACK_MODEL

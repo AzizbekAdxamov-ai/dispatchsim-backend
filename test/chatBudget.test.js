@@ -24,6 +24,8 @@ import {
   dailyBudgetFor,
   fairShare,
   budgetMessage,
+  dailyCapScope,
+  groqReasoningParams,
 } from '../src/constants/chatBudget.js'
 
 const OPENROUTER = 'https://openrouter.ai/api/v1'
@@ -567,4 +569,134 @@ test('a configured fallback leaves ordinary network and 5xx retries intact', asy
   }))
   assert.equal(reply, 'copy that')
   assert.deepEqual(models, ['primary', 'primary', 'primary'])
+})
+
+const GROQ_RPD = 'Rate limit reached for model `primary` in organization `org_x` service tier `on_demand` on requests per day (RPD): Limit 1000, Used 1000, Requested 1.'
+
+async function sendOnce(config, fn = () => ({ ok: true, json: async () => GOOD })) {
+  const { chatText } = await import('../scripts/seed/aiClient.js')
+  const bodies = []
+  const fake = { fetch: async (_url, opts) => { bodies.push(JSON.parse(opts.body)); return fn(bodies.length) } }
+  const reply = await withFetch(fake, () => chatText({ messages: [], config }))
+  return { reply, bodies }
+}
+
+// Kills: treating every provider's daily cap alike (Groq's per-model cap
+// stopping the chat, or an unknown provider assumed per-model and spending
+// a second request), or a trailing slash defeating the lookup.
+test('the daily cap is per model on Groq and per account elsewhere', () => {
+  assert.equal(dailyCapScope(OPENROUTER), 'account')
+  assert.equal(dailyCapScope(GROQ), 'model')
+  assert.equal(dailyCapScope(`${GROQ}/`), 'model')
+  assert.equal(dailyCapScope('https://example.test/v1'), 'account')
+  assert.equal(dailyCapScope(undefined), 'account')
+})
+
+// Kills: a Groq per-model daily cap ending the turn when the other model
+// still has requests, or the fallback not being counted and reported.
+test('a Groq daily cap on the primary switches to the fallback', async () => {
+  const { chatText } = await import('../scripts/seed/aiClient.js')
+  const models = []
+  const answered = []
+  let sent = 0
+  const fake = { fetch: async (_url, opts) => {
+    models.push(JSON.parse(opts.body).model)
+    return models.length === 1 ? throttled(GROQ_RPD) : { ok: true, json: async () => GOOD }
+  } }
+  const reply = await withFetch(fake, () => chatText({
+    messages: [], config: { baseUrl: GROQ, apiKey: 'x', model: 'primary', fallbackModel: 'backup' },
+    onRequest: () => { sent += 1 }, onModel: (m) => { answered.push(m) },
+  }))
+  assert.equal(reply, 'copy that')
+  assert.deepEqual(models, ['primary', 'backup'])
+  assert.equal(sent, 2)
+  assert.deepEqual(answered, ['backup'])
+})
+
+// Kills: looping or retrying when both Groq models are capped, or losing
+// the quotaExhausted flag the student-facing daily-limit message hangs on.
+test('both Groq models capped for the day stops after two requests', async () => {
+  const { chatText } = await import('../scripts/seed/aiClient.js')
+  let sent = 0
+  const fake = { fetch: async () => { sent += 1; return throttled(GROQ_RPD) } }
+  await assert.rejects(withFetch(fake, () => chatText({
+    messages: [], config: { baseUrl: GROQ, apiKey: 'x', model: 'primary', fallbackModel: 'backup' },
+  })), (err) => err.quotaExhausted === true)
+  assert.equal(sent, 2)
+})
+
+// Kills: assuming an unlooked-up provider counts per model, which would
+// spend a second request against a cap that may cover the whole account.
+test('an unknown provider daily cap never calls the fallback', async () => {
+  const { chatText } = await import('../scripts/seed/aiClient.js')
+  let sent = 0
+  const fake = { fetch: async () => { sent += 1; return throttled(GROQ_RPD) } }
+  await assert.rejects(withFetch(fake, () => chatText({
+    messages: [], config: { baseUrl: 'https://example.test/v1', apiKey: 'x', model: 'primary', fallbackModel: 'backup' },
+  })), (err) => err.quotaExhausted === true)
+  assert.equal(sent, 1)
+})
+
+// Kills: qwen on Groq sending its thinking inside the reply (no
+// reasoning_format), thinking at full length, 'none' ignored when
+// CHAT_REASONING=off, or the OpenRouter-only reasoning object leaking in.
+test('qwen on Groq asks for parsed, low-effort reasoning and no reasoning object', async () => {
+  const config = { baseUrl: GROQ, apiKey: 'x', model: 'qwen/qwen3-32b' }
+  const on = await withReasoning(null, () => sendOnce(config))
+  assert.equal(on.bodies[0].reasoning_format, 'parsed')
+  assert.equal(on.bodies[0].reasoning_effort, 'low')
+  assert.equal('reasoning' in on.bodies[0], false)
+  const off = await withReasoning('off', () => sendOnce(config))
+  assert.equal(off.bodies[0].reasoning_format, 'parsed')
+  assert.equal(off.bodies[0].reasoning_effort, 'none')
+  assert.equal('reasoning' in off.bodies[0], false)
+})
+
+// Kills: sending gpt-oss the qwen parameters; it answers 400 to
+// reasoning_format and to effort 'none', so the chat would fail outright.
+test('gpt-oss on Groq gets effort low and never reasoning_format or none', async () => {
+  const config = { baseUrl: GROQ, apiKey: 'x', model: 'openai/gpt-oss-20b' }
+  for (const mode of [null, 'off']) {
+    const { bodies } = await withReasoning(mode, () => sendOnce(config))
+    assert.equal(bodies[0].reasoning_effort, 'low')
+    assert.equal('reasoning_format' in bodies[0], false)
+    assert.equal('reasoning' in bodies[0], false)
+  }
+})
+
+// Kills: reasoning fields sent to a model that does not take them (a 400),
+// or Groq-style fields sent to OpenRouter.
+test('no Groq reasoning params for llama on Groq or qwen on OpenRouter', async () => {
+  assert.deepEqual(groqReasoningParams(GROQ, 'llama-3.3-70b-versatile'), {})
+  assert.deepEqual(groqReasoningParams(OPENROUTER, 'qwen/qwen3-32b'), {})
+  const { bodies } = await sendOnce({ baseUrl: OPENROUTER, apiKey: 'x', model: 'qwen/qwen3-32b' })
+  assert.equal('reasoning_format' in bodies[0], false)
+  assert.equal('reasoning_effort' in bodies[0], false)
+})
+
+// Kills: building the fallback request from the primary's family (gpt-oss
+// params sent to qwen or the reverse), or the first request carrying the
+// fallback's params.
+test('the fallback request carries its own model family params', async () => {
+  const { chatText } = await import('../scripts/seed/aiClient.js')
+  const bodies = []
+  const fake = { fetch: async (_url, opts) => {
+    bodies.push(JSON.parse(opts.body))
+    return bodies.length === 1 ? throttled('upstream model is busy') : { ok: true, json: async () => GOOD }
+  } }
+  await withFetch(fake, () => chatText({
+    messages: [], config: { baseUrl: GROQ, apiKey: 'x', model: 'openai/gpt-oss-20b', fallbackModel: 'qwen/qwen3-32b' },
+  }))
+  assert.equal(bodies.length, 2)
+  assert.equal('reasoning_format' in bodies[0], false)
+  assert.equal(bodies[1].reasoning_format, 'parsed')
+})
+
+// Kills: a closed <think> block reaching the student as part of the reply,
+// or an unclosed one being stripped so leaksReasoning can no longer see it.
+test('a closed think block is stripped and an unclosed one is left for the leak check', async () => {
+  const say = (content) => () => ({ ok: true, json: async () => ({ choices: [{ message: { content }, finish_reason: 'stop' }] }) })
+  const config = { baseUrl: GROQ, apiKey: 'x', model: 'm' }
+  assert.equal((await sendOnce(config, say('<think>x</think>\n\nCopy that'))).reply, 'Copy that')
+  assert.equal((await sendOnce(config, say('<think>x'))).reply, '<think>x')
 })

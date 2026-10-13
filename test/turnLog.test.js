@@ -75,6 +75,7 @@ test('the export joins the newest valid grade per turn', () => {
     history: [], dispatcher_text: 'Grace where u at', image_count: 0, system_prompt: 'S', reply: 'Near Knoxville.',
     error: null, regenerated_because: null, fell_back: false, provider_requests: 1, findings: [], human_grade: null })
   assert.equal(live.id, 'live:7')
+  assert.equal(live.model, 'm')
   const rows = withGrades([live, { id: 'eval:x:EB01', source: 'eval', findings: ['all-in not said'], reply: 'x' }], [
     { id: 'live:7', grade: 'no', note: 'old', at: '2026-10-09T10:00:00Z' },
     { id: 'live:7', grade: 'yes', note: 'new', at: '2026-10-09T11:00:00Z' },
@@ -99,4 +100,27 @@ test('the prompt version follows the prompt file', () => {
   writeFileSync(join(dir, 'b.js'), 'two')
   assert.notEqual(promptVersionOf(join(dir, 'a.js')), promptVersionOf(join(dir, 'b.js')))
   assert.equal(promptVersionOf(join(dir, 'a.js')).length, 10)
+})
+
+// Kills: the broker turn log naming the primary when the fallback answered,
+// so a graded reply is blamed on the wrong model (Grace already did this
+// right; the broker did not).
+test('the broker service logs the model that answered, from both chatText calls', () => {
+  const src = read('src', 'modules', 'brokerChat', 'brokerChat.service.js')
+  const calls = src.split('await chatText({').slice(1).map((part) => part.split('onRequest,')[1].slice(0, 40))
+  assert.equal(calls.length, 2)
+  for (const call of calls) assert.match(call, /onModel/)
+  assert.match(src, /let answeredModel = config\.model/)
+  assert.match(src, /model: answeredModel/)
+  assert.doesNotMatch(src, /model: config\.model/)
+})
+
+// Kills: the evaluation run recording the primary for a reply the fallback
+// wrote, so a model comparison grades the wrong model.
+test('chat-eval records the answering model for both chats', () => {
+  const src = read('scripts', 'chat-eval.js')
+  const records = src.match(/record\(\{[\s\S]*?promptVersion/g) ?? []
+  assert.equal(records.length, 2)
+  for (const r of records) assert.match(r, /\n\s+model, promptVersion/)
+  assert.doesNotMatch(src, /model: config\.model/)
 })

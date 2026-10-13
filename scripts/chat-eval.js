@@ -110,6 +110,11 @@ async function ask(config, messages, side) {
   }
 }
 
+// Run header: the primary, and the fallback too when one is configured.
+function modelHeader(config) {
+  return config.fallbackModel ? `primary ${config.model} · fallback ${config.fallbackModel}` : `primary ${config.model}`
+}
+
 function record(fields) {
   // id: how a grade finds this row (reports/training/grades.jsonl).
   const row = { id: `eval:${runId}:${fields.caseId}`, source: 'eval', ...fields }
@@ -130,7 +135,7 @@ function record(fields) {
 
 async function brokerRun(carrier) {
   const config = chatConfigFor('broker')
-  say(`## Broker — primary ${config.model} · prompt ${promptVersion('brokerChat/brokerChat.prompt.js')}`)
+  say(`## Broker — ${modelHeader(config)} · prompt ${promptVersion('brokerChat/brokerChat.prompt.js')}`)
   say('')
   const open = (await query(`
     SELECT p.id, p.origin_state AS "originState", p.destination_state AS "destinationState",
@@ -201,7 +206,7 @@ async function brokerRun(carrier) {
 
 async function driverRun(carrier) {
   const config = chatConfigFor('driver')
-  say(`## Grace — primary ${config.model} · prompt ${promptVersion('driverChat/driverChat.prompt.js')}`)
+  say(`## Grace — ${modelHeader(config)} · prompt ${promptVersion('driverChat/driverChat.prompt.js')}`)
   say('')
   const name = process.env.TELEGRAM_DRIVER_NAME || 'Grace Lindqvist'
   const id = (await query('SELECT id FROM drivers WHERE name = $1', [name])).rows[0]?.id
