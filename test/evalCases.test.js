@@ -100,13 +100,15 @@ test("a curly-apostrophe \"I'll confirm\" is still a promise to get back", () =>
   assert.ok(driverFindings('I’ll check on that.', () => [], { onTheRoad: false }).includes('promises to get back'))
 })
 
-// Kills: ED07 counting only "?" as asking
+// Kills: ED07 counting only "?" as asking, or any "I need ..." with a pickup word in it as asking
 test('ED07 counts a request for the details as asking, a bare acknowledgement is not', () => {
   const check = d('ED07').expect()
   assert.deepEqual(check('Copy that. Need pickup address, miles, and delivery info.'), [])
   assert.deepEqual(check('Copy that. Send me the details.'), [])
   assert.deepEqual(check('Copy that.'), ['asks nothing about the load'])
   assert.deepEqual(check('Copy that. I need to get fuel before I roll.'), ['asks nothing about the load'])
+  assert.deepEqual(check('Copy that. I need 30 min before pickup.'), ['asks nothing about the load'])
+  assert.deepEqual(check('Need to drop the trailer first.'), ['asks nothing about the load'])
 })
 
 // Kills: the dash-led line being left out of the markdown count after normalizing (accepted trade-off: "- " leads a bullet)

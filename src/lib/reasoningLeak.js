@@ -19,10 +19,10 @@ import { asciiPunct } from './plainText.js'
 function anchoredTells(roleWord) {
   const who = `(?:user|dispatcher|${roleWord})`
   return [
-    new RegExp(`^\s*(okay|ok|alright|so)[,:]?\s+(so\s+)?(the\s+)?(user|dispatcher|${roleWord}|they)\b`, 'i'),
+    new RegExp(String.raw`^\s*(okay|ok|alright|so)[,:]?\s+(so\s+)?(the\s+)?(user|dispatcher|${roleWord}|they)\b`, 'i'),
     /^\s*(here'?s|this is)\s+(my|a|the)?\s*(thinking|reasoning|thought|plan|approach)/i,
     /^\s*(let me|i need to|i should|we need to|we should|i'?ll need to)\s+(think|respond|answer|reply|consider|figure)/i,
-    new RegExp(`^\s*the ${who} (is |wants|asked|says|has)`, 'i'),
+    new RegExp(String.raw`^\s*the ${who} (is |wants|asked|says|has)`, 'i'),
     /^\s*we (need|have) to respond as\b/i,
     /^\s*<(think|thinking|reasoning)>/i,
     /^\s*\*\*?(thinking|reasoning|analysis)\*\*?/i,
@@ -31,16 +31,13 @@ function anchoredTells(roleWord) {
 
 const MID_REPLY_TELLS = [
   /\bwhat (they'?re|they are|the (carrier|dispatcher|driver|user)( is)?) asking\b/i,
-  /\ba (broker|driver) who('?s| has| would)\b/i,
   /\bi'?d say something like\b/i,
   /\bi'?ll keep it (brief|short)\b/i,
   /\bi shouldn'?t volunteer\b/i,
-  /\bsince they asked\b/i,
-  /\bsee if they come back\b/i,
-  /\bif they push\b/i,
 ]
 
 export function leaksReasoning(text, { roleWord }) {
   const t = asciiPunct(text)
   return anchoredTells(roleWord).some((re) => re.test(t)) || MID_REPLY_TELLS.some((re) => re.test(t))
 }
+    // String.raw keeps the backslashes: in a plain template literal the s-escape and the word-boundary escape are lost.

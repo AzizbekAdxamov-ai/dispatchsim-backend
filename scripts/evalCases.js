@@ -31,7 +31,7 @@ const FUEL_OUT = /fuel('s| is)? (excluded|separate|extra|on top)|plus fuel|\bfsc
 // ED07 counts a request as asking too: dispatchers type "need pu address and
 // miles", not "what's the pu address?". Plain statements ("Copy that.",
 // "I need to get fuel before I roll") ask nothing about the load.
-const ASKS = /\?|(^|[.!]\s*)(need|send( me)?|gimme|give me|get me|shoot me|text me|tell me|let me know|what'?s|where|which|how)\b|\b(need|i'?ll need|send me)\b[^.!]{0,60}\b(address|miles|pu|pickup|drop|delivery|rate|appt|appointment|weight|commodity|info|details|bol)\b/i
+const ASKS = /\?|(^|[.!]\s*)(need(?! to\b)|send( me)?|gimme|give me|get me|shoot me|text me|tell me|let me know|what'?s|where|which|how)\b|(^|[.!]\s*)(need(?! to\b)|i'?ll need|send me)\b[^.!]{0,60}\b(address|miles|pu|pickup|drop|delivery|rate|appt|appointment|weight|commodity|info|details|bol)\b/i
 
 // EB08: drop and hook said of a live load (or live said of a drop). A denial
 // ("no drop and hook, it's live") is not the mistake.

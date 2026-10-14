@@ -4,11 +4,11 @@
 // (EB01 "all-in not said" on a reply that said it; PROMISE missing "I'll").
 // What is stored and shown to the person is never run through this.
 
-const DASHES = /[‐‑‒–—―−]/g
-const SINGLE_QUOTES = /[‘’‛′]/g
-const DOUBLE_QUOTES = /[“”]/g
-const SPACES = /[     ]/g
-const INVISIBLE = /[​﻿]/g
+const DASHES = /[\u2010-\u2015\u2212]/g
+const SINGLE_QUOTES = /[\u2018\u2019\u201B\u2032]/g
+const DOUBLE_QUOTES = /[\u201C\u201D]/g
+const SPACES = /[\u00A0\u202F\u2007\u2009\u200A]/g
+const INVISIBLE = /[\u200B\uFEFF]/g
 
 export function asciiPunct(text) {
   return String(text ?? '')
@@ -17,5 +17,5 @@ export function asciiPunct(text) {
     .replace(DOUBLE_QUOTES, '"')
     .replace(SPACES, ' ')
     .replace(INVISIBLE, '')
-    .replace(/…/g, '...')
+    .replace(/\u2026/g, '...')
 }
