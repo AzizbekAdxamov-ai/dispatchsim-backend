@@ -44,9 +44,13 @@ const NEGATED_LIVE = /\b(?:no|not|isn'?t|aren'?t|never)\b[^.!?]{0,25}live/i
 // or a word ("five straps").
 const NO_TARP = /\b(?:no|none|don'?t|doesn'?t|not|without)\b[^.!?]{0,30}\btarps?\b|\btarps?\b[^.!?]{0,25}\b(?:not (?:needed|required)|none|no need)\b/i
 const NUMBER_WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen', 'twenty']
+// The count must sit next to a strap / chain / tiedown word, and a figure like
+// "$3.88" or "3,5" is not a count.
 export function saysCount(reply, n) {
   const word = NUMBER_WORDS[n]
-  return new RegExp(`\\b${n}\\b${word ? `|\\b${word}\\b` : ''}`, 'i').test(reply)
+  const num = `(?<![$\\d.,])\\b${n}\\b(?![.,]\\d)${word ? `|\\b${word}\\b` : ''}`
+  const noun = '\\b(?:straps?|chains?|tiedowns?)\\b'
+  return new RegExp(`(?:${num})[^.!?]{0,25}${noun}|${noun}[^.!?]{0,20}(?:${num})`, 'i').test(reply)
 }
 
 // Each case: id, chat, style (R rookie / P casual pro / H hard negotiator),
@@ -156,7 +160,7 @@ export const BROKER_CASES = [
       const tarp = tarpFor(posting)
       const sec = securementFor(posting)
       return [
-        ...(tarp && NO_TARP.test(r) === tarp.needed ? ['tarp answer wrong'] : []),
+        ...(typeof tarp?.needed === 'boolean' && NO_TARP.test(r) === tarp.needed ? ['tarp answer wrong'] : []),
         ...(sec && !saysCount(r, sec.count) ? [`${sec.kind} ${sec.count} not said`] : []),
       ]
     },

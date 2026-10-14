@@ -18,6 +18,8 @@ import { asciiPunct } from './plainText.js'
 
 function anchoredTells(roleWord) {
   const who = `(?:user|dispatcher|${roleWord})`
+  // The two RegExp templates below use String.raw: in a plain template literal the
+  // s-escape and the word-boundary escape lose their backslash.
   return [
     new RegExp(String.raw`^\s*(okay|ok|alright|so)[,:]?\s+(so\s+)?(the\s+)?(user|dispatcher|${roleWord}|they)\b`, 'i'),
     /^\s*(here'?s|this is)\s+(my|a|the)?\s*(thinking|reasoning|thought|plan|approach)/i,
@@ -40,4 +42,3 @@ export function leaksReasoning(text, { roleWord }) {
   const t = asciiPunct(text)
   return anchoredTells(roleWord).some((re) => re.test(t)) || MID_REPLY_TELLS.some((re) => re.test(t))
 }
-    // String.raw keeps the backslashes: in a plain template literal the s-escape and the word-boundary escape are lost.

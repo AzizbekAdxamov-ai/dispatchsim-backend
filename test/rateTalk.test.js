@@ -35,12 +35,12 @@ test('EB04: south central dry-van at 1.98 is the real figure', () => {
 // Kills: an all-in quote compared to linehaul
 test('an all-in quote is compared with linehaul plus fuel', () => {
   const real = Math.round((2.95 + fuelPerMile('flatbed')) * 100) / 100
-  const [c] = marketClaims([`carolinas flatbed is ${real.toFixed(2)} all in`], flatbed)
+  const [c] = marketClaims([`DAT has carolinas flatbed at ${real.toFixed(2)} all in`], flatbed)
   assert.equal(c.basis, 'all-in')
   assert.equal(c.real, real)
   assert.equal(c.verdict, 'right')
   // the same number as a linehaul figure is wrong
-  assert.equal(marketClaims([`carolinas flatbed is ${real.toFixed(2)} linehaul`], flatbed)[0].verdict, 'wrong')
+  assert.equal(marketClaims([`DAT has carolinas flatbed at ${real.toFixed(2)} linehaul`], flatbed)[0].verdict, 'wrong')
 })
 
 // Kills: $4278 read as a per-mile figure
@@ -51,18 +51,18 @@ test('a total in dollars is not a per-mile figure', () => {
 
 // Kills: region aliases or the default equipment lost
 test('aliases and defaults: national, pnw, no equipment named, no figure for the region', () => {
-  assert.equal(marketClaims(['nationwide van is 2.17'], flatbed)[0].verdict, 'right')
-  assert.equal(marketClaims(['nationwide van is 2.17'], flatbed)[0].equipmentType, 'dry-van')
-  assert.equal(marketClaims(['south east at 3.21'], flatbed)[0].verdict, 'right') // default = posting's flatbed
+  assert.equal(marketClaims(['DAT has nationwide van at 2.17'], flatbed)[0].verdict, 'right')
+  assert.equal(marketClaims(['DAT has nationwide van at 2.17'], flatbed)[0].equipmentType, 'dry-van')
+  assert.equal(marketClaims(['DAT has south east at 3.21'], flatbed)[0].verdict, 'right') // default = posting's flatbed
   // Pacific Northwest has no dry-van figure this week: never confirmed, never contradicted
-  assert.equal(marketClaims(['pnw dry van 2.50'], flatbed)[0].verdict, 'no-figure')
-  assert.equal(marketClaims(['pnw dry van 2.50'], flatbed)[0].real, null)
+  assert.equal(marketClaims(['DAT has pnw dry van 2.50'], flatbed)[0].verdict, 'no-figure')
+  assert.equal(marketClaims(['DAT has pnw dry van 2.50'], flatbed)[0].real, null)
 })
 
 // Kills: duplicates or more than three claims in the prompt
 test('claims are deduplicated and capped at three', () => {
-  assert.equal(marketClaims(['carolinas flatbed 4.75', 'carolinas flatbed 4.75'], flatbed).length, 1)
-  const many = ['carolinas 4.1. southeast 4.2. california 4.3. ohio river 4.4']
+  assert.equal(marketClaims(['DAT carolinas flatbed 4.75', 'DAT carolinas flatbed 4.75'], flatbed).length, 1)
+  const many = ['$4.1 carolinas. $4.2 southeast. $4.3 california. $4.4 ohio river']
   assert.equal(marketClaims(many, flatbed).length, 3)
 })
 
@@ -116,6 +116,52 @@ test('nothing said, nothing added', () => {
 
 // Kills: the right and no-figure lines swapped
 test('a right quote is acknowledged, an unknown one is not confirmed', () => {
-  assert.match(promptWith(['south central at 2.46']), /That matches your figure -- they know the market\./)
-  assert.match(promptWith(['pnw dry van 2.50']), /You have no figure for that this week: do not confirm it\./)
+  assert.match(promptWith(['DAT south central at 2.46']), /That matches your figure -- they know the market\./)
+  assert.match(promptWith(['DAT pnw dry van 2.50']), /You have no figure for that this week: do not confirm it\./)
+})
+
+const carolinasFlat = { ...flatbed, rateUsd: 3880, distanceMi: 1000 } // posted $3.88/mi
+
+// Kills: the posting's own per-mile figure read as a wrong market claim
+test('quoting the posted $/mi back is not a market claim', () => {
+  assert.deepEqual(marketClaims(['you posted $3.88/mi out of carolinas flatbed'], carolinasFlat), [])
+  assert.deepEqual(marketClaims(['DAT has carolinas flatbed at 3.89'], carolinasFlat), [])
+  assert.equal(marketClaims(['DAT has carolinas flatbed at 4.75'], carolinasFlat).length, 1)
+})
+
+// Kills: a bare number with no market context read as a market figure
+test('a bare number needs a market word or a $ or /mi', () => {
+  assert.deepEqual(marketClaims(['carolinas flatbed leaves at 4.75 tomorrow'], flatbed), [])
+  assert.equal(marketClaims(['carolinas flatbed leaves at $4.75'], flatbed).length, 1)
+  assert.equal(marketClaims(['carolinas flatbed is 4.75/mi'], flatbed).length, 1)
+  assert.equal(marketClaims(['spot rate carolinas flatbed 4.75'], flatbed).length, 1)
+})
+
+// Kills: "flat rate" read as a flatbed
+test('"flat rate" is not a flatbed', () => {
+  const [c] = marketClaims(['DAT has south central at 1.98 flat rate'], dryVan)
+  assert.equal(c.equipmentType, 'dry-van')
+  assert.equal(marketClaims(['DAT has south central flat at 2.46'], dryVan)[0].equipmentType, 'flatbed')
+})
+
+// Kills: an acceptance counted as a push
+test('taking the broker number is not a push', () => {
+  for (const t of ['ok $3900 works', 'deal, book it at $3900', 'okay $3900', 'sounds good $3900']) {
+    assert.equal(ratePushes([t], dryVan).count, 0, t)
+  }
+  assert.equal(ratePushes(['can you do $3900'], dryVan).count, 1)
+})
+
+// Kills: a bare per-mile ask not counted as a push
+test('a per-mile ask above the posted rate is a push, a market quote is not', () => {
+  const p = { ...dryVan, rateUsd: 3000, distanceMi: 1000 } // $3.00/mi
+  assert.equal(ratePushes(['can u do 4.20/mi'], p).count, 1)
+  assert.equal(ratePushes(['can u do 2.90/mi'], p).count, 0)
+  assert.equal(ratePushes(['can u do 3.00/mi'], p).count, 0)
+  assert.equal(ratePushes(['DAT has carolinas at 4.20/mi'], p).count, 0)
+})
+
+// Kills: the first-push line contradicting the walk-away rule
+test('the first-push line leaves room for the walk-away rule', () => {
+  assert.match(promptWith(['need $4278']), /unless they are walking away; then the walk-away rule applies/)
 })

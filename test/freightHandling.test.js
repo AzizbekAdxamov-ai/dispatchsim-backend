@@ -7,7 +7,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
-  loadingMode, tarpFor, securementFor, tiedownsForArticle, isOpenDeck,
+  loadingMode, tarpFor, securementFor, tiedownsForArticle, isOpenDeck, isMachine,
   STRAP_WLL_LBS, CHAIN_WLL_LBS,
 } from '../src/constants/freightHandling.js'
 import { buildBrokerSystemPrompt } from '../src/modules/brokerChat/brokerChat.prompt.js'
@@ -54,10 +54,39 @@ test('lumber and board goods are tarped, block and beams are not, steel and coil
   }
   for (const c of ['Steel plate', 'Copper tubing']) assert.deepEqual(tarpFor(flat(c)), { needed: true, kind: 'steel tarps (4 ft drop)' }, c)
   for (const c of ['Aluminum coil', 'Steel coils']) assert.deepEqual(tarpFor(flat(c)), { needed: true, kind: 'coil tarp' }, c)
-  for (const c of ['Cinder block', 'Concrete pipe', 'Landscaping stone', 'Granite slabs', 'Baled scrap metal', 'Utility poles', 'Guardrail sections', 'Fencing panels', 'Steel rebar', 'Structural steel beams', 'Mystery freight']) {
+  for (const c of ['Cinder block', 'Concrete pipe', 'Landscaping stone', 'Granite slabs', 'Baled scrap metal', 'Utility poles', 'Guardrail sections', 'Fencing panels', 'Steel rebar', 'Structural steel beams', 'Large Concrete Pipes', 'Excavator with attachments']) {
     assert.deepEqual(tarpFor(flat(c)), { needed: false }, c)
   }
   assert.equal(tarpFor({ equipmentType: 'dry-van', commodity: 'Bundled lumber' }), null)
+})
+
+// Kills: an unknown commodity answered "no tarp" instead of making no claim
+test('freight not on any list makes no tarp claim', () => {
+  for (const c of ['Mystery freight', 'Baled hay', 'Pipe racks', 'Wind turbine hub', undefined]) {
+    assert.deepEqual(tarpFor(flat(c)), { needed: null }, String(c))
+  }
+})
+
+// Kills: tarp keywords matching inside other words (no word boundary)
+test('tarp keywords match whole words only', () => {
+  assert.deepEqual(tarpFor(flat('Mosbach crates')), { needed: null }) // "osb" inside a word
+  assert.deepEqual(tarpFor(flat('Sheetmetal parts')), { needed: null }) // "sheet" inside a word
+  assert.deepEqual(tarpFor(flat('Coiling kits')), { needed: null }) // "coil" inside a word
+})
+
+// Kills: the machinery pattern matching substrings of other freight
+test('machinery is matched by phrase: pavers, tractor parts, liftgates and roller bearings are not', () => {
+  for (const c of ['Excavator with attachments', 'Skid steer loader', 'Farm tractor', 'Boom lift', 'Trencher', 'Road roller', 'Forklift', 'Paving machine', 'Construction Excavators', 'Mining Excavator Hauls', 'Asphalt Paver Frames', 'Agricultural Combine Harvesters']) {
+    assert.equal(isMachine(c), true, c)
+  }
+  for (const c of ['Concrete pavers', 'Tractor parts', 'Tractor trailer parts', 'Liftgate pallets', 'Roller bearings', 'Heavy Duty Generators', 'Industrial generator']) {
+    assert.equal(isMachine(c), false, c)
+  }
+})
+
+// Kills: the chains branch limited to step-deck
+test('an excavator on a flatbed is chained too (393.130 is about the machine, not the deck)', () => {
+  assert.deepEqual(securementFor({ equipmentType: 'flatbed', commodity: 'Excavator with attachments', weightLbs: 40000 }), { kind: 'chains', count: 7 })
 })
 
 // Kills: power-only not drop and hook
@@ -84,6 +113,10 @@ test('a flatbed prompt carries tarps and the strap count; a dry van or reefer pr
   assert.match(p, /This is an open-deck load\. Tarps: lumber tarps \(8 ft drop\) required\./)
   assert.match(p, /it takes at least 5 four-inch straps over the top/)
   assert.match(prompt({ commodity: 'Cinder block' }), /Tarps: none required\./)
+  assert.match(prompt({ commodity: 'Mystery freight' }), /Tarps: you have no tarp note for this freight; do not promise either way\./)
+  assert.doesNotMatch(prompt({ commodity: 'Mystery freight' }), /Tarps: none required/)
+  assert.match(p, /at least 5 four-inch straps over the top; a long piece may need more by its length/)
+  assert.doesNotMatch(p, /plus whatever each piece needs/)
   for (const eq of ['dry-van', 'reefer']) assert.doesNotMatch(prompt({ equipmentType: eq }), /This is an open-deck load|Tarps:|four-inch straps/, eq)
   assert.match(prompt({ equipmentType: 'power-only' }), /Loading: drop and hook at both ends/)
 })
@@ -109,10 +142,26 @@ test('EB10 checks the tarp answer and the strap count', () => {
   const block = b('EB10').expect({ posting: flat('Cinder block') })
   assert.deepEqual(block('No tarps, 5 straps.'), [])
   assert.deepEqual(block('Yes, you need tarps, 5 straps.'), ['tarp answer wrong'])
+  // unknown freight: no tarp claim to contradict either way
+  const unknown = b('EB10').expect({ posting: flat('Mystery freight') })
+  assert.deepEqual(unknown('No tarps, 5 straps.'), [])
+  assert.deepEqual(unknown('Yes tarps, 5 straps.'), [])
 })
 
 // Kills: the open-deck set widened to a closed trailer
 test('open-deck keys are exactly flatbed and step-deck', () => {
   const keys = ['dry-van', 'reefer', 'flatbed', 'step-deck', 'tanker', 'power-only']
   assert.deepEqual(keys.filter((eq) => isOpenDeck({ equipmentType: eq })), ['flatbed', 'step-deck'])
+})
+
+// Kills: a dollar figure or a stray digit read as the strap count (EB10)
+test('EB10 does not take $3.88 or a digit far from a strap word for the strap count', () => {
+  const check = b('EB10').expect({ posting: flat('Bundled lumber', 22000) }) // 11,000 / 4,000 -> 3 straps
+  assert.deepEqual(check('Yes, tarps. It is $3.88 a mile, strap it down.'), ['straps 3 not said'])
+  assert.deepEqual(check('Yes, tarps. I count 3 loads this week.'), ['straps 3 not said'])
+  assert.deepEqual(check('Yes, tarps. Straps are $3.88 each.'), ['straps 3 not said'])
+  assert.deepEqual(check('Yes, tarps. Straps cost $3 each.'), ['straps 3 not said'])
+  assert.deepEqual(check('Yes, tarps. Straps hold 3.5 tons.'), ['straps 3 not said'])
+  assert.deepEqual(check('Yes, tarps, and at least 3 straps.'), [])
+  assert.deepEqual(check('Yes, tarps. Straps: three minimum.'), [])
 })

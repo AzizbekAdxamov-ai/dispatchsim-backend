@@ -245,7 +245,7 @@ export function rateTalkBlock({ posting, said = null }) {
   const pushes = ratePushes(said, posting)
   if (pushes?.count === 1 && pushes.current) {
     out.push(
-      `ON THE RATE SO FAR (counted from this chat): this is the first time they have asked for more than your $${posting.rateUsd}. Hold at $${posting.rateUsd} this time, whatever reason they give -- reload, deadhead, weight. No new figure. Give them your reason the number is what it is.`,
+      `ON THE RATE SO FAR (counted from this chat): this is the first time they have asked for more than your $${posting.rateUsd}. Hold at $${posting.rateUsd} this time, whatever reason they give -- reload, deadhead, weight -- unless they are walking away; then the walk-away rule applies. No new figure. Give them your reason the number is what it is.`,
       '',
     )
   } else if (pushes?.count >= 2) {
@@ -268,9 +268,9 @@ export function openDeckLines(posting) {
     ? `at least ${sec.count} chains (grade 70, 3/8 inch) for the machine`
     : `at least ${sec?.count} four-inch straps over the top`
   return [
-    `- This is an open-deck load. Tarps: ${tarp.needed ? `${tarp.kind} required` : 'none required'}.`
+    `- This is an open-deck load. Tarps: ${tarp.needed === true ? `${tarp.kind} required` : tarp.needed === false ? 'none required' : "you have no tarp note for this freight; do not promise either way"}.`
       + (sec
-        ? ` Securement: by the weight it takes ${piece}${sec.kind === 'chains' ? '' : ', plus whatever each piece needs for its length (two for the first 10 feet, one more for every further 10)'} -- the driver secures it to the federal rule.`
+        ? ` Securement: by the weight it takes ${piece}${sec.kind === 'chains' ? '' : '; a long piece may need more by its length'} -- the driver secures it to the federal rule.`
         : ' Securement: the driver secures it to the federal rule.')
       + ' When asked, give these; never guess a different count and never send them to the shipper.',
   ]

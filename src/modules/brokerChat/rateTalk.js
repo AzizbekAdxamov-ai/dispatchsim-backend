@@ -59,13 +59,18 @@ const REGION_PATTERNS = [
 const EQUIPMENT_PATTERNS = [
   { key: 'dry-van', re: /\b(?:dry[- ]?van|van|dv)\b/i },
   { key: 'reefer', re: /\b(?:reefer|refer|rfr)\b/i },
-  { key: 'flatbed', re: /\b(?:flatbed|flat|fb)\b/i },
+  // "flat rate" is a price, not a trailer.
+  { key: 'flatbed', re: /\b(?:flatbed|flat(?!\s+rate)|fb)\b/i },
 ]
 
 // A per-mile figure: two digits at most, a decimal point, one or two
 // decimals. "$4278" has no point, so it is a total and never matches.
 // Kept to 0.50-9.99 so a stray "10.5" or "0.25" is not read as a rate.
-const PER_MILE = /(?<![\d.,])\$?\s?(\d{1,2}\.\d{1,2})(?!\d)/g
+const PER_MILE = /(?<![\d.,])(\$?)\s?(\d{1,2}\.\d{1,2})(?!\d)(\s?(?:\/\s?mi\b|per mile|a mile))?/g
+// A bare "1.98" is a market figure only in a sentence about the market.
+const MARKET_CONTEXT = /\b(?:dat|market|board|linehaul|rates?|avg|average|spot|paying)\b/i
+// The posting's own $/mi is not a market claim (within a cent or two of it).
+const OWN_RPM_WITHIN = 0.02
 const PER_MILE_MIN = 0.5
 const PER_MILE_MAX = 9.99
 const ALL_IN = /\ball[- ]?in\b/i
@@ -79,11 +84,18 @@ const MAX_CLAIMS = 3
 // Sentences, without cutting a decimal: "4.75." splits only at the last dot.
 const SENTENCES = /[;!?\n]|\.(?!\d)/
 
-function figuresIn(sentence) {
+// Every per-mile-looking figure in a sentence. explicit = it carried a $ or a
+// /mi (or "per mile"); a bare number needs the sentence to be about the market.
+function figuresIn(sentence, posting) {
+  const ownRpm = posting.distanceMi > 0 ? posting.rateUsd / posting.distanceMi : null
   const out = []
   for (const m of sentence.matchAll(PER_MILE)) {
-    const value = Number(m[1])
-    if (value >= PER_MILE_MIN && value <= PER_MILE_MAX) out.push({ value, at: m.index })
+    const value = Number(m[2])
+    const explicit = Boolean(m[1] || m[3])
+    if (value < PER_MILE_MIN || value > PER_MILE_MAX) continue
+    if (ownRpm !== null && Math.abs(value - ownRpm) <= OWN_RPM_WITHIN) continue
+    if (!explicit && !MARKET_CONTEXT.test(sentence)) continue
+    out.push({ value, at: m.index, unit: Boolean(m[3]) })
   }
   return out
 }
@@ -105,7 +117,7 @@ export function marketClaims(saidTexts, posting) {
   const seen = new Set()
   for (const raw of saidTexts ?? []) {
     for (const sentence of asciiPunct(raw).split(SENTENCES)) {
-      const figures = figuresIn(sentence)
+      const figures = figuresIn(sentence, posting)
       if (figures.length === 0) continue
       const equipmentType = EQUIPMENT_PATTERNS.find((e) => e.re.test(sentence))?.key ?? posting.equipmentType
       const basis = ALL_IN.test(sentence) ? 'all-in' : 'linehaul'
@@ -134,6 +146,8 @@ export function marketClaims(saidTexts, posting) {
 
 // -- Pushes on the rate -----------------------------------------------------
 
+// Taking the broker's number is not asking for more.
+const ACCEPTS = /\b(?:works|deal|book it|sounds good)\b|\bok(?:ay)?\b[^.!?]*\d/i
 const ASKS_FOR_MORE = /\b(need more|pay more|do better|bump( it)?|more money|too (low|cheap)|way under|under ?pay|low ?ball)\b/i
 
 // How many times the dispatcher has asked for more than the posted rate,
@@ -147,9 +161,15 @@ export function ratePushes(saidTexts, posting) {
   if (posting.rateHidden) return null
   const ceiling = posting.distanceMi * 5
   const texts = saidTexts ?? []
+  const ownRpm = posting.rateUsd / posting.distanceMi
   const pushed = texts.map((t) => {
     const text = asciiPunct(t)
-    return dollars(text).some((d) => d > posting.rateUsd && d <= ceiling) || ASKS_FOR_MORE.test(text)
+    if (ACCEPTS.test(text)) return false
+    if (dollars(text).some((d) => d > posting.rateUsd && d <= ceiling) || ASKS_FOR_MORE.test(text)) return true
+    // "can u do 4.20/mi": a per-mile figure with its unit, above the posted
+    // one, in a sentence that is not quoting the market or naming a region.
+    if (MARKET_CONTEXT.test(text) || REGION_PATTERNS.some(({ re }) => re.test(text))) return false
+    return [...text.matchAll(PER_MILE)].some((m) => m[3] && Number(m[2]) > ownRpm + OWN_RPM_WITHIN && Number(m[2]) <= 5)
   })
   return { count: pushed.filter(Boolean).length, current: pushed.length > 0 && pushed[pushed.length - 1] }
 }

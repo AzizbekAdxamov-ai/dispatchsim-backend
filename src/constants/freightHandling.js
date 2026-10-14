@@ -37,12 +37,18 @@ export function isOpenDeck(posting) {
 // poles, rebar, beams, machinery) is strapped only. Sources:
 //   https://otrucking.com/resources/guides/flatbed-tarping-guide/
 //   https://www.uscargocontrol.com/blogs/blog/flatbed-trailer-tarps
-// Anything not named is "no tarp": the safe answer is no claim, not a
-// guessed tarp. A coil is checked before plain metal so "aluminum coil"
-// gets the coil tarp, not the steel one.
-const LUMBER_TARP = /lumber|plywood|osb|drywall|sheetrock|shingle|insulation|wall panel|bagged cement/i
-const COIL_TARP = /coil/i
-const STEEL_TARP = /steel plate|sheet|aluminum|copper|tubing/i
+// Three answers, because a broker who does not know must not say either:
+//   needed: true   a tarp kind above
+//   needed: false  freight we list as strapped only (block, pipe, stone,
+//                  granite, scrap, poles, guardrail, fencing, rebar, beams,
+//                  machinery)
+//   needed: null   anything else -- no claim; the prompt says so.
+// A coil is checked before plain metal so "aluminum coil" gets the coil tarp,
+// not the steel one.
+const LUMBER_TARP = /\b(?:lumber|plywood|osb|drywall|sheetrock|shingles?|insulation|wall panels?|bagged cement)\b/i
+const COIL_TARP = /\bcoils?\b/i
+const STEEL_TARP = /\b(?:steel plates?|sheets?|aluminum|copper|tubing)\b/i
+const NO_TARP_FREIGHT = /\b(?:cinder blocks?|concrete pipes?|stones?|granite|scrap|poles?|guardrail|fencing|rebar|beams?|machinery)\b/i
 
 export function tarpFor(posting) {
   if (!isOpenDeck(posting)) return null
@@ -50,7 +56,8 @@ export function tarpFor(posting) {
   if (LUMBER_TARP.test(c)) return { needed: true, kind: 'lumber tarps (8 ft drop)' }
   if (COIL_TARP.test(c)) return { needed: true, kind: 'coil tarp' }
   if (STEEL_TARP.test(c)) return { needed: true, kind: 'steel tarps (4 ft drop)' }
-  return { needed: false }
+  if (NO_TARP_FREIGHT.test(c) || isMachine(c)) return { needed: false }
+  return { needed: null }
 }
 
 // -- Securement -------------------------------------------------------------------
@@ -71,7 +78,8 @@ export const HEAVY_MACHINE_MIN_TIEDOWNS = 4
 // Self-propelled machine on wheels or tracks (393.130 applies to those).
 // Generators and compressors are skid-mounted freight, not "operate on
 // wheels or tracks", so they are strapped like any other open-deck piece.
-const MACHINE = /excavator|loader|tractor|roller|forklift|lift|trencher|paver|paving|combine|harvester/i
+const MACHINE = /\b(?:excavators?|loaders?|(?:farm |compact )?tractors?(?! parts| trailer)|road rollers?|forklifts?|(?:boom|scissor) lifts?|trenchers?|paving machines?|asphalt pavers?|combine harvesters?|harvesters?)\b/i
+export const isMachine = (commodity) => MACHINE.test(String(commodity ?? ''))
 
 // 49 CFR 393.106(d): the aggregate working load limit of the tiedowns must
 // be at least one-half the weight of the cargo. A strap that goes over the
@@ -84,7 +92,7 @@ export function securementFor(posting) {
   const weight = Number(posting.weightLbs)
   if (!Number.isFinite(weight) || weight <= 0) return null
   const needed = weight / 2
-  if (posting.equipmentType === 'step-deck' && weight >= HEAVY_MACHINE_MIN_LBS && MACHINE.test(String(posting.commodity ?? ''))) {
+  if (weight >= HEAVY_MACHINE_MIN_LBS && isMachine(posting.commodity)) {
     return {
       kind: 'chains',
       count: Math.max(HEAVY_MACHINE_MIN_TIEDOWNS, Math.ceil(needed / (CHAIN_WLL_LBS / 2))),
