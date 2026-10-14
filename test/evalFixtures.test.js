@@ -4,8 +4,9 @@
 // number that looks internal ("EVAL-NY") instead of a six-digit app number.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { nycFixtureLoad, FIXTURE_LOAD_CASES } from '../scripts/evalFixtures.js'
+import { nycFixtureLoad, legalTransitHours, FIXTURE_LOAD_CASES } from '../scripts/evalFixtures.js'
 import { emptyRunToPickup } from '../src/modules/loads/whereabouts.js'
+import { minutesLate } from '../src/modules/driverChat/driverChat.prompt.js'
 
 const seattle = { currentCity: 'Seattle', currentState: 'WA' }
 
@@ -38,4 +39,40 @@ test('chat evaluation builds the fixture load from the driver and the case list'
   assert.match(code, /nycFixtureLoad\(ctx\.driver, now\)/)
   assert.match(code, /FIXTURE_LOAD_CASES\.has\(c\.id\)/)
   assert.doesNotMatch(code, /EVAL-NY/)
+})
+
+const HOUR = 3600e3
+const NOW = Date.UTC(2026, 9, 14, 12, 0, 0)
+
+// Kills: an ETA shorter than the drive (ED02: Seattle -> New York "12:17 PM today")
+test('the fixture ETA is at least the road time plus the rests a legal driver must take', () => {
+  for (const hosRemainingMin of [660, 395, 0, undefined]) {
+    const load = nycFixtureLoad({ ...seattle, hosRemainingMin }, NOW)
+    const driveH = load.distanceMi / 55
+    const needed = driveH + (Math.ceil(driveH / 11) - 1) * 10
+    const took = (load.etaAt.getTime() - NOW) / HOUR
+    assert.ok(took >= needed, `hos ${hosRemainingMin}: ${took.toFixed(1)}h < ${needed.toFixed(1)}h`)
+    assert.equal(load.dispatchedAt.getTime(), NOW)
+  }
+})
+
+// Kills: a delivery appointment before the ETA
+test('the fixture delivery appointment is not before the ETA and the load is not late', () => {
+  for (const hosRemainingMin of [660, 395, 0]) {
+    const load = nycFixtureLoad({ ...seattle, hosRemainingMin }, NOW)
+    assert.ok(load.deliveryAt >= load.etaAt)
+    assert.equal(load.deliveryAt.getTime() % HOUR, 0)
+    assert.ok(load.deliveryAt.getTime() - load.etaAt.getTime() < HOUR)
+    assert.ok(!minutesLate(load), 'not late')
+  }
+})
+
+// Kills: legalTransitHours ignoring the short first day, the 30-minute break, or the 10-hour rest
+test('legalTransitHours is road time, a break past 8 driving hours, and a rest between days', () => {
+  assert.equal(legalTransitHours(55 * 5), 5) // 5h, no break due
+  assert.equal(legalTransitHours(55 * 9), 9.5) // one day, break
+  assert.equal(legalTransitHours(55 * 11), 11.5) // the whole day
+  assert.equal(legalTransitHours(55 * 12), 11.5 + 10 + 1) // 11h, rest, 1h
+  assert.equal(legalTransitHours(55 * 5, 120), 2 + 10 + 3) // only 2h left today
+  assert.equal(legalTransitHours(55 * 5, 0), 10 + 5) // nothing left: rest first
 })
