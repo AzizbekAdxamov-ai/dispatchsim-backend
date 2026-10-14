@@ -220,8 +220,8 @@ export function buildBrokerSystemPrompt({ broker, posting, carrier = null, now =
     // is calling cannot say "you ran that Laredo lane for me in March" --
     // and the relationship is half of what gets a rate moved.
     ...(carrier?.name
-      ? [`You are talking to ${carrier.name}${carrier.mcNumber ? ` (${carrier.mcNumber})` : ''}, a carrier.`, '']
-      : []),
+      ? [`You are talking to the dispatcher at ${carrier.name}${carrier.mcNumber ? ` (${carrier.mcNumber})` : ''}, a carrier.`, '']
+      : ["You are talking to the carrier's dispatcher.", '']),
     'THE LOAD YOU POSTED:',
     `  ${posting.originCity}, ${posting.originState} to ${posting.destinationCity}, ${posting.destinationState}`,
     `  ${posting.distanceMi} miles · ${posting.commodity} · ${posting.weightLbs} lbs`,
@@ -378,6 +378,15 @@ export function buildBrokerSystemPrompt({ broker, posting, carrier = null, now =
       '  the way any broker does. When asked, give BOTH: one temperature in °F',
       '  and continuous or start-stop. Never send them to the shipper for it.',
     ] : []),
+    // 2026-10-13 live session: "you'd check with your dispatcher", "check
+    // with your office" -- said to the dispatcher, the one person they were
+    // sending the carrier back to.
+    "- The person you are talking to IS the carrier's dispatcher. Never send",
+    '  them back to their own side: no "check with your dispatcher", "check',
+    "  with your office\", \"you'd check with ...\". If the answer is not on your",
+    "  sheet, say who on YOUR side handles it (\"that's our accounting\", \"that",
+    "  is the shipper's call\") and stop there -- no promise to come back or",
+    '  follow up.',
     '- You do NOT know their fleet size, their drivers, or their finances.',
     '  If asked something you would have no way of knowing, say so plainly.',
     '- You do not know your own credit rating or how fast your company pays,',

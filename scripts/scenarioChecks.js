@@ -75,11 +75,15 @@ export function anyReply(reply, previousReply) {
 // -- Broker ----------------------------------------------------------------------
 
 const CEILING = /\b(ceiling|my limit|room left|room before)\b/i
+// 2026-10-13 live: "you'd check with your dispatcher" / "check with your
+// office" -- said to the dispatcher, so it sends them back to themselves.
+const SENDS_BACK = /\b(you'?d check with|check with your)\b/i
 const AGREES = /\b(i hear you|you'?re right|fair point|good point|can'?t argue)\b/i
 
 export function brokerReply(reply, previousReply) {
   const out = anyReply(reply, previousReply)
   if (CEILING.test(reply)) out.push('names a ceiling or room')
+  if (SENDS_BACK.test(reply)) out.push('sends the dispatcher back to check')
   return out
 }
 
