@@ -268,11 +268,13 @@ export function openDeckLines(posting) {
     ? `at least ${sec.count} chains (grade 70, 3/8 inch) for the machine`
     : `at least ${sec?.count} four-inch straps over the top`
   return [
-    `- This is an open-deck load. Tarps: ${tarp.needed === true ? `${tarp.kind} required` : tarp.needed === false ? 'none required' : "you have no tarp note for this freight; do not promise either way"}.`
+    `- This is an open-deck load. Tarps: ${tarp.needed === true ? `${tarp.kind} required` : tarp.needed === false ? 'none required' : "say tarps are the driver's call on this freight; do not say required or not"}.`
       + (sec
         ? ` Securement: by the weight it takes ${piece}${sec.kind === 'chains' ? '' : '; a long piece may need more by its length'} -- the driver secures it to the federal rule.`
         : ' Securement: the driver secures it to the federal rule.')
-      + ' When asked, give these; never guess a different count and never send them to the shipper.',
+      + (tarp.needed === null
+        ? ' When asked, give the securement count; never guess a different one and never send them to the shipper.'
+        : ' When asked, give these; never guess a different count and never send them to the shipper.'),
   ]
 }
 

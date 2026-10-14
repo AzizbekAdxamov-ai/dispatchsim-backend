@@ -129,9 +129,9 @@ test('quoting the posted $/mi back is not a market claim', () => {
   assert.equal(marketClaims(['DAT has carolinas flatbed at 4.75'], carolinasFlat).length, 1)
 })
 
-// Kills: a bare number with no market context read as a market figure
-test('a bare number needs a market word or a $ or /mi', () => {
-  assert.deepEqual(marketClaims(['carolinas flatbed leaves at 4.75 tomorrow'], flatbed), [])
+// Kills: a bare number read as a market figure with nothing about the market in the sentence
+test('a bare number needs a market word, a region, a $ or /mi', () => {
+  assert.deepEqual(marketClaims(['flatbed leaves at 4.75 tomorrow'], flatbed), []) // no region, no market word
   assert.equal(marketClaims(['carolinas flatbed leaves at $4.75'], flatbed).length, 1)
   assert.equal(marketClaims(['carolinas flatbed is 4.75/mi'], flatbed).length, 1)
   assert.equal(marketClaims(['spot rate carolinas flatbed 4.75'], flatbed).length, 1)
@@ -146,7 +146,7 @@ test('"flat rate" is not a flatbed', () => {
 
 // Kills: an acceptance counted as a push
 test('taking the broker number is not a push', () => {
-  for (const t of ['ok $3900 works', 'deal, book it at $3900', 'okay $3900', 'sounds good $3900']) {
+  for (const t of ['ok $3900 works', 'deal, book it at $3900', 'sounds good $3900', 'that works $3900']) {
     assert.equal(ratePushes([t], dryVan).count, 0, t)
   }
   assert.equal(ratePushes(['can you do $3900'], dryVan).count, 1)
@@ -164,4 +164,19 @@ test('a per-mile ask above the posted rate is a push, a market quote is not', ()
 // Kills: the first-push line contradicting the walk-away rule
 test('the first-push line leaves room for the walk-away rule', () => {
   assert.match(promptWith(['need $4278']), /unless they are walking away; then the walk-away rule applies/)
+})
+
+// Kills: an accepting word hiding a counter ("ok but need $4278")
+test('a message that accepts and still asks for more is a push', () => {
+  for (const t of ['ok but need $4278', 'okay can you do $4100?', 'sounds good but can you do better', 'that works but need 4200', 'works but $4100']) {
+    assert.deepEqual(ratePushes([t], dryVan), { count: 1, current: true }, t)
+  }
+})
+
+// Kills: a region name not counted as market context for a bare figure
+test('a region name is market context: "carolinas flatbed is 4.75 this week" is a wrong claim', () => {
+  const [wrong] = marketClaims(['carolinas flatbed is 4.75 this week'], flatbed)
+  assert.equal(wrong.verdict, 'wrong')
+  const [right] = marketClaims(['south central at 1.98 reload is dead'], dryVan)
+  assert.equal(right.verdict, 'right')
 })

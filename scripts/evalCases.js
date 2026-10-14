@@ -48,7 +48,8 @@ const NUMBER_WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'sev
 // "$3.88" or "3,5" is not a count.
 export function saysCount(reply, n) {
   const word = NUMBER_WORDS[n]
-  const num = `(?<![$\\d.,])\\b${n}\\b(?![.,]\\d)${word ? `|\\b${word}\\b` : ''}`
+  // A number word before "-inch" is the strap width ("5 four-inch straps"), not the count.
+  const num = `(?<![$\\d.,])\\b${n}\\b(?![.,]\\d)${word ? `|\\b${word}\\b(?![ -]inch)` : ''}`
   const noun = '\\b(?:straps?|chains?|tiedowns?)\\b'
   return new RegExp(`(?:${num})[^.!?]{0,25}${noun}|${noun}[^.!?]{0,20}(?:${num})`, 'i').test(reply)
 }
@@ -160,7 +161,8 @@ export const BROKER_CASES = [
       const tarp = tarpFor(posting)
       const sec = securementFor(posting)
       return [
-        ...(typeof tarp?.needed === 'boolean' && NO_TARP.test(r) === tarp.needed ? ['tarp answer wrong'] : []),
+        // needed: null means the prompt made no tarp claim, so there is nothing to contradict.
+        ...(tarp?.needed != null && NO_TARP.test(r) === tarp.needed ? ['tarp answer wrong'] : []),
         ...(sec && !saysCount(r, sec.count) ? [`${sec.kind} ${sec.count} not said`] : []),
       ]
     },

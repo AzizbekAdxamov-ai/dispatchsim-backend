@@ -78,7 +78,7 @@ export const HEAVY_MACHINE_MIN_TIEDOWNS = 4
 // Self-propelled machine on wheels or tracks (393.130 applies to those).
 // Generators and compressors are skid-mounted freight, not "operate on
 // wheels or tracks", so they are strapped like any other open-deck piece.
-const MACHINE = /\b(?:excavators?|loaders?|(?:farm |compact )?tractors?(?! parts| trailer)|road rollers?|forklifts?|(?:boom|scissor) lifts?|trenchers?|paving machines?|asphalt pavers?|combine harvesters?|harvesters?)\b/i
+const MACHINE = /\b(?:excavators?|loaders?|(?:farm |compact )?tractors?(?![ -](?:parts|trailer))|dozers?|bulldozers?|backhoes?|motor graders?|telehandlers?|skid steers?|road rollers?|forklifts?|(?:boom|scissor) lifts?|trenchers?|paving machines?|asphalt pavers?|combine harvesters?|harvesters?)\b/i
 export const isMachine = (commodity) => MACHINE.test(String(commodity ?? ''))
 
 // 49 CFR 393.106(d): the aggregate working load limit of the tiedowns must

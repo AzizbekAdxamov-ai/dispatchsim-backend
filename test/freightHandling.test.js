@@ -76,10 +76,10 @@ test('tarp keywords match whole words only', () => {
 
 // Kills: the machinery pattern matching substrings of other freight
 test('machinery is matched by phrase: pavers, tractor parts, liftgates and roller bearings are not', () => {
-  for (const c of ['Excavator with attachments', 'Skid steer loader', 'Farm tractor', 'Boom lift', 'Trencher', 'Road roller', 'Forklift', 'Paving machine', 'Construction Excavators', 'Mining Excavator Hauls', 'Asphalt Paver Frames', 'Agricultural Combine Harvesters']) {
+  for (const c of ['Excavator with attachments', 'Skid steer loader', 'Farm tractor', 'Boom lift', 'Trencher', 'Road roller', 'Forklift', 'Paving machine', 'Construction Excavators', 'Mining Excavator Hauls', 'Asphalt Paver Frames', 'Bulldozer', 'Backhoe loader', 'Motor grader', 'Telehandler', 'Skid steer', 'Agricultural Combine Harvesters']) {
     assert.equal(isMachine(c), true, c)
   }
-  for (const c of ['Concrete pavers', 'Tractor parts', 'Tractor trailer parts', 'Liftgate pallets', 'Roller bearings', 'Heavy Duty Generators', 'Industrial generator']) {
+  for (const c of ['Concrete pavers', 'Tractor parts', 'Tractor trailer parts', 'Liftgate pallets', 'Roller bearings', 'Tractor-trailer parts', 'Tractor-trailer', 'Heavy Duty Generators', 'Industrial generator']) {
     assert.equal(isMachine(c), false, c)
   }
 })
@@ -113,7 +113,9 @@ test('a flatbed prompt carries tarps and the strap count; a dry van or reefer pr
   assert.match(p, /This is an open-deck load\. Tarps: lumber tarps \(8 ft drop\) required\./)
   assert.match(p, /it takes at least 5 four-inch straps over the top/)
   assert.match(prompt({ commodity: 'Cinder block' }), /Tarps: none required\./)
-  assert.match(prompt({ commodity: 'Mystery freight' }), /Tarps: you have no tarp note for this freight; do not promise either way\./)
+  assert.match(prompt({ commodity: 'Mystery freight' }), /Tarps: say tarps are the driver's call on this freight; do not say required or not\./)
+  assert.match(prompt({ commodity: 'Mystery freight' }), /When asked, give the securement count; never guess a different one/)
+  assert.match(p, /When asked, give these; never guess a different count/)
   assert.doesNotMatch(prompt({ commodity: 'Mystery freight' }), /Tarps: none required/)
   assert.match(p, /at least 5 four-inch straps over the top; a long piece may need more by its length/)
   assert.doesNotMatch(p, /plus whatever each piece needs/)
@@ -164,4 +166,12 @@ test('EB10 does not take $3.88 or a digit far from a strap word for the strap co
   assert.deepEqual(check('Yes, tarps. Straps hold 3.5 tons.'), ['straps 3 not said'])
   assert.deepEqual(check('Yes, tarps, and at least 3 straps.'), [])
   assert.deepEqual(check('Yes, tarps. Straps: three minimum.'), [])
+})
+
+// Kills: the strap width ("four-inch") taken for the count when the count is 4
+test('EB10 does not take "four-inch" for a count of four', () => {
+  const check = b('EB10').expect({ posting: flat('Bundled lumber', 30000) }) // 15,000 / 4,000 -> 4 straps
+  assert.deepEqual(check('Yes, tarps. Use 5 four-inch straps.'), ['straps 4 not said'])
+  assert.deepEqual(check('Yes, tarps. Four straps minimum.'), [])
+  assert.deepEqual(check('Yes, tarps. Use 4 four-inch straps.'), [])
 })

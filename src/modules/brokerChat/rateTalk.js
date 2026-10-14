@@ -85,7 +85,8 @@ const MAX_CLAIMS = 3
 const SENTENCES = /[;!?\n]|\.(?!\d)/
 
 // Every per-mile-looking figure in a sentence. explicit = it carried a $ or a
-// /mi (or "per mile"); a bare number needs the sentence to be about the market.
+// /mi (or "per mile"); a bare number needs the sentence to be about the market
+// (a market word, or a region name).
 function figuresIn(sentence, posting) {
   const ownRpm = posting.distanceMi > 0 ? posting.rateUsd / posting.distanceMi : null
   const out = []
@@ -94,7 +95,7 @@ function figuresIn(sentence, posting) {
     const explicit = Boolean(m[1] || m[3])
     if (value < PER_MILE_MIN || value > PER_MILE_MAX) continue
     if (ownRpm !== null && Math.abs(value - ownRpm) <= OWN_RPM_WITHIN) continue
-    if (!explicit && !MARKET_CONTEXT.test(sentence)) continue
+    if (!explicit && !MARKET_CONTEXT.test(sentence) && !REGION_PATTERNS.some(({ re }) => re.test(sentence))) continue
     out.push({ value, at: m.index, unit: Boolean(m[3]) })
   }
   return out
@@ -147,7 +148,12 @@ export function marketClaims(saidTexts, posting) {
 // -- Pushes on the rate -----------------------------------------------------
 
 // Taking the broker's number is not asking for more.
-const ACCEPTS = /\b(?:works|deal|book it|sounds good)\b|\bok(?:ay)?\b[^.!?]*\d/i
+// Only a message with an accepting word and NO sign of a counter: "ok but need
+// $4278" and "that works but need 4200" are still pushes.
+const ACCEPT_WORDS = /\b(?:works|deal|book it|sounds good)\b/i
+const COUNTER_SIGNAL = /\?|\bbut\b|\bneed\b|\bcan (?:you|u)\b|\bwhat about\b|\bdo better\b|\bmore\b/i
+// "need 4200", "can u do 4100": a figure after an asking phrase, no $ needed.
+const ASKED_FIGURE = /\b(?:need|want|asking|ask|can (?:you|u) do|how about|what about)\s+\$?\s?(\d[\d,]*(?:\.\d+)?)/gi
 const ASKS_FOR_MORE = /\b(need more|pay more|do better|bump( it)?|more money|too (low|cheap)|way under|under ?pay|low ?ball)\b/i
 
 // How many times the dispatcher has asked for more than the posted rate,
@@ -164,8 +170,9 @@ export function ratePushes(saidTexts, posting) {
   const ownRpm = posting.rateUsd / posting.distanceMi
   const pushed = texts.map((t) => {
     const text = asciiPunct(t)
-    if (ACCEPTS.test(text)) return false
-    if (dollars(text).some((d) => d > posting.rateUsd && d <= ceiling) || ASKS_FOR_MORE.test(text)) return true
+    if (ACCEPT_WORDS.test(text) && !COUNTER_SIGNAL.test(text)) return false
+    const asked = [...text.matchAll(ASKED_FIGURE)].map((m) => Number(m[1].replace(/,/g, '')))
+    if ([...dollars(text), ...asked].some((d) => d > posting.rateUsd && d <= ceiling) || ASKS_FOR_MORE.test(text)) return true
     // "can u do 4.20/mi": a per-mile figure with its unit, above the posted
     // one, in a sentence that is not quoting the market or naming a region.
     if (MARKET_CONTEXT.test(text) || REGION_PATTERNS.some(({ re }) => re.test(text))) return false
