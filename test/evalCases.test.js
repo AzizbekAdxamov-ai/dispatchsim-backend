@@ -113,3 +113,14 @@ test('ED07 counts a request for the details as asking, a bare acknowledgement is
 test('a reply that opens with an em dash is read as a bulleted line once folded', () => {
   assert.deepEqual(brokerFindings('— yes, all-in.', () => []), ['markdown'])
 })
+
+// Kills: a reply that repeats the dispatcher's wrong figure passing (EB06)
+test('EB06 flags a reply that echoes the quoted figure instead of the real one', () => {
+  const posting = { equipmentType: 'flatbed' }
+  const market = { origin: { linehaul: 2.95 } }
+  const line = 'DAT shows carolinas flatbed at 4.75 linehaul this week so ur way under'
+  const check = b('EB06').expect({ posting, market, line })
+  assert.deepEqual(check('Yeah, the Carolinas are up around $4.75/mi.'), ['real figure not given', 'echoes their figure'])
+  assert.deepEqual(check('Not what I see: Carolinas flatbed is $2.95/mi linehaul.'), [])
+  assert.deepEqual(check('Not sure about that one.'), ['real figure not given'])
+})

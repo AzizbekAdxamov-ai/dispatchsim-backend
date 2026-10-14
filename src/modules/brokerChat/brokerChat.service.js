@@ -128,6 +128,9 @@ export async function sendMessage({ conversationId, userId, text }) {
     posting,
     // The dispatcher's own words so far, this one included.
     talk: talkFacts([...dispatcherTexts(history), text], posting.equipmentType),
+    // Read by code for market claims and rate pushes (rateTalk.js). History is
+    // capped at HISTORY_TURNS, so a very old push can fall out of the count.
+    said: [...dispatcherTexts(history), text],
   })
 
   // Every request this turn sends to the provider, counted where they are

@@ -15,6 +15,7 @@
 // read. The human grade in the dataset (accurate? why?) is the verdict.
 
 import { dollars, brokerReply, driverReply, isFallback, FELL_BACK } from './scenarioChecks.js'
+import { marketClaims } from '../src/modules/brokerChat/rateTalk.js'
 import { asciiPunct } from '../src/lib/plainText.js'
 import { hoursMinutes } from '../src/constants/appClock.js'
 import { humanDuration } from '../src/modules/driverChat/driverChat.prompt.js'
@@ -80,7 +81,16 @@ export const BROKER_CASES = [
   {
     id: 'EB06', style: 'H', terms: ['the market', 'linehaul'], pick: 'regionalOrigin',
     line: (p, m) => `DAT shows ${m.origin.region.toLowerCase()} ${p.equipmentType} at ${(m.origin.linehaul + 1.8).toFixed(2)} linehaul this week so ur way under`,
-    expect: ({ market }) => (r) => (r.includes(market.origin.linehaul.toFixed(2)) ? [] : ['real figure not given']),
+    // The figure the line quotes is read back out of the line by the same code
+    // the prompt uses (rateTalk.js), so the check and the prompt cannot drift.
+    expect: ({ posting, market, line }) => (r) => {
+      const real = market.origin.linehaul.toFixed(2)
+      const claimed = marketClaims([line], posting).find((c) => c.verdict === 'wrong')?.claimed.toFixed(2)
+      return [
+        ...(r.includes(real) ? [] : ['real figure not given']),
+        ...(claimed && r.includes(claimed) && !r.includes(real) ? ['echoes their figure'] : []),
+      ]
+    },
     good: 'Corrects the number with the real regional figure; notes the posted rate is all-in.',
   },
   {

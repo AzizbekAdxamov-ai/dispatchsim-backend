@@ -175,6 +175,7 @@ async function brokerRun(carrier) {
       broker: { name: posting.name, contactName: posting.contactName, persona: posting.persona },
       posting,
       talk: talkFacts([line], posting.equipmentType),
+      said: [line],
     })
     const { reply, model } = await ask(config, bp.buildMessages({ systemPrompt, history: [], newMessage: line }), 'broker')
     const rpm = (posting.rateUsd / posting.distanceMi).toFixed(2)
@@ -196,7 +197,7 @@ async function brokerRun(carrier) {
         + ` · terms: ${termsLines(terms).slice(0, 3).join(' ')}`,
       systemPrompt,
       reply,
-      findings: brokerFindings(reply, c.expect({ posting, market, terms })),
+      findings: brokerFindings(reply, c.expect({ posting, market, terms, line })),
       human: null,
     })
   }

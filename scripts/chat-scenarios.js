@@ -152,6 +152,7 @@ async function brokerConversation({ key, title, posting, lines }, carrier, confi
       broker: { name: posting.name, contactName: posting.contactName, persona: posting.persona },
       posting,
       talk: talkFacts(dispatcherSoFar, posting.equipmentType),
+      said: dispatcherSoFar,
     })
     const reply = await ask(config, bp.buildMessages({ systemPrompt, history, newMessage: text }), 'broker')
     const findings = reply.startsWith('(FAILED')

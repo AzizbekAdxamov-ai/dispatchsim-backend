@@ -251,8 +251,12 @@ test('the broker is told the posted rate is all-in, and that the benchmarks are 
 
 // Kills: "a real point" with no limit -- the tester's first +12% ask was
 // met with "$3418 works".
-test('a weak-reload argument earns part of the way, not the whole ask', () => {
-  assert.match(marketBlock(posting({ destinationState: 'FL' })).join('\n'), /Move for it under ON RATE -- part of the way, never the whole ask in one\n\s+step\./)
+// Kills: weak-reload text telling the broker to move on the first push
+// (EB04, 2026-10-14: $3820 -> $4100 on the first ask).
+test('a weak-reload argument earns part of the way, not the whole ask, and not on the first push', () => {
+  const text = marketBlock(posting({ destinationState: 'FL' })).join('\n')
+  assert.match(text, /does not move you on their first push\. On a later push it can,\n\s+under ON RATE: part of the way, never the whole ask in one step\./)
+  assert.doesNotMatch(text, /Move for it under ON RATE/)
 })
 
 // Kills: no answer for a false "bad reload" claim, or the origin figure

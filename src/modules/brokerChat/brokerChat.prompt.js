@@ -13,6 +13,7 @@ import { clockDateTime, clockDateTimeDay } from '../../constants/appClock.js'
 import { hash01 } from '../../lib/stableHash.js'
 import { leaksReasoning as sharedLeaksReasoning } from '../../lib/reasoningLeak.js'
 import { brokerTerms, termsLines } from '../../constants/accessorials.js'
+import { marketClaims, ratePushes } from './rateTalk.js'
 import { marketFacts, seasonNote, benchmarkAgeDays, STALE_AFTER_DAYS } from '../../constants/marketRates.js'
 
 const BANNED_WORDS = BANNED.source
@@ -146,9 +147,9 @@ export function marketBlock(posting, now = new Date()) {
     // A real reason earns a move under ON RATE's rules, not the whole ask.
     ...(weaker ? [
       '  - This load goes INTO a market that pays less than the national figure to',
-      '    leave. A carrier who asks for more because of that has a real point.',
-      '    Move for it under ON RATE -- part of the way, never the whole ask in one',
-      '    step.',
+      '    leave. A carrier who asks for more because of that has a real point --',
+      '    but it does not move you on their first push. On a later push it can,',
+      '    under ON RATE: part of the way, never the whole ask in one step.',
     // 2026-10-06 fourth run: told "reload out of savannah is terrible",
     // the broker said "I hear you on the Savannah reload" -- agreeing with a
     // claim its own figures contradict. "Say so" gave it nothing to say:
@@ -166,7 +167,8 @@ export function marketBlock(posting, now = new Date()) {
     ]),
     '  - If the carrier quotes the market at you and gets it right, you are',
     '    talking to someone who knows the business. Treat them that way. If',
-    '    they quote numbers that are wrong, say so.',
+    '    they quote numbers that are wrong, give them the real figure; never',
+    '    repeat theirs back as if it were true.',
     '  - These are averages for a whole region, not this lane. Never call one',
     '    "what this lane pays". Use them the way a person would, in passing',
     '    ("Great Lakes is paying right now"), never read out like a report.',
@@ -208,7 +210,53 @@ export function talkBlock(talk) {
   ]
 }
 
-export function buildBrokerSystemPrompt({ broker, posting, carrier = null, now = new Date(), talk = null }) {
+// What the dispatcher has said about the market and the rate, checked by
+// code (rateTalk.js) and put in front of the broker as fact. `said` is the
+// dispatcher's own texts in order, the one being answered last. Empty when
+// there is nothing to say, so a chat that has quoted no figure and pushed
+// no rate gets no extra lines.
+const label = (key) => String(key).replace(/-/g, ' ')
+
+export function rateTalkBlock({ posting, said = null }) {
+  if (!said || said.length === 0) return []
+  const out = []
+
+  const claims = marketClaims(said, posting)
+  if (claims.length > 0) {
+    out.push('WHAT THEY SAID ABOUT THE MARKET (checked against your DAT figures):')
+    for (const c of claims) {
+      const who = `${c.region} ${label(c.equipmentType)}`
+      const quoted = `$${c.claimed.toFixed(2)}/mi`
+      if (c.verdict === 'wrong') {
+        out.push(
+          `  They said ${who} ${c.basis} is ${quoted}. Your figure is $${c.real.toFixed(2)}/mi. That is not what DAT shows.`,
+          '  Give them your figure. Never repeat their number back as if it were true, and never agree with it.',
+        )
+      } else if (c.verdict === 'right') {
+        out.push(`  They said ${who} is ${quoted}. That matches your figure -- they know the market.`)
+      } else {
+        out.push(`  They said ${who} is ${quoted}. You have no figure for that this week: do not confirm it.`)
+      }
+    }
+    out.push('')
+  }
+
+  const pushes = ratePushes(said, posting)
+  if (pushes?.count === 1 && pushes.current) {
+    out.push(
+      `ON THE RATE SO FAR (counted from this chat): this is the first time they have asked for more than your $${posting.rateUsd}. Hold at $${posting.rateUsd} this time, whatever reason they give -- reload, deadhead, weight. No new figure. Give them your reason the number is what it is.`,
+      '',
+    )
+  } else if (pushes?.count >= 2) {
+    out.push(
+      `ON THE RATE SO FAR (counted from this chat): they have asked for more ${pushes.count} times. If they have given a real reason, you may come up part of the way.`,
+      '',
+    )
+  }
+  return out
+}
+
+export function buildBrokerSystemPrompt({ broker, posting, carrier = null, now = new Date(), talk = null, said = null }) {
   const rpm = (posting.rateUsd / posting.distanceMi).toFixed(2)
   const ceiling = ceilingFor(posting)
   const ceilingRpm = (ceiling / posting.distanceMi).toFixed(2)
@@ -262,6 +310,7 @@ export function buildBrokerSystemPrompt({ broker, posting, carrier = null, now =
     '',
     ...loadSituation({ posting, now }),
     ...marketBlock(posting, now),
+    ...rateTalkBlock({ posting, said }),
     ...talkBlock(talk),
     'HOW YOU TALK:',
     '- One to three sentences. Never a list, never a wall of text. This is a',
@@ -348,13 +397,14 @@ export function buildBrokerSystemPrompt({ broker, posting, carrier = null, now =
     '- Never say how much room you have left, and never use the words',
     '  "ceiling" or "limit" about your own number. "That\'s my best" is fine',
     '  when you mean it -- or when you want them to think so.',
-    '- Do not jump to it. The first time they push, hold at your posted',
-    '  number and tell them why it is what it is.',
+    '- Do not jump to it. The first time they push -- whatever the reason, a weak',
+    '  reload or deadhead included -- hold at your posted number, give no new',
+    '  figure, and tell them why it is what it is.',
     // 2026-10-06 fourth run: "I can't move it this first ask" -- the rule
     // read out, which tells the carrier to ask again.
     '- Hold without saying that you are holding: nothing that tells them',
     '  asking again will work.',
-    '- Move for a REASON, not for pressure. Heavy freight, a tight pickup',
+    '- From their second push on, move for a REASON, not for pressure. Heavy freight, a tight pickup',
     '  window, a lane out of a market nobody wants to be in, a long empty',
     '  run to get there — those earn money. "It is too cheap" on its own',
     '  does not. Come up part of the way, then part of the way again.',

@@ -14,6 +14,7 @@
 // still the record.
 
 import { asciiPunct } from '../src/lib/plainText.js'
+import { dollars } from '../src/modules/brokerChat/rateTalk.js'
 import { FALLBACK_REPLY as DRIVER_FALLBACK } from '../src/modules/driverChat/driverChat.prompt.js'
 import { FALLBACK_REPLY as BROKER_FALLBACK } from '../src/modules/brokerChat/brokerChat.prompt.js'
 
@@ -49,10 +50,9 @@ export function repeatsQuestion(reply, previousReply) {
   }))
 }
 
-// Dollar amounts as numbers: "$3,750" and "$3750" are the same figure.
-export function dollars(text) {
-  return (String(text).match(/\$\s?\d[\d,]*(\.\d+)?/g) ?? []).map((d) => Number(d.replace(/[$,\s]/g, '')))
-}
+// Dollar amounts as numbers: lives in rateTalk.js (src must not import from
+// scripts); re-exported so the checks and their callers keep one import.
+export { dollars }
 
 export const FELL_BACK = 'fell back'
 
