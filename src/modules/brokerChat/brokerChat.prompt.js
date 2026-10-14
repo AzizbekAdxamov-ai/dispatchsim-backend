@@ -13,6 +13,7 @@ import { clockDateTime, clockDateTimeDay } from '../../constants/appClock.js'
 import { hash01 } from '../../lib/stableHash.js'
 import { leaksReasoning as sharedLeaksReasoning } from '../../lib/reasoningLeak.js'
 import { brokerTerms, termsLines } from '../../constants/accessorials.js'
+import { loadingMode, tarpFor, securementFor, isOpenDeck } from '../../constants/freightHandling.js'
 import { marketClaims, ratePushes } from './rateTalk.js'
 import { marketFacts, seasonNote, benchmarkAgeDays, STALE_AFTER_DAYS } from '../../constants/marketRates.js'
 
@@ -256,6 +257,25 @@ export function rateTalkBlock({ posting, said = null }) {
   return out
 }
 
+// Tarps and securement for an open-deck load, from the freight and its
+// weight (src/constants/freightHandling.js). Empty for every other trailer,
+// so a dry van is never told about tarps.
+export function openDeckLines(posting) {
+  if (!isOpenDeck(posting)) return []
+  const tarp = tarpFor(posting)
+  const sec = securementFor(posting)
+  const piece = sec?.kind === 'chains'
+    ? `at least ${sec.count} chains (grade 70, 3/8 inch) for the machine`
+    : `at least ${sec?.count} four-inch straps over the top`
+  return [
+    `- This is an open-deck load. Tarps: ${tarp.needed ? `${tarp.kind} required` : 'none required'}.`
+      + (sec
+        ? ` Securement: by the weight it takes ${piece}${sec.kind === 'chains' ? '' : ', plus whatever each piece needs for its length (two for the first 10 feet, one more for every further 10)'} -- the driver secures it to the federal rule.`
+        : ' Securement: the driver secures it to the federal rule.')
+      + ' When asked, give these; never guess a different count and never send them to the shipper.',
+  ]
+}
+
 export function buildBrokerSystemPrompt({ broker, posting, carrier = null, now = new Date(), talk = null, said = null }) {
   const rpm = (posting.rateUsd / posting.distanceMi).toFixed(2)
   const ceiling = ceilingFor(posting)
@@ -300,6 +320,9 @@ export function buildBrokerSystemPrompt({ broker, posting, carrier = null, now =
     // own load's appointment. The board prints exact times, so they are
     // appointments, and the broker says so.
     '  Both are set appointments at those times -- not FCFS. If asked, say so.',
+    // Live or drop, from the equipment (src/constants/freightHandling.js):
+    // asked "live load or d&h?", brokers answered both ways on the same load.
+    `  Loading: ${loadingMode(posting)} at both ends. If asked, say so, once.`,
     '',
     // Without this the broker cannot tell "today" from "Friday": it was
     // given two dates and no calendar. On 2026-09-30 it answered "today
@@ -430,6 +453,7 @@ export function buildBrokerSystemPrompt({ broker, posting, carrier = null, now =
       '  the way any broker does. When asked, give BOTH: one temperature in °F',
       '  and continuous or start-stop. Never send them to the shipper for it.',
     ] : []),
+    ...openDeckLines(posting),
     // 2026-10-13 live session: "you'd check with your dispatcher", "check
     // with your office" -- said to the dispatcher, the one person they were
     // sending the carrier back to.

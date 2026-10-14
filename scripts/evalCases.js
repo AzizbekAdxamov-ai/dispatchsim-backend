@@ -15,6 +15,7 @@
 // read. The human grade in the dataset (accurate? why?) is the verdict.
 
 import { dollars, brokerReply, driverReply, isFallback, FELL_BACK } from './scenarioChecks.js'
+import { loadingMode, tarpFor, securementFor } from '../src/constants/freightHandling.js'
 import { marketClaims } from '../src/modules/brokerChat/rateTalk.js'
 import { asciiPunct } from '../src/lib/plainText.js'
 import { hoursMinutes } from '../src/constants/appClock.js'
@@ -31,6 +32,22 @@ const FUEL_OUT = /fuel('s| is)? (excluded|separate|extra|on top)|plus fuel|\bfsc
 // miles", not "what's the pu address?". Plain statements ("Copy that.",
 // "I need to get fuel before I roll") ask nothing about the load.
 const ASKS = /\?|(^|[.!]\s*)(need|send( me)?|gimme|give me|get me|shoot me|text me|tell me|let me know|what'?s|where|which|how)\b|\b(need|i'?ll need|send me)\b[^.!]{0,60}\b(address|miles|pu|pickup|drop|delivery|rate|appt|appointment|weight|commodity|info|details|bol)\b/i
+
+// EB08: drop and hook said of a live load (or live said of a drop). A denial
+// ("no drop and hook, it's live") is not the mistake.
+const SAYS_DROP = /\bdrop(?: and|-and|&| ?n) ?hook\b|\bd&h\b|\bdrop trailer\b/i
+const NEGATED_DROP = /\b(?:no|not|isn'?t|aren'?t|never)\b[^.!?]{0,25}(?:drop|d&h)/i
+const SAYS_LIVE = /\blive (?:load|unload)/i
+const NEGATED_LIVE = /\b(?:no|not|isn'?t|aren'?t|never)\b[^.!?]{0,25}live/i
+
+// EB10: a tarp answer that says none is needed, and a count said as a digit
+// or a word ("five straps").
+const NO_TARP = /\b(?:no|none|don'?t|doesn'?t|not|without)\b[^.!?]{0,30}\btarps?\b|\btarps?\b[^.!?]{0,25}\b(?:not (?:needed|required)|none|no need)\b/i
+const NUMBER_WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen', 'twenty']
+export function saysCount(reply, n) {
+  const word = NUMBER_WORDS[n]
+  return new RegExp(`\\b${n}\\b${word ? `|\\b${word}\\b` : ''}`, 'i').test(reply)
+}
 
 // Each case: id, chat, style (R rookie / P casual pro / H hard negotiator),
 // terms (what the line is testing), pick (which posting suits it, broker
@@ -109,11 +126,16 @@ export const BROKER_CASES = [
   {
     id: 'EB08', style: 'P', terms: ['appointment', 'FCFS', 'drop and hook', 'lumper'], pick: 'dryvan',
     line: 'appt or fcfs at pu? live load or d&h? who pays lumper',
-    expect: () => (r) => [
-      ...(/appointment|appt/i.test(r) ? [] : ['appointment not said']),
-      ...(/lumper/i.test(r) ? [] : ['lumper not answered']),
-      ...(/live|drop|d&h/i.test(r) ? [] : ['live / drop not answered']),
-    ],
+    expect: ({ posting } = {}) => (r) => {
+      const mode = posting ? loadingMode(posting) : null
+      return [
+        ...(/appointment|appt/i.test(r) ? [] : ['appointment not said']),
+        ...(/lumper/i.test(r) ? [] : ['lumper not answered']),
+        ...(/live|drop|d&h/i.test(r) ? [] : ['live / drop not answered']),
+        ...(mode === 'live load and live unload' && SAYS_DROP.test(r) && !NEGATED_DROP.test(r) ? ['says drop and hook on a live load'] : []),
+        ...(mode === 'drop and hook' && SAYS_LIVE.test(r) && !NEGATED_LIVE.test(r) ? ['says live load on a drop and hook'] : []),
+      ]
+    },
     good: 'Set appointments (not FCFS); live or drop, said once and kept; lumper paid by the broker against a receipt.',
   },
   {
@@ -128,7 +150,16 @@ export const BROKER_CASES = [
   {
     id: 'EB10', style: 'P', terms: ['tarps', 'securement'], pick: 'openDeck',
     line: 'tarps needed? how many straps',
-    expect: () => (r) => (/tarp/i.test(r) ? [] : ['tarps not answered']),
+    expect: ({ posting } = {}) => (r) => {
+      if (!/tarp/i.test(r)) return ['tarps not answered']
+      if (!posting) return []
+      const tarp = tarpFor(posting)
+      const sec = securementFor(posting)
+      return [
+        ...(tarp && NO_TARP.test(r) === tarp.needed ? ['tarp answer wrong'] : []),
+        ...(sec && !saysCount(r, sec.count) ? [`${sec.kind} ${sec.count} not said`] : []),
+      ]
+    },
     good: 'Tarps yes/no (and what size if yes) and the securement, as a broker who knows the freight.',
   },
 ]
