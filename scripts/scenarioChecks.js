@@ -77,7 +77,7 @@ export function anyReply(reply, previousReply) {
 const CEILING = /\b(ceiling|my limit|room left|room before)\b/i
 // 2026-10-13 live: "you'd check with your dispatcher" / "check with your
 // office" -- said to the dispatcher, so it sends them back to themselves.
-const SENDS_BACK = /\b(you'?d check with|check with your)\b/i
+const SENDS_BACK = /\b(you(?:['’]?d| would| should|['’]ll want to)\s+check with|check with (?:your|ur))\b/i
 const AGREES = /\b(i hear you|you'?re right|fair point|good point|can'?t argue)\b/i
 
 export function brokerReply(reply, previousReply) {

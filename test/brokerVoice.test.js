@@ -132,3 +132,18 @@ test('no two brokers share a voice', () => {
   const seen = new Set(PERSONAS_052.map((p) => p.persona))
   assert.equal(seen.size, PERSONAS_052.length)
 })
+
+// Kills: a broker that does not know it is talking to the dispatcher, or
+// that is not told to stop sending the dispatcher back to their own side
+// (live 2026-10-13), with or without a known carrier.
+test('the prompt says the counterpart is the dispatcher and forbids sending them back', () => {
+  const withCarrier = buildBrokerSystemPrompt({ broker: BROKER, posting: posting(), now: NOW, carrier: { name: 'Keystone Line Haul', mcNumber: 'MC-741309' } })
+  const without = buildBrokerSystemPrompt({ broker: BROKER, posting: posting(), now: NOW })
+  assert.match(withCarrier, /talking to the dispatcher at Keystone Line Haul/)
+  assert.match(without, /talking to the carrier's dispatcher/)
+  for (const p of [withCarrier, without]) {
+    assert.match(p, /IS the carrier's dispatcher/)
+    assert.match(p, /Never send\s+them back to their own side/)
+    assert.match(p, /never tell them to go ask the shipper/)
+  }
+})

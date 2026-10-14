@@ -152,3 +152,19 @@ test('the migration that fixes the Grace bio matches the old text and promises n
   assert.doesNotMatch(old.replace(from, to), PROMISE)
   assert.doesNotMatch(to, PROMISE)
 })
+
+// Kills: a broker sending the dispatcher back to their own side going
+// unflagged (live 2026-10-13: live:52, live:56, live:58), a pattern that
+// misses the curly apostrophe or "you would/should", or one that flags the
+// broker naming their own accounting or "recheck with your".
+test('a broker telling the dispatcher to check with their own side is flagged', () => {
+  const FLAG = ['sends the dispatcher back to check']
+  assert.deepEqual(brokerReply("I don't have the drop details in front of me; you'd check with the shipper on whether it's a live load or a drop."), FLAG)
+  assert.deepEqual(brokerReply("I don't know where your truck is. You'd check with your dispatcher on that."), FLAG)
+  assert.deepEqual(brokerReply("I don't set payment terms. You'd check with your office on quick pay options."), FLAG)
+  assert.deepEqual(brokerReply('You\u2019d check with your office on that.'), FLAG)
+  assert.deepEqual(brokerReply('You should check with your office.'), FLAG)
+  assert.deepEqual(brokerReply('Check with ur dispatcher.'), FLAG)
+  assert.deepEqual(brokerReply("Quick pay is our accounting's call."), [])
+  assert.deepEqual(brokerReply('We check with our accounting on that, and I recheck with your numbers.'), [])
+})
