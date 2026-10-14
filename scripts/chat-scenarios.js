@@ -40,6 +40,7 @@ import { chatText } from './seed/aiClient.js'
 import { chatTextRecorded, usedToday, budgetRefusal } from '../src/modules/chat/scriptRequests.js'
 import { tooLongForChat, dailyBudgetFor } from '../src/constants/chatBudget.js'
 import appConfig from '../src/config.js'
+import { asciiPunct } from '../src/lib/plainText.js'
 import { brokerReply, driverReply, BROKER_EXPECT, DRIVER_EXPECT, summarize } from './scenarioChecks.js'
 import { marketFacts } from '../src/constants/marketRates.js'
 import { relativeDay, APP_TIMEZONE } from '../src/constants/appClock.js'
@@ -155,7 +156,7 @@ async function brokerConversation({ key, title, posting, lines }, carrier, confi
     const reply = await ask(config, bp.buildMessages({ systemPrompt, history, newMessage: text }), 'broker')
     const findings = reply.startsWith('(FAILED')
       ? ['no reply']
-      : [...brokerReply(reply, previous), ...(expect[turn]?.(reply) ?? [])]
+      : [...brokerReply(reply, previous), ...(expect[turn]?.(asciiPunct(reply)) ?? [])]
     results.push({ scenario: key, run, findings })
     say(`- **D:** \`${text}\``)
     say(`- **B:** ${reply}${flags(reply, bp, findings)}`)
@@ -234,7 +235,7 @@ async function driverConversation({ key, title, load, lines }, base, config, run
     const reply = await ask(config, dp.buildMessages({ systemPrompt, history, newMessage: text }), 'driver')
     const findings = reply.startsWith('(FAILED')
       ? ['no reply']
-      : [...driverReply(reply, previous, { onTheRoad: base.driver.onTheRoad }), ...(expect[turn]?.(reply) ?? [])]
+      : [...driverReply(reply, previous, { onTheRoad: base.driver.onTheRoad }), ...(expect[turn]?.(asciiPunct(reply)) ?? [])]
     results.push({ scenario: key, run, findings })
     say(`- **D:** \`${text}\``)
     say(`- **G:** ${reply}${flags(reply, dp, findings)}`)

@@ -87,3 +87,29 @@ test('ED06/ED08/ED10 her character and her request', () => {
   assert.deepEqual(d('ED08').expect()('Copy that.'), ['her own request not raised'])
   assert.deepEqual(driverFindings('Waiting on the dock, box is loaded.', () => [], { onTheRoad: true }), ['at a dock while on the road'])
 })
+
+// Kills: matching before normalizing (gpt-oss writes U+2011)
+test('EB01 sees an all-in written with a non-breaking hyphen and an em dash', () => {
+  const reply = 'Sorry for the hold‑up—yes, that $3,820 rate is all‑in, no fuel surcharge on top.'
+  assert.deepEqual(brokerFindings(reply, b('EB01').expect()), [])
+})
+
+// Kills: PROMISE missing a curly apostrophe
+test("a curly-apostrophe \"I'll confirm\" is still a promise to get back", () => {
+  assert.ok(brokerFindings('I’ll confirm the exact count when the truck arrives.', () => []).includes('promises to get back'))
+  assert.ok(driverFindings('I’ll check on that.', () => [], { onTheRoad: false }).includes('promises to get back'))
+})
+
+// Kills: ED07 counting only "?" as asking
+test('ED07 counts a request for the details as asking, a bare acknowledgement is not', () => {
+  const check = d('ED07').expect()
+  assert.deepEqual(check('Copy that. Need pickup address, miles, and delivery info.'), [])
+  assert.deepEqual(check('Copy that. Send me the details.'), [])
+  assert.deepEqual(check('Copy that.'), ['asks nothing about the load'])
+  assert.deepEqual(check('Copy that. I need to get fuel before I roll.'), ['asks nothing about the load'])
+})
+
+// Kills: the dash-led line being left out of the markdown count after normalizing (accepted trade-off: "- " leads a bullet)
+test('a reply that opens with an em dash is read as a bulleted line once folded', () => {
+  assert.deepEqual(brokerFindings('— yes, all-in.', () => []), ['markdown'])
+})

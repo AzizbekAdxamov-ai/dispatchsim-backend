@@ -13,6 +13,7 @@
 // pass. What it flags is a line to read, not a verdict; the transcript is
 // still the record.
 
+import { asciiPunct } from '../src/lib/plainText.js'
 import { FALLBACK_REPLY as DRIVER_FALLBACK } from '../src/modules/driverChat/driverChat.prompt.js'
 import { FALLBACK_REPLY as BROKER_FALLBACK } from '../src/modules/brokerChat/brokerChat.prompt.js'
 
@@ -59,11 +60,17 @@ export const FELL_BACK = 'fell back'
 // "give me a minute", which is a promise -- but it is the system's line,
 // not the model's, so it is its own result and not a failure to fix.
 export function isFallback(reply) {
-  const t = String(reply).trim()
-  return t === DRIVER_FALLBACK || t === BROKER_FALLBACK
+  // Both sides folded: the broker's line carries an em dash, and callers
+  // hand this a reply that was already folded to ASCII.
+  const t = asciiPunct(reply).trim()
+  return t === asciiPunct(DRIVER_FALLBACK) || t === asciiPunct(BROKER_FALLBACK)
 }
 
-export function anyReply(reply, previousReply) {
+export function anyReply(rawReply, rawPrevious) {
+  // Checks read plain ASCII punctuation (asciiPunct is idempotent, so the
+  // brokerReply / driverReply callers may have normalized already).
+  const reply = asciiPunct(rawReply)
+  const previousReply = rawPrevious ? asciiPunct(rawPrevious) : rawPrevious
   if (isFallback(reply)) return [FELL_BACK]
   const out = []
   if (PROMISE.test(reply)) out.push('promises to get back')
@@ -80,7 +87,9 @@ const CEILING = /\b(ceiling|my limit|room left|room before)\b/i
 const SENDS_BACK = /\b(you(?:['’]?d| would| should|['’]ll want to)\s+check with|check with (?:your|ur))\b/i
 const AGREES = /\b(i hear you|you'?re right|fair point|good point|can'?t argue)\b/i
 
-export function brokerReply(reply, previousReply) {
+export function brokerReply(rawReply, rawPrevious) {
+  const reply = asciiPunct(rawReply)
+  const previousReply = rawPrevious ? asciiPunct(rawPrevious) : rawPrevious
   const out = anyReply(reply, previousReply)
   if (CEILING.test(reply)) out.push('names a ceiling or room')
   if (SENDS_BACK.test(reply)) out.push('sends the dispatcher back to check')
@@ -149,7 +158,9 @@ const AT_A_DOCK = /\b(on the dock|at the ([a-z]+ )?(dock|drop|receiver|shipper))
 const CLOCK = /\b\d{1,2}(:\d{2})?\s?(am|pm)\b/i
 const NYC = /new york|\bnyc\b|\bthe city\b/i
 
-export function driverReply(reply, previousReply, { onTheRoad }) {
+export function driverReply(rawReply, rawPrevious, { onTheRoad }) {
+  const reply = asciiPunct(rawReply)
+  const previousReply = rawPrevious ? asciiPunct(rawPrevious) : rawPrevious
   const out = anyReply(reply, previousReply)
   if (onTheRoad && AT_A_DOCK.test(reply)) out.push('at a dock while on the road')
   return out

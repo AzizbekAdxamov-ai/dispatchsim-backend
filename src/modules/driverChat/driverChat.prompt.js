@@ -24,6 +24,7 @@ import { DRIVER_STAGES, SETTLEMENT_TERM_SIM_DAYS, describeWait } from '../../con
 import { clockDateTime, clockWhen } from '../../constants/appClock.js'
 import { readPreferences, hasRequests, preferenceConflicts, avoidedPlaces } from '../../constants/driverPreferences.js'
 import { emptyRunToPickup } from '../loads/whereabouts.js'
+import { leaksReasoning as sharedLeaksReasoning } from '../../lib/reasoningLeak.js'
 
 // Same list the broker uses -- assistant-speak breaks a persona instantly.
 const BANNED_WORDS = 'certainly, assist, delve, moreover, furthermore, I apologize, as an AI'
@@ -398,19 +399,10 @@ export function trippedBannedWord(text) {
 export const FALLBACK_REPLY = 'Give me a minute, I am coming up on a scale.'
 
 // Chain-of-thought leaking into the reply is fatal for a persona. Same
-// tells as the broker prompt; observed live on 2026-08-31.
-const REASONING_TELLS = [
-  /^\s*(okay|ok|alright|so)[,:]?\s+(so\s+)?(the\s+)?(user|dispatcher|they)\b/i,
-  /^\s*(here'?s|this is)\s+(my|a|the)?\s*(thinking|reasoning|thought|plan|approach)/i,
-  /^\s*(let me|i need to|i should|we need to|we should|i'?ll need to)\s+(think|respond|answer|reply|consider|figure)/i,
-  /^\s*the (user|driver|dispatcher) (is |wants|asked|says|has)/i,
-  /^\s*we (need|have) to respond as\b/i,
-  /^\s*<(think|thinking|reasoning)>/i,
-  /^\s*\*\*?(thinking|reasoning|analysis)\*\*?/i,
-]
-
+// tells as the broker prompt (src/lib/reasoningLeak.js); observed live on
+// 2026-08-31.
 export function leaksReasoning(text) {
-  return REASONING_TELLS.some((re) => re.test(text))
+  return sharedLeaksReasoning(text, { roleWord: 'driver' })
 }
 
 // Exported so a test can assert every stage the payroll rules can produce

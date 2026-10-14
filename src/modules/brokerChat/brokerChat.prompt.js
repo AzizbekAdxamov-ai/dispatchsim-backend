@@ -11,6 +11,7 @@
 import { BANNED } from '../../../scripts/seed/validate.js'
 import { clockDateTime, clockDateTimeDay } from '../../constants/appClock.js'
 import { hash01 } from '../../lib/stableHash.js'
+import { leaksReasoning as sharedLeaksReasoning } from '../../lib/reasoningLeak.js'
 import { brokerTerms, termsLines } from '../../constants/accessorials.js'
 import { marketFacts, seasonNote, benchmarkAgeDays, STALE_AFTER_DAYS } from '../../constants/marketRates.js'
 
@@ -433,18 +434,7 @@ export const FALLBACK_REPLY =
 // "We need to respond as Devin Marlowe... We need to push back at least
 // once..." instead of a reply.
 //
-// Patterns are anchored to the START of the reply. A broker can legitimately
-// say "we need a reefer" mid-sentence; only an opening like that is a tell.
-const REASONING_TELLS = [
-  /^\s*(okay|ok|alright|so)[,:]?\s+(so\s+)?(the\s+)?(user|carrier|they)\b/i,
-  /^\s*(here'?s|this is)\s+(my|a|the)?\s*(thinking|reasoning|thought|plan|approach)/i,
-  /^\s*(let me|i need to|i should|we need to|we should|i'?ll need to)\s+(think|respond|answer|reply|consider|figure)/i,
-  /^\s*the (user|carrier|dispatcher) (is |wants|asked|says|has)/i,
-  /^\s*we (need|have) to respond as\b/i,
-  /^\s*<(think|thinking|reasoning)>/i,
-  /^\s*\*\*?(thinking|reasoning|analysis)\*\*?/i,
-]
-
+// The patterns live in src/lib/reasoningLeak.js, shared with the driver chat.
 export function leaksReasoning(text) {
-  return REASONING_TELLS.some((re) => re.test(text))
+  return sharedLeaksReasoning(text, { roleWord: 'carrier' })
 }

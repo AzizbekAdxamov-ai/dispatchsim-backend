@@ -15,6 +15,7 @@
 // read. The human grade in the dataset (accurate? why?) is the verdict.
 
 import { dollars, brokerReply, driverReply, isFallback, FELL_BACK } from './scenarioChecks.js'
+import { asciiPunct } from '../src/lib/plainText.js'
 import { hoursMinutes } from '../src/constants/appClock.js'
 import { humanDuration } from '../src/modules/driverChat/driverChat.prompt.js'
 
@@ -25,7 +26,10 @@ const BREAKS_CHARACTER = /\b(i am|i'm|im) (an? )?(ai|bot|language model|assistan
 const CLASSIFIER_ONLY = /^User Safety:\s*(?:safe|unsafe)$/i
 export const CLASSIFIER_ONLY_FINDING = 'classifier-only reply'
 const FUEL_OUT = /fuel('s| is)? (excluded|separate|extra|on top)|plus fuel|\bfsc (is )?(on top|extra|separate)/i
-const QUESTION = /\?/
+// ED07 counts a request as asking too: dispatchers type "need pu address and
+// miles", not "what's the pu address?". Plain statements ("Copy that.",
+// "I need to get fuel before I roll") ask nothing about the load.
+const ASKS = /\?|(^|[.!]\s*)(need|send( me)?|gimme|give me|get me|shoot me|text me|tell me|let me know|what'?s|where|which|how)\b|\b(need|i'?ll need|send me)\b[^.!]{0,60}\b(address|miles|pu|pickup|drop|delivery|rate|appt|appointment|weight|commodity|info|details|bol)\b/i
 
 // Each case: id, chat, style (R rookie / P casual pro / H hard negotiator),
 // terms (what the line is testing), pick (which posting suits it, broker
@@ -164,7 +168,7 @@ export const DRIVER_CASES = [
   {
     id: 'ED07', style: 'P', terms: [],
     line: 'Grace got a dallas load next, pu tmrw 8am',
-    expect: () => (r) => (QUESTION.test(r) ? [] : ['asks nothing about the load']),
+    expect: () => (r) => (ASKS.test(r) ? [] : ['asks nothing about the load']),
     good: 'Takes it as news and asks what she needs: miles, where exactly, the drop.',
   },
   {
@@ -188,14 +192,18 @@ export const DRIVER_CASES = [
 ]
 
 // Findings on any reply of either chat, plus the case's own.
+// The checks run on the reply with typographic punctuation folded to ASCII
+// (the stored reply is untouched).
 export function brokerFindings(reply, check) {
-  if (reply.startsWith('(FAILED')) return ['no reply']
-  if (isFallback(reply)) return [FELL_BACK]
-  return [...brokerReply(reply, null), ...(CLASSIFIER_ONLY.test(reply.trim()) ? [CLASSIFIER_ONLY_FINDING] : []), ...(ASKS_PAPERWORK.test(reply) ? ['asks for paperwork'] : []), ...check(reply)]
+  const r = asciiPunct(reply)
+  if (r.startsWith('(FAILED')) return ['no reply']
+  if (isFallback(r)) return [FELL_BACK]
+  return [...brokerReply(r, null), ...(CLASSIFIER_ONLY.test(r.trim()) ? [CLASSIFIER_ONLY_FINDING] : []), ...(ASKS_PAPERWORK.test(r) ? ['asks for paperwork'] : []), ...check(r)]
 }
 
 export function driverFindings(reply, check, { onTheRoad }) {
-  if (reply.startsWith('(FAILED')) return ['no reply']
-  if (isFallback(reply)) return [FELL_BACK]
-  return [...driverReply(reply, null, { onTheRoad }), ...(CLASSIFIER_ONLY.test(reply.trim()) ? [CLASSIFIER_ONLY_FINDING] : []), ...check(reply)]
+  const r = asciiPunct(reply)
+  if (r.startsWith('(FAILED')) return ['no reply']
+  if (isFallback(r)) return [FELL_BACK]
+  return [...driverReply(r, null, { onTheRoad }), ...(CLASSIFIER_ONLY.test(r.trim()) ? [CLASSIFIER_ONLY_FINDING] : []), ...check(r)]
 }
