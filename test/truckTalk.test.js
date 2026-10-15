@@ -123,6 +123,20 @@ test('"tomorrow", "next week" and "will be" give no current location, and do not
   assert.equal(truckCity(['truck is in seattle, can she make it by tomorrow?'])?.city, 'Seattle')
 })
 
+// Kills: the future-after-city guard missing weekday plans such as "next Monday".
+test('a next-weekday plan after the city gives no current truck location', () => {
+  assert.equal(truckCity(['truck is in Seattle next Monday']), null)
+  assert.equal(truckCity(['truck is in Seattle next Mon']), null)
+  assert.equal(truckCity(['truck is in Reno', 'truck is in Seattle next Monday']), null)
+  assert.equal(truckCity(['truck is in Seattle, can she make it by next Monday?'])?.city, 'Seattle')
+})
+
+// Kills: the future-after-city guard missing the optional "on" before a weekday plan.
+test('an on-next-weekday plan after the city gives no current truck location', () => {
+  assert.equal(truckCity(['truck is in Seattle on next Monday']), null)
+  assert.equal(truckCity(['truck is in Seattle, can she make it by next Monday?'])?.city, 'Seattle')
+})
+
 // Kills: a future statement reaching the prompt as a fact
 test('a truck that will be somewhere later produces no block', () => {
   assert.deepEqual(truckBlock({ posting: posting(tomorrow8), said: ['my truck will be in seattle tomorrow'], now: NOW }), [])

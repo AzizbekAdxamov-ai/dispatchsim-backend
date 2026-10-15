@@ -60,22 +60,36 @@ export function placesIn(text, { except = null, guard = true } = {}) {
 // with an order cue (see cued below). Scanned from CITIES on 2026-10-15;
 // "Reading" and "Independence" are not in the list. A name added to CITIES
 // later that is also a word belongs here.
-const COMMON_WORD_CITIES = new Set([
-  'Augusta', 'Austin', 'Burlington', 'Casper', 'Charlotte', 'Cleveland', 'Columbia', 'Columbus', 'Dayton',
-  'Dover', 'Erie', 'Eugene', 'Huntington', 'Jackson', 'Lansing', 'Lexington', 'Lincoln', 'Macon', 'Madison',
-  'Manchester', 'Mobile', 'Ontario', 'Orlando', 'Phoenix', 'Providence', 'Reading', 'Independence', 'Richmond',
-  'Salem', 'Savannah', 'Trenton', 'Washington',
-].map((n) => n.toLowerCase()))
+// The list is kept short on purpose: a name here is dropped unless a cue
+// shows it is a place, so every extra name costs real offers ("got a load
+// cleveland pu fri 8am", "pickup is orlando" were being lost). Only names
+// people also say as a word or a first name. "Reading" and "Independence"
+// are not in CITIES yet; they are listed for when they are.
+export const COMMON_WORD_CITIES = Object.freeze([
+  'Mobile', 'Jackson', 'Austin', 'Madison', 'Lincoln', 'Charlotte', 'Augusta', 'Savannah', 'Columbia', 'Salem',
+  'Reading', 'Independence',
+])
+const GUARDED = new Set(COMMON_WORD_CITIES.map((n) => n.toLowerCase()))
 
-// "load in/from/out of X", "pickup in X", "pu X" / "pu in X".
-const CUE_BEFORE = /\b(?:loads?|pickups?|pick ?up|picking up)\s+(?:in|from|out of|at|near)\s+$|\b(?:pu|p\/u)\s+(?:(?:in|from|at|near|out of)\s+)?$/i
-const LOAD_AFTER = /^\s*loads?\b/i
+// Before the city: "load(s) in/from/out of/at/near X", "pickup/pu [is|:]
+// [in|at|from|near|out of] [the] X", "picks up in X".
+const CUE_BEFORE = /\b(?:loads?)\s+(?:in|from|out of|at|near)\s+$|\b(?:pickups?|pick ?up|pu|p\/u)\s*(?::|is)?\s*(?:(?:in|at|from|near|out of)\s+)?(?:the\s+)?$|\bpicks?\s+up\s+(?:in|at|from|near|out of)\s+$/i
+// Right before the city, "load X" -- which is also "load jackson called me
+// about". Counts only when the message also has a pickup word or a time.
+const LOAD_BARE_BEFORE = /\bloads?\s+$/i
+const PICKUP_OR_TIME_RE = /\b(?:pu|p\/u|pick ?up|picks? up|today|tmrw|tomorrow|tonight|(?:sun|mon|tue|tues|wed|thu|thur|thurs|fri|sat)(?:day)?)\b|\b\d{1,2}(?::\d{2})?\s*[ap]m\b|\b\d{1,2}:\d{2}\b/i
+// After the city: "X load", "X, load is ready", "X pu", "X pickup".
+const CUE_AFTER = /^\s*,?\s*(?:loads?|pu|p\/u|pick ?up|pickups?)\b/i
 
 // Whether a common-word city is being used as a place: an order cue before
-// it, "X load" after it, or one end of an "X to Y" pair.
+// it, a load / pickup word after it, an explicit state ("austin tx"), or one
+// end of an "X to Y" pair.
 function cued(src, e, prev, next) {
-  return CUE_BEFORE.test(src.slice(0, e.index))
-    || LOAD_AFTER.test(src.slice(e.end))
+  const before = src.slice(0, e.index)
+  return CUE_BEFORE.test(before)
+    || (LOAD_BARE_BEFORE.test(before) && PICKUP_OR_TIME_RE.test(src))
+    || CUE_AFTER.test(src.slice(e.end))
+    || e.stated === true
     || Boolean(next && LINK_RE.test(src.slice(e.end, next.index)))
     || Boolean(prev && LINK_RE.test(src.slice(prev.end, e.index)))
 }
@@ -89,7 +103,7 @@ function scan(text, { guard = true } = {}) {
   const raw = scanRaw(text)
   if (!guard) return raw
   const src = String(text ?? '')
-  return raw.filter((e, i) => e.ambiguous || !COMMON_WORD_CITIES.has(e.city.toLowerCase()) || cued(src, e, raw[i - 1], raw[i + 1]))
+  return raw.filter((e, i) => e.ambiguous || !GUARDED.has(e.city.toLowerCase()) || cued(src, e, raw[i - 1], raw[i + 1]))
 }
 
 function scanRaw(text) {
@@ -108,7 +122,7 @@ function scanRaw(text) {
     const byState = stated && STATES.has(stated) ? sameName.find((c) => c.state === stated) : null
     const hit = byState ?? (sameName.length === 1 ? sameName[0] : null)
     if (!hit) { out.push({ ambiguous: true, index: m.index, end: m.index + m[0].length }); continue }
-    out.push({ ...hit, index: m.index, end: m.index + m[0].length + (byState && stateMatch ? stateMatch[0].length : 0) })
+    out.push({ ...hit, index: m.index, end: m.index + m[0].length + (byState && stateMatch ? stateMatch[0].length : 0), stated: Boolean(byState) })
   }
   return out
 }
@@ -164,6 +178,8 @@ const WEEKDAYS = { sun: 0, mon: 1, tue: 2, tues: 2, wed: 3, thu: 4, thur: 4, thu
 const DAY_RE = /\b(today|tmrw|tmr|tomorrow|tomorow|(?:sun|mon|tues?|wed|thu(?:rs?)?|fri|sat)(?:day|sday|nesday|rsday|urday)?)\b/i
 const TIME_AMPM_RE = /\b(\d{1,2})(?::([0-5]\d))?\s*([ap])\.?m\b\.?/i
 const TIME_24H_RE = /\b([01]?\d|2[0-3]):([0-5]\d)\b/
+const DELIVERY_CUE_RE = /\b(?:delivery|deliver(?:s|ed|ing)?|drop(?:off)?|del)\b/gi
+const PICKUP_CUE_RE = /\b(?:pu|p\/u|pick ?up|picks? up|picking up)\b/gi
 
 function zonedParts(ms) {
   const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
@@ -193,19 +209,35 @@ function centralInstant(y, m, d, hh, mm) {
 // occurrence, today's if that hour is still ahead.
 export function pickupWhen(text, now = new Date()) {
   const src = String(text ?? '')
-  const day = src.match(DAY_RE)
+  const days = [...src.matchAll(new RegExp(DAY_RE.source, 'gi'))]
+  let day = null
+  let timeText = ''
+  for (let i = 0; i < days.length; i++) {
+    const candidate = days[i]
+    const beforeDay = src.slice(0, candidate.index)
+    const lastDelivery = [...beforeDay.matchAll(DELIVERY_CUE_RE)].at(-1)?.index ?? -1
+    const lastPickup = [...beforeDay.matchAll(PICKUP_CUE_RE)].at(-1)?.index ?? -1
+    // Skip a delivery date, then keep looking for an explicit pickup date.
+    if (lastDelivery > lastPickup) continue
+    const through = days[i + 1]?.index ?? src.length
+    const afterDay = src.slice(candidate.index + candidate[0].length, through).split(DELIVERY_CUE_RE, 1)[0]
+    const beforeTime = lastPickup >= 0 ? src.slice(lastPickup, candidate.index) : ''
+    timeText = TIME_AMPM_RE.test(afterDay) || TIME_24H_RE.test(afterDay) ? afterDay : beforeTime
+    day = candidate
+    break
+  }
   if (!day) return null
 
   let hh
   let mm
-  const ap = src.match(TIME_AMPM_RE)
+  const ap = timeText.match(TIME_AMPM_RE)
   if (ap) {
     const h = Number(ap[1])
     if (h < 1 || h > 12) return null
     hh = (h % 12) + (ap[3].toLowerCase() === 'p' ? 12 : 0)
     mm = Number(ap[2] ?? 0)
   } else {
-    const t = src.match(TIME_24H_RE)
+    const t = timeText.match(TIME_24H_RE)
     if (!t) return null
     hh = Number(t[1])
     mm = Number(t[2])
@@ -226,13 +258,19 @@ export function pickupWhen(text, now = new Date()) {
 
 // -- The facts the prompt is given ---------------------------------------------
 
-// "ur on the NYC load", "you're on the dallas load", "your dallas load":
-// something said about the load she has, not a load offered to her.
-// "your next load" / "your new load" ARE offers and do not match.
-const HER_LOAD_RE = /\b(?:ur|u r|you'?re|youre|you are|your)\s+(?:on\s+|in\s+|taking\s+|driving\s+|running\s+)?(?:the\s+|that\s+|this\s+)?(?!next\b|new\b|another\b)[a-z.]+(?:\s[a-z.]+)?\s+loads?\b|\b(?:ur|u r|you'?re|youre|you are)\s+on\b/i
+// "ur on the NYC load", "you're on the dallas load", "you are driving /
+// running ...": something said about the load she has, not a load offered
+// to her. "your dallas load pu tmrw 8am" and "got your dallas load" ARE
+// offers: only on / driving / running makes it hers.
+const HER_LOAD_RE = /\b(?:ur|u r|you'?re|youre|you are)\s+(?:on|driving|running)\b/i
+
+// "your dallas load is set" -- with no pickup word or time in it -- is
+// also about the load she has; "your next / new load" never is.
+const YOUR_LOAD_RE = /\byour\s+(?!next\b|new\b|another\b)[a-z.]+(?:\s[a-z.]+)?\s+loads?\b/i
 
 export function aboutHerLoad(text) {
-  return HER_LOAD_RE.test(String(text ?? ''))
+  const src = String(text ?? '')
+  return HER_LOAD_RE.test(src) || (YOUR_LOAD_RE.test(src) && !PICKUP_OR_TIME_RE.test(src))
 }
 
 // The pickup time that belongs to the chosen load (message `chosen`, city C):

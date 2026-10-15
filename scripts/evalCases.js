@@ -36,7 +36,7 @@ const ASKS = /\?|(^|[.!]\s*)(need(?! to\b)|send( me)?|gimme|give me|get me|shoot
 // ED07 / ED11: saying the pickup cannot be made, and ED12: turning down a
 // load she can. "later" counts as the first -- asking for a later time.
 // A bare "later" is not it ("talk to you later"): it must be a later pickup.
-const CANNOT_MAKE = /\bcan'?t (?:make|do|get|be)\b|\bcannot\b|\bwon'?t (?:make|be)\b|\bnot mak|\btoo far\b|\blater (?:pickup|pick up|time|slot|appt|appointment|window)\b|\bpush (?:it|the pickup)\b/i
+const CANNOT_MAKE = /\bcan'?t (?:make|do|get|be)\b|\bcannot\b|\bwon'?t (?:make|be)\b|\bnot mak|\btoo far\b|\blater (?:pickup|pick up|time|slot|appt|appointment|window)\b|\bpush (?:it|the pickup)\b|\bnot (?:gonna )?happen|\bno can do\b|\bcan'?t get there\b|\bwon'?t get there\b|\bno way\b|\bnot making (?:it|that)\b/i
 // "can't wait" is not a refusal.
 const TURNS_DOWN = /\bcan'?t (?:make|do|take)\b|\bcannot\b|\bwon'?t (?:make|take)\b|\bnot taking\b|\bnot mak|\btoo far\b|\bno way\b|\bnot doing\b|\bpass on\b/i
 // Miles a reply states, as numbers: "about 1,980 mi", "2500 miles".
@@ -56,7 +56,7 @@ export function milesOff(reply, offer) {
 const GIVES_REASON = /\bturns?\b|\bturn around\b|\bparking\b|\bpark\b|\btickets?\b|\bstreets?\b|\btraffic\b|\btight (?:streets?|turns?|spots?|corners?|quarters)\b|\bno room\b|\bfit\b|\bin there\b/i
 // Something beyond the line's own words ("2500 miles" is the question):
 // the empty run, the clock, the cost.
-const GIVES_RUN_REASON = /\bempty\b|\bdeadhead\b|\bclock\b|\bhours?\b|\bhrs\b|\brest\b|\bfuel\b|\btoo far\b|\bdays\b|\bnot worth\b|\bfor free\b|\bunpaid\b/i
+const GIVES_RUN_REASON = /\bempty\b|\bdeadhead\b|\bclock\b|\bhours?\b|\bhrs\b|\brest\b|\bfuel\b|\btoo far\b|\b\d+\s*days\b|\bmy days\b|\bnot worth\b|\bfor free\b|\bunpaid\b/i
 
 // EB08: drop and hook said of a live load (or live said of a drop). A denial
 // ("no drop and hook, it's live") is not the mistake.

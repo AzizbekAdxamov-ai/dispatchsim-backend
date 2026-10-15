@@ -36,6 +36,11 @@ const TRUCK_IN_RE = new RegExp(
 // by tomorrow?" is still a present location.
 const FUTURE_RE = /\b(?:next week|next (?:mon|tue|wed|thu|fri|sat|sun)\w*|tomorrow|tmrw|tonight|will be|gonna be|going to be|'ll be)\b/i
 
+// A future word right after the city ("in dallas next week", "in dallas
+// tomorrow morning"). A comma or a question ends it: "truck is in seattle,
+// can she make it by tomorrow?" is still where the truck is.
+const FUTURE_AFTER_RE = /^\s*(?:on\s+)?(?:next week|next (?:mon|tue|wed|thu|fri|sat|sun)\w*|tomorrow|tmrw|tonight|later)\b/i
+
 // The city in the dispatcher's latest messages that says where the truck is
 // NOW, as a known city -- or null. Newest message first: the newest
 // statement wins, so an older "truck is in seattle" is dead once a newer
@@ -54,6 +59,7 @@ export function truckCity(texts) {
         if (!first || first.index !== 0) return null
         const sentenceStart = Math.max(src.lastIndexOf('.', m.index), src.lastIndexOf('!', m.index), src.lastIndexOf('?', m.index), src.lastIndexOf(';', m.index)) + 1
         const future = FUTURE_RE.test(src.slice(sentenceStart, m.index + m[0].length))
+          || FUTURE_AFTER_RE.test(after.slice(first.end))
         return { city: first.city, state: first.state, future }
       })
       .filter(Boolean)

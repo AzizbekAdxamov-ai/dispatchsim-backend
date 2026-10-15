@@ -79,6 +79,34 @@ test('"pu tmrw 8am" on Tuesday 9:28 AM Central is Wednesday 8:00 AM Central', ()
   assert.equal(pickupWhen('2500 miles tmrw', NOW), null)
 })
 
+// Kills: the first day and hour in an offer accepted as pickup even when labeled delivery.
+test('delivery time is not treated as the pickup time of a Dallas offer', () => {
+  const text = 'got a dallas load, delivery tomorrow 8am'
+  assert.equal(pickupWhen(text, NOW), null)
+  const offer = offerFacts({ driver: seattle, texts: [text], now: NOW })
+  assert.equal(offer.city, 'Dallas')
+  assert.equal(offer.pickupAt, null)
+  assert.equal(offer.makesIt, null)
+  assert.equal(pickupWhen('got a dallas load, pu tomorrow 8am, delivery Friday 5pm', NOW).toISOString(), '2026-10-14T13:00:00.000Z')
+})
+
+// Kills: returning null after the first delivery date hides a later explicit pickup date.
+test('a pickup time after a delivery time still belongs to the offer', () => {
+  const now = new Date('2026-10-15T15:00:00Z')
+  const text = 'got a dallas load, delivery tomorrow 8am, pu Friday 5pm'
+  assert.equal(pickupWhen(text, now).toISOString(), '2026-10-16T22:00:00.000Z')
+  const offer = offerFacts({ driver: seattle, texts: [text], now })
+  assert.equal(offer.pickupAt.toISOString(), '2026-10-16T22:00:00.000Z')
+  assert.equal(pickupWhen('got a dallas load, pu Friday 5pm, delivery tomorrow 8am', now).toISOString(), '2026-10-16T22:00:00.000Z')
+})
+
+// Kills: a later delivery hour paired with an earlier pickup day.
+test('an hour stated only for delivery does not complete a pickup day', () => {
+  const now = new Date('2026-10-15T15:00:00Z')
+  assert.equal(pickupWhen('got a dallas load, pickup tomorrow, delivery Friday 8am', now), null)
+  assert.equal(pickupWhen('got a dallas load, pickup tomorrow, delivery 8am Friday', now), null)
+})
+
 // Kills: a weekday read as always today, or a past hour read as still ahead
 test('a weekday that is today but already past means next week', () => {
   const next = pickupWhen('pu tue 8am', NOW)
