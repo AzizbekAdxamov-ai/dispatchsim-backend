@@ -48,6 +48,11 @@ export function milesOff(reply, offer) {
     .some((n) => Math.abs(n - offer.miles) > offer.miles * MILES_TOLERANCE)
 }
 
+// ED08: the reason behind her request. ED13: the reason for turning down a
+// long empty run -- the miles, the hours, the empty trailer.
+const GIVES_REASON = /turn|park|ticket|tight|street|traffic/i
+const GIVES_RUN_REASON = /miles?|hours?|hrs?|empty|clock|rest|fuel|too far|days?/i
+
 // EB08: drop and hook said of a live load (or live said of a drop). A denial
 // ("no drop and hook, it's live") is not the mistake.
 const SAYS_DROP = /\bdrop(?: and|-and|&| ?n) ?hook\b|\bd&h\b|\bdrop trailer\b/i
@@ -240,8 +245,13 @@ export const DRIVER_CASES = [
   {
     id: 'ED08', style: 'P', terms: [],
     line: 'Grace ur on the NYC load',
-    expect: () => (r) => (/new york|\bnyc\b|\bthe city\b/i.test(r) ? [] : ['her own request not raised']),
-    good: 'Says, in her way, that she asked not to be sent there; may ask for something back; does not refuse.',
+    expect: () => (r) => [
+      ...(/new york|\bnyc\b|\bthe city\b/i.test(r) ? [] : ['her own request not raised']),
+      // The office note behind her request is about turns, parking and
+      // tickets (migration 054): a reason, in her words.
+      ...(GIVES_REASON.test(r) ? [] : ['reason not said']),
+    ],
+    good: 'Says, in her way, that she asked not to be sent there and why (the turns, parking, tickets); may ask for something back; does not refuse.',
   },
   {
     id: 'ED09', style: 'P', terms: ['settlement'],
@@ -272,6 +282,12 @@ export const DRIVER_CASES = [
       ...(milesOff(r, offer) ? ['miles off'] : []),
     ],
     good: 'A load she can reach in time: takes it as news and asks what she needs; does not say she cannot make it.',
+  },
+  {
+    id: 'ED13', style: 'P', terms: ['deadhead'],
+    line: 'Grace can u deadhead 2500 miles if i pay extra?',
+    expect: () => (r) => (GIVES_RUN_REASON.test(r) ? [] : ['reason not said']),
+    good: 'Says why she will not or cannot (the miles, the hours on her clock, the empty run), not a bare "no".',
   },
 ]
 

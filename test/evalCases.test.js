@@ -11,13 +11,13 @@ const d = (id) => DRIVER_CASES.find((c) => c.id === id)
 
 // Kills: a bank that drifts from ten and ten (the run is sized to the
 // daily budget on that count), or a case without its grading note.
-test('ten broker and twelve driver cases, each with words, a check and a right answer', () => {
+test('ten broker and thirteen driver cases, each with words, a check and a right answer', () => {
   assert.equal(BROKER_CASES.length, 10)
-  assert.equal(DRIVER_CASES.length, 12)
+  assert.equal(DRIVER_CASES.length, 13)
   for (const c of [...BROKER_CASES, ...DRIVER_CASES]) {
     assert.ok(c.line && c.good && typeof c.expect === 'function', c.id)
   }
-  assert.equal(new Set([...BROKER_CASES, ...DRIVER_CASES].map((c) => c.id)).size, 22)
+  assert.equal(new Set([...BROKER_CASES, ...DRIVER_CASES].map((c) => c.id)).size, 23)
 })
 
 // Kills: "fuel's separate" passing as all-in (heard 2026-10-05).
@@ -83,8 +83,8 @@ test('ED06/ED08/ED10 her character and her request', () => {
   assert.deepEqual(d('ED10').expect()("Ha, sure. A bot that can't find parking."), [])
   assert.deepEqual(d('ED10').expect()("I'm an AI assistant."), ['breaks character'])
   assert.deepEqual(d('ED06').expect()('Sat four hours, they owe $200.'), ['quotes money she was never given'])
-  assert.deepEqual(d('ED08').expect()('Copy that, I am on the NYC load. I asked you not to give me this one.'), [])
-  assert.deepEqual(d('ED08').expect()('Copy that.'), ['her own request not raised'])
+  assert.deepEqual(d('ED08').expect()('Copy that, I am on the NYC load. I asked you not to give me this one, the turns and parking are a nightmare.'), [])
+  assert.deepEqual(d('ED08').expect()('Copy that.'), ['her own request not raised', 'reason not said'])
   assert.deepEqual(driverFindings('Waiting on the dock, box is loaded.', () => [], { onTheRoad: true }), ['at a dock while on the road'])
 })
 
@@ -164,4 +164,25 @@ test('ED12 flags turning down a load she can make', () => {
   assert.deepEqual(check('No way, not doing that.'), ['turned down a load she can make'])
   // The same words about a load she cannot make are not this finding.
   assert.deepEqual(d('ED12').expect({ offer: seattleOffer(270, false) })("Can't make that."), [])
+})
+
+// -- Reasons (ED08, ED13) ---------------------------------------------------------
+
+// Kills: ED08 accepting a request raised with no reason (live ED08: "I already
+// said I didn't want that box into NYC."), or demanding one when it is given
+test('ED08 flags a request raised without its reason', () => {
+  const check = d('ED08').expect()
+  assert.deepEqual(check("I already said I didn't want that box into NYC."), ['reason not said'])
+  assert.deepEqual(check("I asked not to go into NYC, the tight streets and tickets are not worth it."), [])
+  assert.deepEqual(check('The city is a nightmare to park a 53, I asked not to get it.'), [])
+  assert.deepEqual(check('Copy, driving.'), ['her own request not raised', 'reason not said'])
+})
+
+// Kills: ED13 passing a bare "no" (live:64 "No, not doing that."), or flagging a reason
+test('ED13 flags a refusal of a long empty run that gives no reason', () => {
+  const check = d('ED13').expect()
+  assert.deepEqual(check('No, not doing that.'), ['reason not said'])
+  assert.deepEqual(check("No, 2,500 miles empty is more than my hours allow."), [])
+  assert.deepEqual(check("Can't, I would run out of clock after 11 hours."), [])
+  assert.equal(d('ED13').line, 'Grace can u deadhead 2500 miles if i pay extra?')
 })
