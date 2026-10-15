@@ -700,3 +700,168 @@ test('a closed think block is stripped and an unclosed one is left for the leak 
   assert.equal((await sendOnce(config, say('<think>x</think>\n\nCopy that'))).reply, 'Copy that')
   assert.equal((await sendOnce(config, say('<think>x'))).reply, '<think>x')
 })
+
+// -- 060: what each request came to ------------------------------------------
+
+const GROQ_TPM = 'Rate limit reached for model `primary` in organization `org_x` service tier `on_demand` on tokens per minute (TPM): Limit 8000, Used 6583, Requested 3104. Please try again in 12.5s.'
+const USAGE = { prompt_tokens: 2410, completion_tokens: 180, total_tokens: 2590, completion_tokens_details: { reasoning_tokens: 95 }, prompt_tokens_details: { cached_tokens: 0 } }
+const GOOD_WITH_USAGE = { ...GOOD, usage: USAGE }
+
+// Kills: the primary's 429 reason swallowed by completeWithFallback (EB04,
+// 2026-10-14) -- the fallback answered and nothing said why.
+test('a primary TPM 429 and the fallback that answered are both recorded', async () => {
+  const { chatText } = await import('../scripts/seed/aiClient.js')
+  const attempts = []
+  let call = 0
+  const fake = { fetch: async () => (++call === 1 ? throttled(GROQ_TPM) : { ok: true, json: async () => GOOD_WITH_USAGE }) }
+  await withFetch(fake, () => chatText({
+    messages: [], config: { baseUrl: GROQ, apiKey: 'x', model: 'primary', fallbackModel: 'backup' },
+    onAttempt: (a) => attempts.push(a),
+  }))
+  assert.equal(attempts.length, 2)
+  assert.equal(attempts[0].n, 1)
+  assert.equal(attempts[0].model, 'primary')
+  assert.equal(attempts[0].cause, 'first')
+  assert.equal(attempts[0].status, 429)
+  assert.equal(attempts[0].outcome, 'rate_limited')
+  assert.equal(attempts[0].rateLimit.code, 'TPM')
+  assert.equal(attempts[0].rateLimit.limit, 8000)
+  assert.equal(attempts[0].rateLimit.used, 6583)
+  assert.equal(attempts[0].rateLimit.requested, 3104)
+  assert.equal(attempts[0].rateLimit.retryAfterSec, 12.5)
+  assert.equal(attempts[1].n, 2)
+  assert.equal(attempts[1].model, 'backup')
+  assert.equal(attempts[1].cause, 'fallback')
+  assert.equal(attempts[1].outcome, 'ok')
+  assert.equal(attempts[1].rateLimit, null)
+})
+
+// Kills: the rate-limit reason missing from the error the caller catches,
+// on any of the three places a 429 is thrown (chat-eval names the code in
+// "rate limit (TPM)" from it).
+test('a thrown 429 carries its parsed reason, on every throw path', async () => {
+  const { chatText } = await import('../scripts/seed/aiClient.js')
+  const config = { baseUrl: GROQ, apiKey: 'x', model: 'primary' }
+  const withRetryAfter = (value, message) => ({
+    ok: false, status: 429, headers: { get: () => value }, text: async () => JSON.stringify({ error: { message } }),
+  })
+  // A long wait: stops at once as a rate limit.
+  await assert.rejects(
+    withFetch({ fetch: async () => withRetryAfter('60', GROQ_TPM) }, () => chatText({ messages: [], config })),
+    (err) => err.rateLimited === true && err.rateLimit?.code === 'TPM' && err.rateLimit.retryAfterSec === 60,
+  )
+  // A proved daily cap.
+  await assert.rejects(
+    withFetch({ fetch: async () => throttled(GROQ_RPD) }, () => chatText({ messages: [], config })),
+    (err) => err.quotaExhausted === true && err.rateLimit?.code === 'RPD',
+  )
+  // Every retry used up (Retry-After 0 keeps the retries instant).
+  await assert.rejects(
+    withFetch({ fetch: async () => withRetryAfter('0', GROQ_TPM) }, () => chatText({ messages: [], config })),
+    (err) => err.rateLimited === true && /attempt 4\/4/.test(err.message) && err.rateLimit?.code === 'TPM',
+  )
+})
+
+// Kills: the second try labelled 'first' (or the call's own cause ignored),
+// so a regeneration cannot be told from a first reply in the record.
+test('causes: more_room for the second try, and the caller own cause for the first request', async () => {
+  const { chatText } = await import('../scripts/seed/aiClient.js')
+  const config = { baseUrl: OPENROUTER, apiKey: 'x', model: 'm' }
+  const attempts = []
+  const thought = { ...THOUGHT_ONLY, usage: { prompt_tokens: 100, completion_tokens: 2000, total_tokens: 2100 } }
+  await withFetch(fakeProvider([thought, GOOD_WITH_USAGE]), () => chatText({
+    messages: [], config, maxTokens: 2000, onAttempt: (a) => attempts.push(a), cause: 'regenerate',
+  }))
+  assert.deepEqual(attempts.map((a) => [a.n, a.cause, a.outcome]), [[1, 'regenerate', 'out_of_room'], [2, 'more_room', 'ok']])
+  assert.equal(attempts[0].usage.total, 2100)
+})
+
+// Kills: usage dropped from an attempt, a missing usage block invented as
+// zeros, or reasoning/cached reported as 0 when the provider said nothing.
+test('usage is parsed from the response, and null when there is none', async () => {
+  const { chatText, usageOf } = await import('../scripts/seed/aiClient.js')
+  const config = { baseUrl: OPENROUTER, apiKey: 'x', model: 'm' }
+  const seen = []
+  await withFetch(fakeProvider([GOOD_WITH_USAGE]), () => chatText({ messages: [], config, onAttempt: (a) => seen.push(a) }))
+  assert.deepEqual(seen[0].usage, { prompt: 2410, completion: 180, reasoning: 95, cached: 0, total: 2590 })
+  await withFetch(fakeProvider([GOOD]), () => chatText({ messages: [], config, onAttempt: (a) => seen.push(a) }))
+  assert.equal(seen[1].usage, null)
+  assert.equal(usageOf(undefined), null)
+  assert.equal(usageOf({}), null)
+  assert.deepEqual(usageOf({ prompt_tokens: 10, completion_tokens: 5 }), { prompt: 10, completion: 5, reasoning: null, cached: null, total: 15 })
+})
+
+// Kills: a backoff retry not reported (the 503 is a request that spent
+// budget), or reported with the first request's cause.
+test('a 503 then success is two attempts: first, then backoff', async () => {
+  const { chatText } = await import('../scripts/seed/aiClient.js')
+  const attempts = []
+  let call = 0
+  const fake = { fetch: async () => (++call === 1
+    ? { ok: false, status: 503, headers: { get: () => '0' }, text: async () => '' }
+    : { ok: true, json: async () => GOOD }) }
+  await withFetch(fake, () => chatText({
+    messages: [], config: { baseUrl: OPENROUTER, apiKey: 'x', model: 'm' }, onAttempt: (a) => attempts.push(a),
+  }))
+  assert.deepEqual(attempts.map((a) => [a.n, a.cause, a.status, a.outcome]),
+    [[1, 'first', 503, 'http_error'], [2, 'backoff', 200, 'ok']])
+})
+
+// Kills: a code path that sends a request without reporting it (or reports
+// one it did not send), so the record and the daily request count disagree.
+test('there is exactly one attempt per request sent, on every path', async () => {
+  const { chatText } = await import('../scripts/seed/aiClient.js')
+  const base = { baseUrl: OPENROUTER, apiKey: 'x', model: 'primary' }
+  const paths = {
+    plain: { config: base, replies: [() => ({ ok: true, json: async () => GOOD })] },
+    outOfRoom: { config: base, replies: [() => ({ ok: true, json: async () => THOUGHT_ONLY }), () => ({ ok: true, json: async () => GOOD })] },
+    fallback: { config: { ...base, fallbackModel: 'backup' }, replies: [() => throttled('upstream model is busy'), () => ({ ok: true, json: async () => GOOD })] },
+    network: { config: base, replies: [() => { throw new Error('boom') }, () => ({ ok: true, json: async () => GOOD })] },
+    failed: { config: { ...base, fallbackModel: 'backup' }, replies: [() => throttled('upstream model is busy'), () => throttled('upstream model is busy')], rejects: true },
+  }
+  for (const [name, { config, replies, rejects }] of Object.entries(paths)) {
+    let sent = 0
+    let call = 0
+    const attempts = []
+    const fake = { fetch: async () => replies[Math.min(call++, replies.length - 1)]() }
+    const run = () => withFetch(fake, () => chatText({
+      messages: [], config, maxTokens: 2000, onRequest: () => { sent += 1 }, onAttempt: (a) => attempts.push(a),
+    }))
+    if (rejects) await assert.rejects(run())
+    else await run()
+    assert.equal(attempts.length, sent, `${name}: ${attempts.length} attempts for ${sent} requests`)
+    assert.deepEqual(attempts.map((a) => a.n), attempts.map((_, i) => i + 1), `${name}: numbering`)
+  }
+})
+
+// Kills: Groq's two models given different (or no) token limits, or a
+// limit with no source/date.
+test('Groq publishes token limits for both chat models, with source and date', () => {
+  const groq = PROVIDERS[GROQ]
+  for (const model of ['openai/gpt-oss-120b', 'qwen/qwen3.8-27b']) {
+    assert.deepEqual(groq.models[model], { rpm: 30, rpd: 1000, tpm: 8000, tpd: 200000 })
+  }
+  assert.equal(groq.checked, '2026-10-15')
+  assert.match(groq.source, /console\.groq\.com\/docs\/rate-limits/)
+})
+
+// Kills: percent computed from the wrong limit, the warning threshold
+// off (80% is a warning, 79.99% is not), a guessed limit for an unknown
+// model, or the source/date left out of the answer.
+test('the daily token status warns at 80% and says nothing it does not know', async () => {
+  const { dailyTokenStatus } = await import('../src/constants/chatBudget.js')
+  const low = dailyTokenStatus(GROQ, 'openai/gpt-oss-120b', 100000)
+  assert.equal(low.limit, 200000)
+  assert.equal(low.pct, 0.5)
+  assert.equal(low.warn, false)
+  assert.equal(low.source, 'https://console.groq.com/docs/rate-limits')
+  assert.equal(low.checked, '2026-10-15')
+  assert.equal(dailyTokenStatus(GROQ, 'qwen/qwen3.8-27b', 159999).warn, false)
+  assert.equal(dailyTokenStatus(GROQ, 'qwen/qwen3.8-27b', 160000).warn, true)
+  assert.equal(dailyTokenStatus(GROQ, 'qwen/qwen3.8-27b', 250000).warn, true)
+  const unknown = dailyTokenStatus(GROQ, 'some/other-model', 999999)
+  assert.equal(unknown.limit, null)
+  assert.equal(unknown.pct, null)
+  assert.equal(unknown.warn, false)
+  assert.equal(dailyTokenStatus(OPENROUTER, 'x', 5).limit, null)
+})

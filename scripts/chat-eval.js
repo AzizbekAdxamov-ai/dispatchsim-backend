@@ -8,6 +8,7 @@
 //   npm run chat:eval -- driver    # Grace only (~10)
 //   npm run chat:eval -- broker --case EB01  # one broker case
 //   npm run chat:eval -- driver --case ED01  # one Grace case
+//   npm run chat:eval -- --gap 20            # wait 20 s between cases (per-minute token limit)
 //
 // Azizbek, 2026-10-09: from today the AIs are checked on a fixed set of
 // trade phrases, and every answer is kept -- what it said, what data it
@@ -36,8 +37,11 @@ import { fileURLToPath } from 'node:url'
 import { pool, query } from '../src/db/pool.js'
 import { chatConfigFor } from '../src/modules/chat/chatProvider.js'
 import { chatText } from './seed/aiClient.js'
+import { sleep } from './seed/config.js'
 import { chatTextRecorded, usedToday, budgetRefusal } from '../src/modules/chat/scriptRequests.js'
-import { dailyBudgetFor } from '../src/constants/chatBudget.js'
+import { dailyBudgetFor, dailyTokenStatus } from '../src/constants/chatBudget.js'
+import { DAILY_TOKENS_SQL } from '../src/modules/chat/chatBudget.sql.js'
+import { attemptsLine, attemptFields, runTokenSummary, tokenPlanWarning, DEFAULT_REPLY_TOKENS } from './evalAttempts.js'
 import appConfig from '../src/config.js'
 import { marketFacts } from '../src/constants/marketRates.js'
 import { relativeDay, clockDateTime } from '../src/constants/appClock.js'
@@ -68,6 +72,17 @@ if ((casePosition !== -1 && !caseId) || (caseFlag === '' && !caseId)
   console.error(`Unknown or mismatched case ID: ${caseId ?? '(missing)'}`)
   process.exit(1)
 }
+// --gap <seconds>: a pause between cases. Each case sends the whole system
+// prompt (~3,000 tokens) and the per-minute token limit is 8,000, so several
+// cases in a row can be refused for tokens although requests are far under.
+const gapFlag = args.find((a) => a.startsWith('--gap='))?.slice('--gap='.length)
+const gapPosition = args.indexOf('--gap')
+const gapRaw = gapFlag ?? (gapPosition === -1 ? '0' : args[gapPosition + 1])
+const gapSec = Number(gapRaw)
+if (!Number.isFinite(gapSec) || gapSec < 0) {
+  console.error(`Invalid --gap value: ${gapRaw ?? '(missing)'} (seconds, 0 or more)`)
+  process.exit(1)
+}
 const outDir = join(here, '..', '..', 'reports', 'eval')
 const startedAt = new Date()
 const runId = nextEvalRunId(outDir, startedAt)
@@ -77,6 +92,7 @@ const rows = []
 let requests = 0
 let retries = 0
 let semanticFailure = false
+let asked = 0
 
 // Only errors created here with fixed text or a case-bank ID may be shown
 // at the terminal. Database/provider errors can carry query or prompt data.
@@ -94,18 +110,22 @@ const promptVersion = (file) => promptVersionOf(join(here, '..', 'src', 'modules
 
 async function ask(config, messages, side) {
   let answeredModel = config.model
+  const attempts = []
+  if (asked++ > 0 && gapSec > 0) await sleep(gapSec * 1000)
   try {
     const reply = await chatTextRecorded({
       chatText, source: 'eval', side, messages, config,
       onRequest: () => { requests += 1 },
       onRetry: () => { retries += 1 },
       onModel: (model) => { answeredModel = model },
+      onAttempt: (a) => { attempts.push(a) },
     })
-    return { reply: reply.trim(), model: answeredModel }
+    return { reply: reply.trim(), model: answeredModel, attempts }
   } catch (err) {
     // Fail the run without printing a provider body that may echo prompt
     // content. A failed request is not a model answer or a gradeable row.
-    const kind = err.quotaExhausted ? 'daily cap' : err.rateLimited ? 'rate limit' : 'request error'
+    const code = err.rateLimit?.code
+    const kind = err.quotaExhausted ? 'daily cap' : err.rateLimited ? `rate limit${code ? ` (${code})` : ''}` : 'request error'
     throw safeEvalError(`Chat evaluation stopped after ${requests} provider request(s): ${kind}`)
   }
 }
@@ -125,6 +145,7 @@ function record(fields) {
   say(`- **Dispatcher:** \`${row.line}\``)
   say(`- **${row.chat === 'broker' ? 'Broker' : 'Grace'}:** ${row.reply}`)
   say(`- **Answering model:** \`${row.model}\``)
+  say(`- **Requests:** ${attemptsLine(row.attempts)}`)
   say(`- **Automatic findings:** ${row.findings.length ? row.findings.join(' · ') : 'none'}`)
   say(`- **A right answer:** ${row.good}`)
   say('- **Accurate?** ___  **Why?** ___')
@@ -177,7 +198,7 @@ async function brokerRun(carrier) {
       talk: talkFacts([line], posting.equipmentType),
       said: [line],
     })
-    const { reply, model } = await ask(config, bp.buildMessages({ systemPrompt, history: [], newMessage: line }), 'broker')
+    const { reply, model, attempts } = await ask(config, bp.buildMessages({ systemPrompt, history: [], newMessage: line }), 'broker')
     const rpm = (posting.rateUsd / posting.distanceMi).toFixed(2)
     const side = (s) => (s.source === 'regional' ? `${s.region} $${s.linehaul}` : `${s.region ?? '?'} (no regional figure)`)
     record({
@@ -198,6 +219,7 @@ async function brokerRun(carrier) {
       systemPrompt,
       reply,
       findings: brokerFindings(reply, c.expect({ posting, market, terms, line })),
+      ...attemptFields(attempts),
       human: null,
     })
   }
@@ -223,7 +245,7 @@ async function driverRun(carrier) {
     const fixture = FIXTURE_LOAD_CASES.has(c.id)
     const load = fixture ? nyc : ctx.load
     const systemPrompt = dp.buildDriverSystemPrompt({ driver: ctx.driver, standing, load, carrier })
-    const { reply, model } = await ask(config, dp.buildMessages({ systemPrompt, history: [], newMessage: c.line }), 'driver')
+    const { reply, model, attempts } = await ask(config, dp.buildMessages({ systemPrompt, history: [], newMessage: c.line }), 'driver')
     const situation = dp.situationLines({ driver: ctx.driver, load }).map((l) => l.trim())
     record({
       runId, at: new Date().toISOString(), chat: 'driver', caseId: c.id, style: c.style, terms: c.terms, line: c.line, good: c.good,
@@ -237,6 +259,7 @@ async function driverRun(carrier) {
         + ` · pay: ${standing.unpaidCount > 0 ? `owed $${Math.round(standing.owedUsd)} (${standing.unpaidCount})` : 'nothing owed'}`,
       systemPrompt,
       reply,
+      ...attemptFields(attempts),
       findings: driverFindings(reply, c.expect({ driver: ctx.driver, load, standing, fuelPct: dp.fuelPercent(ctx.driver) }), { onTheRoad: ctx.driver.onTheRoad }),
       human: null,
     })
@@ -256,6 +279,24 @@ if (refusal) {
   console.error(refusal)
   await pool.end()
   process.exit(1)
+}
+
+// Tokens, not requests, are what a full run runs out of first. A warning
+// only (2026-10-15): the plan still runs.
+try {
+  const today = (await query(DAILY_TOKENS_SQL)).rows
+  const spent = today.reduce((s, r) => s + r.total, 0)
+  const sent = today.reduce((s, r) => s + r.requests, 0)
+  const avgTokens = spent > 0 && sent > 0 ? spent / sent : DEFAULT_REPLY_TOKENS
+  for (const w of sides) {
+    const cfg = chatConfigFor(w)
+    const usedTokens = today.find((r) => r.model === cfg.model)?.total ?? 0
+    const status = dailyTokenStatus(cfg.baseUrl, cfg.model, usedTokens)
+    const warning = tokenPlanWarning({ planned, avgTokens, limit: status.limit, used: usedTokens })
+    if (warning) console.warn(`${w}: ${warning}`)
+  }
+} catch {
+  console.warn("Could not read today's token usage; skipping the token check.")
 }
 
 let aborted = null
@@ -283,6 +324,7 @@ try {
     say('')
     say(`Cases completed: ${rows.length} · with automatic findings: ${flagged.length}${flagged.length ? ` (${flagged.map((r) => r.caseId).join(', ')})` : ''}`)
     say(`Requests sent: ${requests}${retries ? ` (${retries} second ${retries === 1 ? 'try' : 'tries'})` : ''}`)
+    say(runTokenSummary(rows).line)
     mkdirSync(outDir, { recursive: true })
     const mdFile = writeEvalReport(outDir, runId, md.join('\n') + '\n')
     appendFileSync(join(outDir, 'dataset.jsonl'), rows.map((r) => JSON.stringify(r)).join('\n') + '\n')

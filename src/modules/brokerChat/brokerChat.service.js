@@ -146,6 +146,10 @@ export async function sendMessage({ conversationId, userId, text }) {
   // primary was throttled; the turn log records that one.
   let answeredModel = config.model
   const onModel = (model) => { answeredModel = model }
+  // What each request came to (060): status, 429 reason, tokens. Numbered
+  // across the whole turn, the regeneration included.
+  const attempts = []
+  const onAttempt = (a) => attempts.push({ ...a, n: attempts.length + 1 })
 
   let reply
   try {
@@ -157,6 +161,7 @@ export async function sendMessage({ conversationId, userId, text }) {
       config,
       onRequest,
       onModel,
+      onAttempt,
     }))
 
     // Two ways a reply can be unusable, both regenerated once and then
@@ -194,6 +199,8 @@ export async function sendMessage({ conversationId, userId, text }) {
         config,
         onRequest,
         onModel,
+        onAttempt,
+        cause: 'regenerate',
       }))
       if (unusable(reply)) reply = FALLBACK_REPLY
     }
@@ -229,7 +236,7 @@ export async function sendMessage({ conversationId, userId, text }) {
       model: answeredModel, promptVersion: PROMPT_VERSION, systemPrompt, history, text,
       imageCount: 0, reply, regeneratedBecause: regenerated,
       fellBack: reply === FALLBACK_REPLY, error: failure, providerRequests: spent,
-      onTheRoad: false,
+      attempts, onTheRoad: false,
     })).catch((e) => {
       console.error(`[brokerChat] could not write the turn log for message ${dispatcherMessage.id}: ${e.message}`)
     })

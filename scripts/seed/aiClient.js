@@ -11,6 +11,7 @@
 
 import { chatMaxTokens, chatReasoningCap, CHAT_REPLY_TOKENS, dailyCapScope, groqReasoningParams, isDailyCap } from '../../src/constants/chatBudget.js'
 import { sleep } from './config.js'
+import { parseRateLimit } from '../../src/lib/rateLimitReason.js'
 
 const MAX_ATTEMPTS = 4
 
@@ -55,7 +56,7 @@ function stripFences(text) {
 // request back verbatim. The key is removed from the result regardless,
 // because "the provider would not do that" is not a guarantee anyone here
 // can make about every provider this app may be pointed at.
-async function safeProviderMessage(response, apiKey) {
+async function safeProviderMessage(response, apiKey, maxLen = 300) {
   let text
   try {
     text = await response.text()
@@ -71,12 +72,32 @@ async function safeProviderMessage(response, apiKey) {
   }
   if (typeof message !== 'string' || message.trim() === '') return null
 
-  let out = message.trim().slice(0, 300)
+  let out = message.trim().slice(0, maxLen)
   if (apiKey) out = out.split(apiKey).join('<KEY>')
   // Any key-shaped token, whether or not it is the one in use: a provider
   // echoing a DIFFERENT key back is still a key on someone's screen.
   out = out.replace(/\b(sk|gsk|key)-[A-Za-z0-9_-]{8,}/gi, '<KEY>')
   return out
+}
+
+// What a response says it cost, in the provider's own counts. null when the
+// response carries no usage block. `reasoning` and `cached` are null rather
+// than 0 when the provider does not report them: "not reported" and "none"
+// are different facts.
+export function usageOf(usage) {
+  if (!usage || typeof usage !== 'object') return null
+  const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null)
+  const prompt = num(usage.prompt_tokens)
+  const completion = num(usage.completion_tokens)
+  const total = num(usage.total_tokens)
+  if (prompt == null && completion == null && total == null) return null
+  return {
+    prompt: prompt ?? 0,
+    completion: completion ?? 0,
+    reasoning: num(usage.completion_tokens_details?.reasoning_tokens),
+    cached: num(usage.prompt_tokens_details?.cached_tokens),
+    total: total ?? (prompt ?? 0) + (completion ?? 0),
+  }
 }
 
 // Returns the assistant message's raw text content (not yet JSON-parsed).
@@ -101,7 +122,12 @@ export function completionBody({ model, messages, temperature, maxTokens, reason
 // requests (055), and the only place that knows how many went out is here.
 // A 429 that was refused is counted too: whether the provider charged it is
 // the provider's business, and counting high stops early rather than late.
-async function requestCompletion({ system, user, messages, config, temperature = 0.8, maxTokens, reasoningMaxTokens = null, onRequest = null, stopOnRateLimit = false, maxAttempts = MAX_ATTEMPTS }) {
+//
+// `onAttempt` is told what each of those requests came to -- status, outcome,
+// the parsed 429 reason, the tokens -- for the record only. Nothing here
+// decides anything from it. `firstCause` says why the first request was
+// sent; the ones after it are 'backoff'.
+async function requestCompletion({ system, user, messages, config, temperature = 0.8, maxTokens, reasoningMaxTokens = null, onRequest = null, onAttempt = null, firstCause = 'first', stopOnRateLimit = false, maxAttempts = MAX_ATTEMPTS }) {
   const url = `${config.baseUrl}/chat/completions`
   // `messages` wins when given (multi-turn conversation); system/user is the
   // single-shot shape the seed generator uses. One retry/backoff
@@ -120,6 +146,10 @@ async function requestCompletion({ system, user, messages, config, temperature =
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     let response
+    const cause = attempt === 1 ? firstCause : 'backoff'
+    const report = (status, outcome, extra = {}) => onAttempt?.({
+      n: attempt, model: config.model, cause, status, outcome, rateLimit: null, usage: null, ...extra,
+    })
     onRequest?.()
     try {
       response = await fetch(url, {
@@ -136,6 +166,7 @@ async function requestCompletion({ system, user, messages, config, temperature =
       // reported, never the underlying error object (it can echo the
       // request back, including headers, on some fetch implementations).
       lastNetworkError = new Error(`AI request failed: network error (attempt ${attempt}/${maxAttempts})`)
+      report(null, 'network')
       if (attempt === maxAttempts) throw lastNetworkError
       await sleep(backoffDelayMs(attempt))
       continue
@@ -143,6 +174,7 @@ async function requestCompletion({ system, user, messages, config, temperature =
 
     if (response.ok) {
       const data = await response.json()
+      const usage = usageOf(data?.usage)
       const message = data?.choices?.[0]?.message
       let content = message?.content
       // Some models (qwen on Groq among them) put a CLOSED <think>…</think>
@@ -159,16 +191,17 @@ async function requestCompletion({ system, user, messages, config, temperature =
         // when that is what happened, the error says so and says how many
         // tokens went where.
         const reasoning = typeof message?.reasoning === 'string' ? message.reasoning : ''
-        const usage = data?.usage
         if (reasoning.trim() !== '') {
           const err = new Error(
             `AI returned reasoning but no reply (${reasoning.length} chars of reasoning, `
-            + `${usage?.completion_tokens ?? '?'} completion tokens of a ${maxTokens ?? '?'} budget). `
+            + `${data?.usage?.completion_tokens ?? '?'} completion tokens of a ${maxTokens ?? '?'} budget). `
             + 'This model needs a larger max_tokens, a lower reasoning effort, or replacing.',
           )
           err.outOfRoom = true
+          report(response.status ?? 200, 'out_of_room', { usage })
           throw err
         }
+        report(response.status ?? 200, 'empty', { usage })
         throw new Error('AI response had no message content')
       }
       // Cut off mid-sentence: the budget ran out after the reply had
@@ -177,14 +210,22 @@ async function requestCompletion({ system, user, messages, config, temperature =
       if (data?.choices?.[0]?.finish_reason === 'length') {
         const err = new Error(`AI reply was cut off at the ${maxTokens ?? '?'}-token budget (${content.trim().length} chars)`)
         err.outOfRoom = true
+        report(response.status ?? 200, 'cut_off', { usage })
         throw err
       }
+      report(response.status ?? 200, 'ok', { usage })
       return content
     }
 
     const retryAfterMs = parseRetryAfterMs(response.headers.get('retry-after'))
-    const why = response.status === 429 || response.status < 500
-      ? await safeProviderMessage(response, config.apiKey) : null
+    // Read in full so the rate-limit reason can be parsed from the whole
+    // message; what is kept and shown is still the first 300 characters.
+    const fullWhy = response.status === 429 || response.status < 500
+      ? await safeProviderMessage(response, config.apiKey, Infinity) : null
+    const why = fullWhy == null ? null : fullWhy.slice(0, 300)
+    const rateLimit = response.status === 429
+      ? parseRateLimit({ status: 429, message: fullWhy, headers: response.headers, baseUrl: config.baseUrl })
+      : null
 
     // A 429 is two different situations wearing one status code, and
     // retrying the wrong one is expensive.
@@ -204,6 +245,8 @@ async function requestCompletion({ system, user, messages, config, temperature =
       err.quotaExhausted = true
       err.providerMessage = why
       err.retryAfterMs = retryAfterMs
+      err.rateLimit = rateLimit
+      report(429, 'daily_cap', { rateLimit })
       throw err
     }
 
@@ -214,6 +257,8 @@ async function requestCompletion({ system, user, messages, config, temperature =
       err.rateLimited = true
       err.providerMessage = why
       err.retryAfterMs = retryAfterMs
+      err.rateLimit = rateLimit
+      report(429, 'rate_limited', { rateLimit })
       throw err
     }
 
@@ -230,6 +275,7 @@ async function requestCompletion({ system, user, messages, config, temperature =
       // the key is scrubbed out of it before it goes anywhere. A 4xx is
       // the request being wrong, and the request is ours to fix.
       const detail = why ?? await safeProviderMessage(response, config.apiKey)
+      report(response.status, response.status === 429 ? 'rate_limited' : 'http_error', { rateLimit })
       const err = new Error(
         `AI request failed with HTTP ${response.status} (attempt ${attempt}/${maxAttempts})`
         + (detail ? `: ${detail}` : ''),
@@ -239,6 +285,7 @@ async function requestCompletion({ system, user, messages, config, temperature =
       if (response.status === 429) {
         err.rateLimited = true
         err.providerMessage = detail ?? null
+        err.rateLimit = rateLimit
       }
       throw err
     }
@@ -246,6 +293,7 @@ async function requestCompletion({ system, user, messages, config, temperature =
     // Capped. An unbounded sleep on the provider's word would park the
     // whole refresh -- and, through the shared client, a chat request a
     // person is waiting on -- for as long as it liked.
+    report(response.status, response.status === 429 ? 'rate_limited' : 'http_error', { rateLimit })
     const wait = Math.min(retryAfterMs ?? backoffDelayMs(attempt), MAX_BACKOFF_WAIT_MS)
     await sleep(wait)
   }
@@ -299,7 +347,11 @@ export async function chatJson({ system, user, config }) {
 //
 // `onRetry` is told when that second request is sent: the daily budget is
 // counted in requests, and a retry nobody counts is one the count is wrong by.
-export async function chatText({ messages, config, temperature = 0.9, maxTokens = chatMaxTokens(), onRetry = null, onRequest = null, onModel = null }) {
+//
+// `onAttempt` hears about every request, numbered across the whole call
+// (primary, fallback, second try). `cause` is why the call was made at all:
+// 'first', or 'regenerate' when the caller is asking again for a bad reply.
+export async function chatText({ messages, config, temperature = 0.9, maxTokens = chatMaxTokens(), onRetry = null, onRequest = null, onModel = null, onAttempt = null, cause = 'first' }) {
   const cap = chatReasoningCap(config.baseUrl)
   // Only a caller that explicitly supplied a different model uses this
   // path. A short throttle is specific to the model, so it switches. A
@@ -309,17 +361,19 @@ export async function chatText({ messages, config, temperature = 0.9, maxTokens 
   const fallbackModel = config.fallbackModel && config.fallbackModel !== config.model
     ? config.fallbackModel : null
   let fallbackUsed = false
-  const complete = async (modelConfig, tokens, reasoningCap, stopOnRateLimit = false, maxAttempts = MAX_ATTEMPTS) => {
+  let attemptNo = 0
+  const track = onAttempt ? (a) => onAttempt({ ...a, n: ++attemptNo }) : null
+  const complete = async (modelConfig, tokens, reasoningCap, why, stopOnRateLimit = false, maxAttempts = MAX_ATTEMPTS) => {
     const reply = await requestCompletion({
       messages, config: modelConfig, temperature, maxTokens: tokens,
-      reasoningMaxTokens: reasoningCap, onRequest, stopOnRateLimit, maxAttempts,
+      reasoningMaxTokens: reasoningCap, onRequest, onAttempt: track, firstCause: why, stopOnRateLimit, maxAttempts,
     })
     onModel?.(modelConfig.model)
     return reply
   }
-  const completeWithFallback = async (tokens, reasoningCap) => {
+  const completeWithFallback = async (tokens, reasoningCap, why) => {
     try {
-      return await complete(config, tokens, reasoningCap, Boolean(fallbackModel))
+      return await complete(config, tokens, reasoningCap, why, Boolean(fallbackModel))
     } catch (err) {
       const perModelCap = err.quotaExhausted && dailyCapScope(config.baseUrl) === 'model'
       if (!fallbackModel || !((err.rateLimited && !err.quotaExhausted) || perModelCap)) throw err
@@ -327,15 +381,15 @@ export async function chatText({ messages, config, temperature = 0.9, maxTokens 
       fallbackUsed = true
       // A busy fallback cannot become another long retry chain. Primary
       // network and 5xx retries still follow the normal client policy.
-      return complete({ ...config, model: fallbackModel }, tokens, reasoningCap, true, 1)
+      return complete({ ...config, model: fallbackModel }, tokens, reasoningCap, 'fallback', true, 1)
     }
   }
   try {
-    return await completeWithFallback(maxTokens, cap)
+    return await completeWithFallback(maxTokens, cap, cause)
   } catch (err) {
     if (!err.outOfRoom || fallbackUsed) throw err
     console.warn(`[ai] ${err.message} -- retrying once with ${maxTokens * 2} tokens`)
     onRetry?.()
-    return completeWithFallback(maxTokens * 2, cap == null || cap === 'off' ? cap : maxTokens * 2 - CHAT_REPLY_TOKENS)
+    return completeWithFallback(maxTokens * 2, cap == null || cap === 'off' ? cap : maxTokens * 2 - CHAT_REPLY_TOKENS, 'more_room')
   }
 }

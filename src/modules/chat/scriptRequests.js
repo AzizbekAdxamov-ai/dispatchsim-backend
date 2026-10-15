@@ -9,16 +9,17 @@ import { DAILY_USAGE_SQL } from './chatBudget.sql.js'
 import { walletScopeFor } from './chatProvider.js'
 
 export const INSERT_SCRIPT_REQUESTS_SQL = `
-  INSERT INTO chat_script_requests (source, side, model, requests)
-  VALUES ($1, $2, $3, $4)`
+  INSERT INTO chat_script_requests (source, side, model, requests, attempts)
+  VALUES ($1, $2, $3, $4, $5::jsonb)`
 
 // Calls `chatText` and writes what it cost, whether it answered or threw.
 // Every request is counted where it is sent (aiClient's onRequest), so the
 // second try, backoff retries and the fallback model's request are in the
-// number. `model` is the model that answered, or the configured one when
+// number. `attempts` is what each of those requests came to (060). `model` is the model that answered, or the configured one when
 // nothing did. `onRequest` is also forwarded, for the script's own tally.
 export async function chatTextRecorded({ chatText, source, side, config, record = defaultRecord, onRequest = null, ...rest }) {
   let spent = 0
+  const attempts = []
   let model = config.model
   try {
     return await chatText({
@@ -26,11 +27,12 @@ export async function chatTextRecorded({ chatText, source, side, config, record 
       config,
       onRequest: () => { spent += 1; onRequest?.() },
       onModel: (m) => { model = m; rest.onModel?.(m) },
+      onAttempt: (a) => { attempts.push(a); rest.onAttempt?.(a) },
     })
   } finally {
     if (spent > 0) {
       try {
-        await record({ source, side, model, requests: spent })
+        await record({ source, side, model, requests: spent, attempts })
       } catch {
         // No error text: a database error can carry query data. The run is
         // not stopped, but it must not look as if the count was kept.
@@ -40,8 +42,8 @@ export async function chatTextRecorded({ chatText, source, side, config, record 
   }
 }
 
-async function defaultRecord({ source, side, model, requests }) {
-  await query(INSERT_SCRIPT_REQUESTS_SQL, [source, side, model, requests])
+async function defaultRecord({ source, side, model, requests, attempts = [] }) {
+  await query(INSERT_SCRIPT_REQUESTS_SQL, [source, side, model, requests, JSON.stringify(attempts)])
 }
 
 const NOBODY = '00000000-0000-0000-0000-000000000000'
