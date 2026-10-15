@@ -169,7 +169,7 @@ test('061 limits Marcus\'s "correct?" to one read-back, never after a question',
   assert.doesNotMatch(next, /end with "correct\?"\./)
   assert.doesNotMatch(next, /paperwork|insurance|W-9|MC number|authority/i)
   assert.doesNotMatch(next, /\$\d|\d+ ?(mi|miles|days|%)\b|\d+-?foot|dry van|reefer|flatbed/i)
-  const place = new RegExp(`\b(${[...new Set(CITY_NAMES)].join('|')})\b`)
+  const place = new RegExp(`\\b(${[...new Set(CITY_NAMES)].join('|')})\\b`)
   assert.doesNotMatch(next, place)
   const others = PERSONAS_052.filter((p) => p.name !== 'Cedar Ridge Transport Services').map((p) => p.persona)
   assert.ok(!others.includes(next))
