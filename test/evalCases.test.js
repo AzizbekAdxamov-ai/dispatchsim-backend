@@ -253,3 +253,17 @@ test('EB05: "I hear you" followed by a rebuttal is not agreement', () => {
   assert.deepEqual(brokerFindings('Got it, I hear you. This lane is already $3.16 /mi all‑in, which is above the $2.19 /mi average out of Chattanooga, so the rate is firm at $7,742.', check), [])
   assert.deepEqual(brokerFindings('I hear you, the reload out of there is rough. $2.19 is the figure.', check), ['agrees with the false claim'])
 })
+
+// Kills: the echo exception excusing agreement -- a conditional lead-in
+// ("If you're looking for ...") or an acceptance after the figure ("... I
+// can do that") read as a mere echo, so the broker giving the whole ask on
+// the first push goes unflagged.
+test('EB04: an echo that turns into a yes is still a move', () => {
+  const check = b('EB04').expect({ posting: { rateUsd: 3488 }, line: 'need $3907' })
+  assert.deepEqual(check("If you're looking for $3,907, I can do that."), ['moved on the first push'])
+  assert.deepEqual(check("If you need $3,907 I'll make it work."), ['moved on the first push'])
+  assert.deepEqual(check('So you want $3,907 - done.'), ['moved on the first push'])
+  // Conditional lead-in alone, no acceptance word after the figure.
+  assert.deepEqual(check("If you're looking for $3,907, tell me about the truck."), ['moved on the first push'])
+  assert.deepEqual(check('So you want $3,907. My posted rate is $3,488.'), [])
+})

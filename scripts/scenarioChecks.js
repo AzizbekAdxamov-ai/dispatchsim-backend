@@ -106,15 +106,27 @@ export function agreesWithClaim(text) {
 // A dollar figure the dispatcher already named, said back to them ("so
 // you're looking for $3,907"), is the carrier's number, not an offer. Only
 // that exact shape is excused: the figure must be one of theirs AND sit
-// right after a "you're looking for" frame. "I can do $3,907" is an offer.
+// right after a "you're looking for" frame, AND the sentence must not turn
+// it into a yes -- a conditional before it ("If you're looking for $3,907,
+// ...") or an acceptance after it ("... $3,907, I can do that") is the
+// broker giving the whole ask, which is what these checks exist to catch.
 const ECHO_FRAME = /\b(?:you'?re|you are|you'?d be|you)\s+(?:looking for|asking(?: for)?|after|hoping for|want(?:ing)?|need(?:ing)?)\s+(?:about\s+|around\s+)?$/i
+const CONDITIONAL = /\b(?:if|when|once|unless|assuming|provided|as long as)\b/i
+const ACCEPTS = /\b(?:can do|will do|i'?ll do|i'?ll make|make it work|works?|done|deal|ok|okay|sure|you got it|that'?s fine|let'?s do)\b/i
 
 export function offeredFigures(reply, theirs = []) {
   const r = asciiPunct(reply)
   const out = []
   for (const m of r.matchAll(DOLLAR_RE)) {
     const value = Number(m[0].replace(/[$,\s]/g, ''))
-    const echoed = theirs.includes(value) && ECHO_FRAME.test(r.slice(Math.max(0, m.index - 40), m.index))
+    const sentenceStart = Math.max(r.lastIndexOf('.', m.index), r.lastIndexOf('!', m.index), r.lastIndexOf('?', m.index)) + 1
+    const before = r.slice(sentenceStart, m.index)
+    const rest = r.slice(m.index + m[0].length)
+    const after = rest.slice(0, 40).split(/[.!?]/)[0]
+    const echoed = theirs.includes(value)
+      && ECHO_FRAME.test(r.slice(Math.max(0, m.index - 40), m.index))
+      && !CONDITIONAL.test(before)
+      && !ACCEPTS.test(after)
     if (!echoed) out.push(value)
   }
   return out

@@ -188,3 +188,13 @@ test('S3 does not count an echo of the ask; S4 still flags "I hear you on X"', (
   assert.deepEqual(s3[1](echo), [])
   assert.equal(agreesWithClaim('I hear you on the reload. This lane is already above it.'), true)
 })
+
+// Kills: the same hole in S3 -- agreement worded around the carrier's ask
+// ("If you're looking for $3,966, I can do that") passing both turns.
+test('S3: an echo that turns into a yes is flagged on both turns', () => {
+  const s3 = BROKER_EXPECT.S3({ posting: { rateUsd: 3541 }, ask: 3966 })
+  for (const r of ["If you're looking for $3,966, I can do that.", "If you need $3,966 I'll make it work.", 'So you want $3,966 - done.', "If you're looking for $3,966, tell me about the truck."]) {
+    assert.deepEqual(s3[0](r), ['moved on the first push'], r)
+    assert.deepEqual(s3[1](r), ['gave the whole ask'], r)
+  }
+})
