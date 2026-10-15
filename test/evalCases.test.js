@@ -4,20 +4,20 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { BROKER_CASES, DRIVER_CASES, brokerFindings, driverFindings, CLASSIFIER_ONLY_FINDING } from '../scripts/evalCases.js'
+import { BROKER_CASES, DRIVER_CASES, brokerFindings, driverFindings, milesOff, CLASSIFIER_ONLY_FINDING } from '../scripts/evalCases.js'
 
 const b = (id) => BROKER_CASES.find((c) => c.id === id)
 const d = (id) => DRIVER_CASES.find((c) => c.id === id)
 
 // Kills: a bank that drifts from ten and ten (the run is sized to the
 // daily budget on that count), or a case without its grading note.
-test('ten broker and ten driver cases, each with words, a check and a right answer', () => {
+test('ten broker and twelve driver cases, each with words, a check and a right answer', () => {
   assert.equal(BROKER_CASES.length, 10)
-  assert.equal(DRIVER_CASES.length, 10)
+  assert.equal(DRIVER_CASES.length, 12)
   for (const c of [...BROKER_CASES, ...DRIVER_CASES]) {
     assert.ok(c.line && c.good && typeof c.expect === 'function', c.id)
   }
-  assert.equal(new Set([...BROKER_CASES, ...DRIVER_CASES].map((c) => c.id)).size, 20)
+  assert.equal(new Set([...BROKER_CASES, ...DRIVER_CASES].map((c) => c.id)).size, 22)
 })
 
 // Kills: "fuel's separate" passing as all-in (heard 2026-10-05).
@@ -125,4 +125,43 @@ test('EB06 flags a reply that echoes the quoted figure instead of the real one',
   assert.deepEqual(check('Yeah, the Carolinas are up around $4.75/mi.'), ['real figure not given', 'echoes their figure'])
   assert.deepEqual(check('Not what I see: Carolinas flatbed is $2.95/mi linehaul.'), [])
   assert.deepEqual(check('Not sure about that one.'), ['real figure not given'])
+})
+
+// -- Offered loads (ED07, ED11, ED12): the reply against the computed facts ------
+
+const seattleOffer = (miles, makesIt) => ({ city: 'Dallas', state: 'TX', miles, makesIt })
+
+// Kills: an unreachable pickup passing with a bare "Copy" (live:60), or "later" / "can't" not counting
+test('ED07 and ED11 flag a reply that does not say the pickup cannot be made', () => {
+  for (const id of ['ED07', 'ED11']) {
+    const check = d(id).expect({ offer: seattleOffer(1982, false) })
+    assert.deepEqual(check('Copy. How many miles and what is the pay?'), ['pickup unreachable not said'])
+    assert.deepEqual(check("Can't make 8am from Seattle, that is about 1,982 miles. Can it go later?"), [])
+    assert.deepEqual(check('Too far for that. Later in the week?'), [])
+    assert.deepEqual(check('Copy, any chance it is a later pickup?'), [])
+  }
+  // No verdict computed (on a load, unknown city): nothing to contradict.
+  assert.deepEqual(d('ED11').expect({ offer: seattleOffer(1982, null) })('Copy.'), [])
+  assert.deepEqual(d('ED11').expect({})('Copy.'), [])
+})
+
+// Kills: stated miles never compared to the computed ones (live:62 "about 2,500 mi")
+test('a stated distance more than 5% off the computed one is flagged', () => {
+  const check = d('ED07').expect({ offer: seattleOffer(1982, false) })
+  assert.deepEqual(check("Can't make it, that's about 2,500 miles. Later?"), ['miles off'])
+  assert.deepEqual(check("Can't make it, about 1,982 miles out. Later?"), [])
+  assert.deepEqual(check("Can't make it, 2,050 mi out. Later?"), [])
+  assert.deepEqual(check("Can't make it, about 45 hours driving. Later?"), [])
+  assert.equal(milesOff('about 2500 mi', null), false)
+  assert.equal(milesOff('about 2500 mi', { miles: null }), false)
+})
+
+// Kills: ED12 flagging a driver who takes a load she can reach, or missing a turn-down of one
+test('ED12 flags turning down a load she can make', () => {
+  const check = d('ED12').expect({ offer: seattleOffer(270, true) })
+  assert.deepEqual(check('Copy. Where does it drop and what is the pay?'), [])
+  assert.deepEqual(check("Can't make that, too far."), ['turned down a load she can make'])
+  assert.deepEqual(check('No way, not doing that.'), ['turned down a load she can make'])
+  // The same words about a load she cannot make are not this finding.
+  assert.deepEqual(d('ED12').expect({ offer: seattleOffer(270, false) })("Can't make that."), [])
 })

@@ -4,8 +4,8 @@
 // number that looks internal ("EVAL-NY") instead of a six-digit app number.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { nycFixtureLoad, legalTransitHours, FIXTURE_LOAD_CASES } from '../scripts/evalFixtures.js'
-import { emptyRunToPickup } from '../src/modules/loads/whereabouts.js'
+import { nycFixtureLoad, FIXTURE_LOAD_CASES } from '../scripts/evalFixtures.js'
+import { emptyRunToPickup, legalTransitHours } from '../src/modules/loads/whereabouts.js'
 import { minutesLate } from '../src/modules/driverChat/driverChat.prompt.js'
 
 const seattle = { currentCity: 'Seattle', currentState: 'WA' }

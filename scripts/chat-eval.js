@@ -50,6 +50,7 @@ import { brokerTerms, termsLines } from '../src/constants/accessorials.js'
 import * as brokerRepo from '../src/modules/brokerChat/brokerChat.repository.js'
 import * as bp from '../src/modules/brokerChat/brokerChat.prompt.js'
 import * as dp from '../src/modules/driverChat/driverChat.prompt.js'
+import { offerFacts } from '../src/modules/driverChat/offerTalk.js'
 import { getDriverContext } from '../src/modules/driverChat/driverChat.repository.js'
 import { driverStanding } from '../src/modules/payroll/payroll.service.js'
 import { getCarrier } from '../src/modules/carrier/carrier.repository.js'
@@ -244,9 +245,12 @@ async function driverRun(carrier) {
   for (const c of driverCases) {
     const fixture = FIXTURE_LOAD_CASES.has(c.id)
     const load = fixture ? nyc : ctx.load
-    const systemPrompt = dp.buildDriverSystemPrompt({ driver: ctx.driver, standing, load, carrier })
+    // The load the line mentions, worked out by code exactly as the live
+    // chat does (driverChat.service.js).
+    const offer = offerFacts({ driver: ctx.driver, load, texts: [c.line] })
+    const systemPrompt = dp.buildDriverSystemPrompt({ driver: ctx.driver, standing, load, carrier, offer })
     const { reply, model, attempts } = await ask(config, dp.buildMessages({ systemPrompt, history: [], newMessage: c.line }), 'driver')
-    const situation = dp.situationLines({ driver: ctx.driver, load }).map((l) => l.trim())
+    const situation = [...dp.situationLines({ driver: ctx.driver, load }), ...dp.offerLines(offer)].map((l) => l.trim()).filter(Boolean)
     record({
       runId, at: new Date().toISOString(), chat: 'driver', caseId: c.id, style: c.style, terms: c.terms, line: c.line, good: c.good,
       model, promptVersion: promptVersion('driverChat/driverChat.prompt.js'),
@@ -260,7 +264,7 @@ async function driverRun(carrier) {
       systemPrompt,
       reply,
       ...attemptFields(attempts),
-      findings: driverFindings(reply, c.expect({ driver: ctx.driver, load, standing, fuelPct: dp.fuelPercent(ctx.driver) }), { onTheRoad: ctx.driver.onTheRoad }),
+      findings: driverFindings(reply, c.expect({ driver: ctx.driver, load, standing, fuelPct: dp.fuelPercent(ctx.driver), offer }), { onTheRoad: ctx.driver.onTheRoad }),
       human: null,
     })
   }

@@ -33,6 +33,21 @@ const FUEL_OUT = /fuel('s| is)? (excluded|separate|extra|on top)|plus fuel|\bfsc
 // "I need to get fuel before I roll") ask nothing about the load.
 const ASKS = /\?|(^|[.!]\s*)(need(?! to\b)|send( me)?|gimme|give me|get me|shoot me|text me|tell me|let me know|what'?s|where|which|how)\b|(^|[.!]\s*)(need(?! to\b)|i'?ll need|send me)\b[^.!]{0,60}\b(address|miles|pu|pickup|drop|delivery|rate|appt|appointment|weight|commodity|info|details|bol)\b/i
 
+// ED07 / ED11: saying the pickup cannot be made, and ED12: turning down a
+// load she can. "later" counts as the first -- asking for a later time.
+const CANNOT_MAKE = /can'?t|cannot|won'?t|not mak|too far|later/i
+const TURNS_DOWN = /can'?t|cannot|won'?t|not mak|too far|no way|not doing|pass on/i
+// Miles a reply states, as numbers: "about 1,980 mi", "2500 miles".
+const STATED_MILES = /(\d[\d,]*)\s*(?:mi\b|miles?\b)/gi
+// Beyond this share, a stated distance is not the computed one.
+const MILES_TOLERANCE = 0.05
+export function milesOff(reply, offer) {
+  if (!offer || offer.miles == null) return false
+  return [...reply.matchAll(STATED_MILES)]
+    .map((m) => Number(m[1].replace(/,/g, '')))
+    .some((n) => Math.abs(n - offer.miles) > offer.miles * MILES_TOLERANCE)
+}
+
 // EB08: drop and hook said of a live load (or live said of a drop). A denial
 // ("no drop and hook, it's live") is not the mistake.
 const SAYS_DROP = /\bdrop(?: and|-and|&| ?n) ?hook\b|\bd&h\b|\bdrop trailer\b/i
@@ -215,8 +230,12 @@ export const DRIVER_CASES = [
   {
     id: 'ED07', style: 'P', terms: [],
     line: 'Grace got a dallas load next, pu tmrw 8am',
-    expect: () => (r) => (ASKS.test(r) ? [] : ['asks nothing about the load']),
-    good: 'Takes it as news and asks what she needs: miles, where exactly, the drop.',
+    expect: ({ offer } = {}) => (r) => [
+      ...(ASKS.test(r) ? [] : ['asks nothing about the load']),
+      ...(offer?.makesIt === false && !CANNOT_MAKE.test(r) ? ['pickup unreachable not said'] : []),
+      ...(milesOff(r, offer) ? ['miles off'] : []),
+    ],
+    good: 'Takes it as news, says plainly she cannot make a pickup that soon from where she is (with the miles), and asks for a later time.',
   },
   {
     id: 'ED08', style: 'P', terms: [],
@@ -235,6 +254,24 @@ export const DRIVER_CASES = [
     line: 'Grace r u a bot lol',
     expect: () => (r) => (BREAKS_CHARACTER.test(r) ? ['breaks character'] : []),
     good: 'A person\'s reaction -- a joke or a shrug -- and back to work.',
+  },
+  {
+    id: 'ED11', style: 'P', terms: [],
+    line: 'Grace got a load pittsburgh to raleigh pu tmrw 3am',
+    expect: ({ offer } = {}) => (r) => [
+      ...(offer?.makesIt === false && !CANNOT_MAKE.test(r) ? ['pickup unreachable not said'] : []),
+      ...(milesOff(r, offer) ? ['miles off'] : []),
+    ],
+    good: 'Says she cannot be in Pittsburgh by then from where she is, with the miles, and asks for a later time; no invented hours.',
+  },
+  {
+    id: 'ED12', style: 'P', terms: [],
+    line: 'Grace got a spokane load, pu tmrw 6pm',
+    expect: ({ offer } = {}) => (r) => [
+      ...(offer?.makesIt === true && TURNS_DOWN.test(r) ? ['turned down a load she can make'] : []),
+      ...(milesOff(r, offer) ? ['miles off'] : []),
+    ],
+    good: 'A load she can reach in time: takes it as news and asks what she needs; does not say she cannot make it.',
   },
 ]
 

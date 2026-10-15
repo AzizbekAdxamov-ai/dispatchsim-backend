@@ -28,6 +28,7 @@ import * as repo from './driverChat.repository.js'
 import * as payrollService from '../payroll/payroll.service.js'
 import { getCarrier } from '../carrier/carrier.repository.js'
 import { driverReplyDelaySec } from './driverChat.replyTiming.js'
+import { offerFacts } from './offerTalk.js'
 import {
   buildDriverSystemPrompt,
   buildMessages,
@@ -117,6 +118,14 @@ export async function sendMessage({ conversationId, userId, text, images }) {
     standing,
     load: context.load,
     carrier,
+    // A load the dispatcher is offering, worked out by code from this
+    // message and the last four of theirs (a pickup time said a message
+    // earlier still counts) -- offerTalk.js.
+    offer: offerFacts({
+      driver: context.driver,
+      load: context.load,
+      texts: [...history.filter((m) => m.role === 'dispatcher').slice(-4).map((m) => m.content), text],
+    }),
   })
 
   // Every request this turn sends to the provider, counted where they are

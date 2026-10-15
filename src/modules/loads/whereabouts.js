@@ -13,6 +13,7 @@
 
 import { findCity, roadMiles } from '../../../scripts/seed/cities.js'
 import { AVG_HIGHWAY_MPH } from '../../../scripts/seed/facilities.js'
+import { DRIVING_LIMIT_HOURS, BREAK_AFTER_DRIVING_HOURS, BREAK_MINUTES, REQUIRED_REST_HOURS } from '../../constants/hosClock.js'
 
 // Where a delivered load leaves its driver: the destination, as a place
 // the city list knows (lat/lon included, so the board's road_miles can
@@ -35,6 +36,26 @@ export function emptyRunToPickup(from, load) {
   if (!a || !b) return null
   const miles = roadMiles(a, b)
   return { miles, hours: miles / AVG_HIGHWAY_MPH }
+}
+
+// Hours from dispatch to arrival for a run of this length that a driver can
+// legally make: the road time at the planning speed, at most 11 driving
+// hours a day (the first day only what is left on her clock), a 30-minute
+// break on a day that drives past 8 hours, and the 10-hour rest between
+// days. An invented "8 hours" for a 2,850-mile run had Grace saying she was
+// due at 12:17 PM today (ED02).
+export function legalTransitHours(miles, firstDayDriveMin = DRIVING_LIMIT_HOURS * 60) {
+  let left = miles / AVG_HIGHWAY_MPH
+  let hours = 0
+  let todayCap = Math.min(DRIVING_LIMIT_HOURS, Math.max(0, firstDayDriveMin ?? DRIVING_LIMIT_HOURS * 60) / 60)
+  for (;;) {
+    const drive = Math.min(left, todayCap)
+    hours += drive + (drive > BREAK_AFTER_DRIVING_HOURS ? BREAK_MINUTES / 60 : 0)
+    left -= drive
+    if (left <= 1e-9) return hours
+    hours += REQUIRED_REST_HOURS
+    todayCap = DRIVING_LIMIT_HOURS
+  }
 }
 
 function hoursText(h) {
