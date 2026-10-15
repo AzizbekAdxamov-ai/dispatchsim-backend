@@ -147,3 +147,30 @@ test('the prompt says the counterpart is the dispatcher and forbids sending them
     assert.match(p, /never tell them to go ask the shipper/)
   }
 })
+
+// Kills: 061 whose FROM text drifts from 052 by one character (replace()
+// silently changes nothing), a wrong broker or a missing guard, the old
+// "end with correct?" wording surviving, and a fact or forbidden word
+// slipping into the new text.
+test('061 limits Marcus\'s "correct?" to one read-back, never after a question', () => {
+  const sql = migration('061_marcus_correct_once.sql').replace(/\r\n/g, '\n')
+  const m = /replace\(persona, '((?:[^']|'')+)', '((?:[^']|'')+)'\)/.exec(sql)
+  assert.ok(m, '061 has no replace(persona, FROM, TO)')
+  const from = m[1].replaceAll("''", "'")
+  const to = m[2].replaceAll("''", "'")
+  const marcus = PERSONAS_052.find((p) => p.name === 'Cedar Ridge Transport Services').persona.replace(/\r\n/g, '\n')
+  assert.ok(marcus.includes(from), 'FROM is not in the 052 text of Marcus')
+  assert.match(sql, /WHERE name = 'Cedar Ridge Transport Services'/)
+  assert.match(sql, /persona LIKE '%end with "correct\?"%'/)
+  const next = marcus.replace(from, to)
+  assert.match(next, /at most once/i)
+  assert.match(next, /read-back|read it back/i)
+  assert.match(next, /never after .*question/i)
+  assert.doesNotMatch(next, /end with "correct\?"\./)
+  assert.doesNotMatch(next, /paperwork|insurance|W-9|MC number|authority/i)
+  assert.doesNotMatch(next, /\$\d|\d+ ?(mi|miles|days|%)\b|\d+-?foot|dry van|reefer|flatbed/i)
+  const place = new RegExp(`\b(${[...new Set(CITY_NAMES)].join('|')})\b`)
+  assert.doesNotMatch(next, place)
+  const others = PERSONAS_052.filter((p) => p.name !== 'Cedar Ridge Transport Services').map((p) => p.persona)
+  assert.ok(!others.includes(next))
+})
