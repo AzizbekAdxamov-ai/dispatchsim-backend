@@ -28,6 +28,7 @@ import * as repo from './driverChat.repository.js'
 import * as payrollService from '../payroll/payroll.service.js'
 import { getCarrier } from '../carrier/carrier.repository.js'
 import { driverReplyDelaySec } from './driverChat.replyTiming.js'
+import { offerFacts } from './offerTalk.js'
 import {
   buildDriverSystemPrompt,
   buildMessages,
@@ -117,6 +118,14 @@ export async function sendMessage({ conversationId, userId, text, images }) {
     standing,
     load: context.load,
     carrier,
+    // A load the dispatcher is offering, worked out by code from this
+    // message and the last four of theirs (a pickup time said a message
+    // earlier still counts) -- offerTalk.js.
+    offer: offerFacts({
+      driver: context.driver,
+      load: context.load,
+      texts: [...history.filter((m) => m.role === 'dispatcher').slice(-4).map((m) => m.content), text],
+    }),
   })
 
   // Every request this turn sends to the provider, counted where they are
@@ -130,6 +139,10 @@ export async function sendMessage({ conversationId, userId, text, images }) {
   let failure = null
   let answeredModel = config.model
   const onModel = (model) => { answeredModel = model }
+  // What each request came to (060): status, 429 reason, tokens. Numbered
+  // across the whole turn, the regeneration included.
+  const attempts = []
+  const onAttempt = (a) => attempts.push({ ...a, n: attempts.length + 1 })
 
   let reply
   try {
@@ -141,6 +154,7 @@ export async function sendMessage({ conversationId, userId, text, images }) {
       config,
       onRequest,
       onModel,
+      onAttempt,
     }))
 
     // Two ways a reply is unusable, both regenerated once and then replaced
@@ -173,6 +187,8 @@ export async function sendMessage({ conversationId, userId, text, images }) {
         config,
         onRequest,
         onModel,
+        onAttempt,
+        cause: 'regenerate',
       }))
       if (unusable(reply)) reply = FALLBACK_REPLY
     }
@@ -214,7 +230,7 @@ export async function sendMessage({ conversationId, userId, text, images }) {
       model: answeredModel, promptVersion: PROMPT_VERSION, systemPrompt, history, text,
       imageCount: Array.isArray(images) ? images.length : 0, reply, regeneratedBecause: regenerated,
       fellBack: reply === FALLBACK_REPLY, error: failure, providerRequests: spent,
-      onTheRoad: Boolean(context.driver.onTheRoad),
+      attempts, onTheRoad: Boolean(context.driver.onTheRoad),
     })).catch((e) => {
       console.error(`[driverChat] could not write the turn log for message ${dispatcherMessage.id}: ${e.message}`)
     })

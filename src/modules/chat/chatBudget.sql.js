@@ -61,3 +61,38 @@ export const DAILY_USAGE_SQL = `
          count(*) FILTER (WHERE user_id = $1)::int           AS my_turns,
          count(DISTINCT user_id)::int                       AS seats
     FROM turns`
+
+// Tokens and 429s per model today, from what each request recorded (060).
+//
+// Both tables, because the app's turns (chat_turn_log) and the scripts'
+// calls (chat_script_requests) spend the same key. One row per request is
+// unpacked from `attempts`; a 429 is any attempt with status 429.
+// Rows with attempts = '[]' (written before 060) have no token record, so
+// the totals are a floor, not an exact figure; DAILY_UNRECORDED_SQL counts them.
+//
+// The day starts at the database's midnight; the provider's window may not.
+export const DAILY_TOKENS_SQL = `
+  WITH recorded AS (
+    SELECT attempts FROM chat_turn_log
+     WHERE created_at >= date_trunc('day', now())
+    UNION ALL
+    SELECT attempts FROM chat_script_requests
+     WHERE created_at >= date_trunc('day', now())
+  )
+  SELECT e->>'model' AS model,
+         coalesce(sum((e->'usage'->>'total')::int), 0)::int      AS total,
+         coalesce(sum((e->'usage'->>'prompt')::int), 0)::int     AS prompt,
+         coalesce(sum((e->'usage'->>'completion')::int), 0)::int AS completion,
+         count(*) FILTER (WHERE (e->>'status')::int = 429)::int  AS rate_limited,
+         count(*)::int                                           AS requests
+    FROM recorded r, jsonb_array_elements(r.attempts) AS e
+   GROUP BY e->>'model'
+   ORDER BY total DESC`
+
+// Today's rows that carry no attempts at all.
+export const DAILY_UNRECORDED_SQL = `
+  SELECT (SELECT count(*) FROM chat_turn_log
+           WHERE created_at >= date_trunc('day', now()) AND attempts = '[]'::jsonb)::int
+       + (SELECT count(*) FROM chat_script_requests
+           WHERE created_at >= date_trunc('day', now()) AND attempts = '[]'::jsonb)::int
+         AS unrecorded`

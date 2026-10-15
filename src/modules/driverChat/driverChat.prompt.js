@@ -20,10 +20,12 @@
 // in the industry. The driver is a professional: firm, specific about
 // numbers, never abusive, never threatening.
 
-import { DRIVER_STAGES, SETTLEMENT_TERM_SIM_DAYS, describeWait } from '../../constants/driverPay.js'
+import { DRIVER_STAGES, SETTLEMENT_TERM_SIM_DAYS, describeWait, willAcceptWork } from '../../constants/driverPay.js'
 import { clockDateTime, clockWhen } from '../../constants/appClock.js'
 import { readPreferences, hasRequests, preferenceConflicts, avoidedPlaces } from '../../constants/driverPreferences.js'
 import { emptyRunToPickup } from '../loads/whereabouts.js'
+import { DRIVING_LIMIT_HOURS, REQUIRED_REST_HOURS } from '../../constants/hosClock.js'
+import { leaksReasoning as sharedLeaksReasoning } from '../../lib/reasoningLeak.js'
 
 // Same list the broker uses -- assistant-speak breaks a persona instantly.
 const BANNED_WORDS = 'certainly, assist, delve, moreover, furthermore, I apologize, as an AI'
@@ -190,6 +192,41 @@ export function situationLines({ driver, load, now = new Date() }) {
   return lines
 }
 
+// The load the dispatcher just mentioned, worked out by code (offerTalk.js)
+// and handed to Grace as fact: the road miles, the earliest she could
+// legally be there, and whether that is before the pickup they named.
+// Nothing when no load is being offered. A place the list does not know
+// has no figure -- she is told to ask, not to guess.
+export function offerLines(offer) {
+  if (!offer) return []
+  const head = ['', 'THE LOAD DISPATCH JUST MENTIONED:']
+  const place = offer.state ? `${offer.city}, ${offer.state}` : offer.city
+  if (offer.miles == null) {
+    return [...head, `  You do not know how far ${place} is; ask for the miles, never guess one.`]
+  }
+  const miles = offer.miles.toLocaleString('en-US')
+  if (offer.onLoad) {
+    return [
+      ...head,
+      `  Pickup in ${place} is about ${miles} road miles from ${offer.fromCity}, where the load you are on delivers.`,
+      '  You cannot say yet whether you would make a pickup time, so do not say you can or cannot.',
+    ]
+  }
+  // No arrival time without her driving time left: miles only.
+  if (!offer.earliestAt) {
+    return [...head, `  Pickup in ${place} is about ${miles} road miles from where you are.`, '  You cannot say yet whether you would make a pickup time, so do not say you can or cannot.']
+  }
+  const lines = [
+    ...head,
+    `  Pickup in ${place} is about ${miles} road miles from where you are.`,
+    `  Driving it legally (${DRIVING_LIMIT_HOURS} hours a day, a ${REQUIRED_REST_HOURS}-hour rest between days) the earliest you could be there is ${clockDateTime(offer.earliestAt.toISOString())}.`,
+  ]
+  if (offer.pickupAt) {
+    lines.push(`  The pickup they said is ${clockDateTime(offer.pickupAt.toISOString())} -- you ${offer.makesIt ? 'can make it' : 'cannot make it'}.`)
+  }
+  return lines
+}
+
 function money(n) {
   return `$${Math.abs(n ?? 0).toLocaleString('en-US')}`
 }
@@ -220,9 +257,11 @@ export function requestLines(driver, load) {
     out.push(
       `  The load you are on runs to ${conflicts.map((c) => `${c.place} (the ${c.end})`).join(' and ')} --`,
       '  exactly what you asked not to get. Say so ONCE in this whole chat, the',
-      '  first time it comes up, in your own way; you might ask for something',
-      '  back for it. If you have already said it above, do not say it again --',
-      '  not even tacked onto an answer about something else.',
+      '  first time it comes up, and say WHY in a few words of your own -- the',
+      '  office note above is your reason; put it the way you would say it,',
+      '  never read the note out. You might ask for something back for it. If',
+      '  it is already said earlier in this chat, do not say it again -- not',
+      '  even tacked onto an answer about something else.',
       // 2026-10-06 fourth run: asked her ETA, Grace added "this delivery
       // is in NY, not the city, like I told dispatch" -- moving the load.
       '  The load goes where it is written above; never say it goes anywhere else.',
@@ -234,7 +273,7 @@ export function requestLines(driver, load) {
 // A driver is not a broker: they are your employee, they know your
 // company, and they know their own truck. The prompt says what they know
 // so the model does not invent a second fleet.
-export function buildDriverSystemPrompt({ driver, standing, load, carrier = null, now = new Date() }) {
+export function buildDriverSystemPrompt({ driver, standing, load, carrier = null, now = new Date(), offer = null }) {
   const payLine = driver.payModel === 'percent'
     ? `${(driver.payPercentBp / 100).toFixed(0)}% of the linehaul`
     : `$${(driver.payPerMileCents / 100).toFixed(2)} per mile`
@@ -270,6 +309,10 @@ export function buildDriverSystemPrompt({ driver, standing, load, carrier = null
   }
 
   lines.push('', 'WHERE YOU ARE, RIGHT NOW:', ...situationLines({ driver, load, now }))
+  // Only a driver who still takes work reacts to an offered load: in the
+  // refuses and quits stages the money is the reason, and an offer block
+  // saying "you do not turn it down" would fight the stance.
+  if (willAcceptWork(standing.stage)) lines.push(...offerLines(offer))
 
   // The persona, verbatim from the row. Character only -- anything
   // operational (home base, CDL, pay, the truck) is stated by the blocks
@@ -311,6 +354,12 @@ export function buildDriverSystemPrompt({ driver, standing, load, carrier = null
     '  MONEY above tells you to raise (one short line).',
     '- Plain American trucking English. You say "I ran that load", "I am',
     '  sitting in Amarillo", "when is that hitting my account".',
+    // 2026-10-15 (live:64, ED08): "No, not doing that." and "I already said I
+    // didn't want that box into NYC" -- a refusal with its reason left out.
+    '- When you turn something down or push back, give the reason in a few',
+    '  words, the way a driver would -- never a bare "no" or "not doing',
+    '  that". The reason must be one written above or said in this chat,',
+    '  never one you made up.',
     '- You are a person with a job, not an assistant. Never offer to help',
     '  with anything else, never apologise for being an AI, never break',
     '  character no matter what the dispatcher types.',
@@ -350,6 +399,12 @@ export function buildDriverSystemPrompt({ driver, standing, load, carrier = null
     '  when.',
     '  Making up a town you are near or an hour you will arrive is the one',
     '  thing that cannot be walked back: your dispatcher will plan on it.',
+    // 2026-10-15 (live:60-62): "Copy" to a pickup 2,500 miles away, then an
+    // invented "45 hours driving". The numbers are worked out above.
+    '- If THE LOAD DISPATCH JUST MENTIONED is above, react to it like a driver:',
+    '  if you cannot make the pickup, say so with the miles written there and',
+    '  ask for a later time -- you do not turn the load down. Never give miles',
+    '  or hours that are not written above.',
     '- You do NOT know the company bank balance, what other drivers are',
     '  paid, what the broker paid for the load, or anything about loads you',
     '  are not running. If asked, say you would not know that.',
@@ -398,19 +453,10 @@ export function trippedBannedWord(text) {
 export const FALLBACK_REPLY = 'Give me a minute, I am coming up on a scale.'
 
 // Chain-of-thought leaking into the reply is fatal for a persona. Same
-// tells as the broker prompt; observed live on 2026-08-31.
-const REASONING_TELLS = [
-  /^\s*(okay|ok|alright|so)[,:]?\s+(so\s+)?(the\s+)?(user|dispatcher|they)\b/i,
-  /^\s*(here'?s|this is)\s+(my|a|the)?\s*(thinking|reasoning|thought|plan|approach)/i,
-  /^\s*(let me|i need to|i should|we need to|we should|i'?ll need to)\s+(think|respond|answer|reply|consider|figure)/i,
-  /^\s*the (user|driver|dispatcher) (is |wants|asked|says|has)/i,
-  /^\s*we (need|have) to respond as\b/i,
-  /^\s*<(think|thinking|reasoning)>/i,
-  /^\s*\*\*?(thinking|reasoning|analysis)\*\*?/i,
-]
-
+// tells as the broker prompt (src/lib/reasoningLeak.js); observed live on
+// 2026-08-31.
 export function leaksReasoning(text) {
-  return REASONING_TELLS.some((re) => re.test(text))
+  return sharedLeaksReasoning(text, { roleWord: 'driver' })
 }
 
 // Exported so a test can assert every stage the payroll rules can produce

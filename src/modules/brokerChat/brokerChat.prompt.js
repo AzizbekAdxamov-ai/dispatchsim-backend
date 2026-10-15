@@ -11,7 +11,12 @@
 import { BANNED } from '../../../scripts/seed/validate.js'
 import { clockDateTime, clockDateTimeDay } from '../../constants/appClock.js'
 import { hash01 } from '../../lib/stableHash.js'
+import { leaksReasoning as sharedLeaksReasoning } from '../../lib/reasoningLeak.js'
 import { brokerTerms, termsLines } from '../../constants/accessorials.js'
+import { loadingMode, tarpFor, securementFor, isOpenDeck } from '../../constants/freightHandling.js'
+import { marketClaims, ratePushes } from './rateTalk.js'
+import { truckFacts } from './truckTalk.js'
+import { DRIVING_LIMIT_HOURS, REQUIRED_REST_HOURS } from '../../constants/hosClock.js'
 import { marketFacts, seasonNote, benchmarkAgeDays, STALE_AFTER_DAYS } from '../../constants/marketRates.js'
 
 const BANNED_WORDS = BANNED.source
@@ -145,9 +150,9 @@ export function marketBlock(posting, now = new Date()) {
     // A real reason earns a move under ON RATE's rules, not the whole ask.
     ...(weaker ? [
       '  - This load goes INTO a market that pays less than the national figure to',
-      '    leave. A carrier who asks for more because of that has a real point.',
-      '    Move for it under ON RATE -- part of the way, never the whole ask in one',
-      '    step.',
+      '    leave. A carrier who asks for more because of that has a real point --',
+      '    but it does not move you on their first push. On a later push it can,',
+      '    under ON RATE: part of the way, never the whole ask in one step.',
     // 2026-10-06 fourth run: told "reload out of savannah is terrible",
     // the broker said "I hear you on the Savannah reload" -- agreeing with a
     // claim its own figures contradict. "Say so" gave it nothing to say:
@@ -165,7 +170,8 @@ export function marketBlock(posting, now = new Date()) {
     ]),
     '  - If the carrier quotes the market at you and gets it right, you are',
     '    talking to someone who knows the business. Treat them that way. If',
-    '    they quote numbers that are wrong, say so.',
+    '    they quote numbers that are wrong, give them the real figure; never',
+    '    repeat theirs back as if it were true.',
     '  - These are averages for a whole region, not this lane. Never call one',
     '    "what this lane pays". Use them the way a person would, in passing',
     '    ("Great Lakes is paying right now"), never read out like a report.',
@@ -207,7 +213,97 @@ export function talkBlock(talk) {
   ]
 }
 
-export function buildBrokerSystemPrompt({ broker, posting, carrier = null, now = new Date(), talk = null }) {
+// What the dispatcher has said about the market and the rate, checked by
+// code (rateTalk.js) and put in front of the broker as fact. `said` is the
+// dispatcher's own texts in order, the one being answered last. Empty when
+// there is nothing to say, so a chat that has quoted no figure and pushed
+// no rate gets no extra lines.
+const label = (key) => String(key).replace(/-/g, ' ')
+
+export function rateTalkBlock({ posting, said = null }) {
+  if (!said || said.length === 0) return []
+  const out = []
+
+  const claims = marketClaims(said, posting)
+  if (claims.length > 0) {
+    out.push('WHAT THEY SAID ABOUT THE MARKET (checked against your DAT figures):')
+    for (const c of claims) {
+      const who = `${c.region} ${label(c.equipmentType)}`
+      const quoted = `$${c.claimed.toFixed(2)}/mi`
+      if (c.verdict === 'wrong') {
+        out.push(
+          `  They said ${who} ${c.basis} is ${quoted}. Your figure is $${c.real.toFixed(2)}/mi. That is not what DAT shows.`,
+          '  Give them your figure. Never repeat their number back as if it were true, and never agree with it.',
+        )
+      } else if (c.verdict === 'right') {
+        out.push(`  They said ${who} is ${quoted}. That matches your figure -- they know the market.`)
+      } else {
+        out.push(`  They said ${who} is ${quoted}. You have no figure for that this week: do not confirm it.`)
+      }
+    }
+    out.push('')
+  }
+
+  const pushes = ratePushes(said, posting)
+  if (pushes?.count === 1 && pushes.current) {
+    out.push(
+      `ON THE RATE SO FAR (counted from this chat): this is the first time they have asked for more than your $${posting.rateUsd}. Hold at $${posting.rateUsd} this time, whatever reason they give -- reload, deadhead, weight -- unless they are walking away; then the walk-away rule applies. No new figure. Give them your reason the number is what it is.`,
+      '',
+    )
+  } else if (pushes?.count >= 2) {
+    out.push(
+      `ON THE RATE SO FAR (counted from this chat): they have asked for more ${pushes.count} times. If they have given a real reason, you may come up part of the way.`,
+      '',
+    )
+  }
+  return out
+}
+
+// Where the dispatcher said their truck is, against this posting's pickup,
+// worked out by code (truckTalk.js) and put in front of the broker as fact.
+// Empty unless a city was said. The driver's hours are not known to a
+// broker, so a full day is assumed -- and the broker is told that.
+export function truckBlock({ posting, said = null, now = new Date() }) {
+  const f = truckFacts({ texts: said, posting, now })
+  if (!f) return []
+  const place = `${f.city}, ${f.state}`
+  const pickup = f.pickupAt ? clockDateTimeDay(f.pickupAt.toISOString(), now.toISOString()) : null
+  const lines = ['WHERE THEY SAID THEIR TRUCK IS (worked out from the miles):']
+  if (f.miles === 0) {
+    lines.push(`  They said the truck is in ${place}, which is your pickup city.`)
+  } else {
+    lines.push(
+      `  They said the truck is in ${place}: about ${f.miles.toLocaleString('en-US')} road miles from ${posting.originCity}, ${posting.originState}.`,
+      `  Driven legally (${DRIVING_LIMIT_HOURS} hours a day, a ${REQUIRED_REST_HOURS}-hour rest between days; you do not know their hours, so a full day is assumed) it gets there around ${clockDateTime(f.earliestAt.toISOString())}`
+        + (pickup ? ` -- ${f.makesIt ? 'before' : 'after'} your ${pickup} pickup.` : '.'),
+    )
+  }
+  lines.push('  Use this to answer whether they can make it. Never send them to check with anyone.', '')
+  return lines
+}
+
+// Tarps and securement for an open-deck load, from the freight and its
+// weight (src/constants/freightHandling.js). Empty for every other trailer,
+// so a dry van is never told about tarps.
+export function openDeckLines(posting) {
+  if (!isOpenDeck(posting)) return []
+  const tarp = tarpFor(posting)
+  const sec = securementFor(posting)
+  const piece = sec?.kind === 'chains'
+    ? `at least ${sec.count} chains (grade 70, 3/8 inch) for the machine`
+    : `at least ${sec?.count} four-inch straps over the top`
+  return [
+    `- This is an open-deck load. Tarps: ${tarp.needed === true ? `${tarp.kind} required` : tarp.needed === false ? 'none required' : "say tarps are the driver's call on this freight; do not say required or not"}.`
+      + (sec
+        ? ` Securement: by the weight it takes ${piece}${sec.kind === 'chains' ? '' : '; a long piece may need more by its length'} -- the driver secures it to the federal rule.`
+        : ' Securement: the driver secures it to the federal rule.')
+      + (tarp.needed === null
+        ? ' When asked, give the securement count; never guess a different one and never send them to the shipper.'
+        : ' When asked, give these; never guess a different count and never send them to the shipper.'),
+  ]
+}
+
+export function buildBrokerSystemPrompt({ broker, posting, carrier = null, now = new Date(), talk = null, said = null }) {
   const rpm = (posting.rateUsd / posting.distanceMi).toFixed(2)
   const ceiling = ceilingFor(posting)
   const ceilingRpm = (ceiling / posting.distanceMi).toFixed(2)
@@ -251,6 +347,9 @@ export function buildBrokerSystemPrompt({ broker, posting, carrier = null, now =
     // own load's appointment. The board prints exact times, so they are
     // appointments, and the broker says so.
     '  Both are set appointments at those times -- not FCFS. If asked, say so.',
+    // Live or drop, from the equipment (src/constants/freightHandling.js):
+    // asked "live load or d&h?", brokers answered both ways on the same load.
+    `  Loading: ${loadingMode(posting)} at both ends. If asked, say so, once.`,
     '',
     // Without this the broker cannot tell "today" from "Friday": it was
     // given two dates and no calendar. On 2026-09-30 it answered "today
@@ -261,6 +360,8 @@ export function buildBrokerSystemPrompt({ broker, posting, carrier = null, now =
     '',
     ...loadSituation({ posting, now }),
     ...marketBlock(posting, now),
+    ...rateTalkBlock({ posting, said }),
+    ...truckBlock({ posting, said, now }),
     ...talkBlock(talk),
     'HOW YOU TALK:',
     '- One to three sentences. Never a list, never a wall of text. This is a',
@@ -347,13 +448,14 @@ export function buildBrokerSystemPrompt({ broker, posting, carrier = null, now =
     '- Never say how much room you have left, and never use the words',
     '  "ceiling" or "limit" about your own number. "That\'s my best" is fine',
     '  when you mean it -- or when you want them to think so.',
-    '- Do not jump to it. The first time they push, hold at your posted',
-    '  number and tell them why it is what it is.',
+    '- Do not jump to it. The first time they push -- whatever the reason, a weak',
+    '  reload or deadhead included -- hold at your posted number, give no new',
+    '  figure, and tell them why it is what it is.',
     // 2026-10-06 fourth run: "I can't move it this first ask" -- the rule
     // read out, which tells the carrier to ask again.
     '- Hold without saying that you are holding: nothing that tells them',
     '  asking again will work.',
-    '- Move for a REASON, not for pressure. Heavy freight, a tight pickup',
+    '- From their second push on, move for a REASON, not for pressure. Heavy freight, a tight pickup',
     '  window, a lane out of a market nobody wants to be in, a long empty',
     '  run to get there — those earn money. "It is too cheap" on its own',
     '  does not. Come up part of the way, then part of the way again.',
@@ -379,6 +481,7 @@ export function buildBrokerSystemPrompt({ broker, posting, carrier = null, now =
       '  the way any broker does. When asked, give BOTH: one temperature in °F',
       '  and continuous or start-stop. Never send them to the shipper for it.',
     ] : []),
+    ...openDeckLines(posting),
     // 2026-10-13 live session: "you'd check with your dispatcher", "check
     // with your office" -- said to the dispatcher, the one person they were
     // sending the carrier back to.
@@ -433,18 +536,7 @@ export const FALLBACK_REPLY =
 // "We need to respond as Devin Marlowe... We need to push back at least
 // once..." instead of a reply.
 //
-// Patterns are anchored to the START of the reply. A broker can legitimately
-// say "we need a reefer" mid-sentence; only an opening like that is a tell.
-const REASONING_TELLS = [
-  /^\s*(okay|ok|alright|so)[,:]?\s+(so\s+)?(the\s+)?(user|carrier|they)\b/i,
-  /^\s*(here'?s|this is)\s+(my|a|the)?\s*(thinking|reasoning|thought|plan|approach)/i,
-  /^\s*(let me|i need to|i should|we need to|we should|i'?ll need to)\s+(think|respond|answer|reply|consider|figure)/i,
-  /^\s*the (user|carrier|dispatcher) (is |wants|asked|says|has)/i,
-  /^\s*we (need|have) to respond as\b/i,
-  /^\s*<(think|thinking|reasoning)>/i,
-  /^\s*\*\*?(thinking|reasoning|analysis)\*\*?/i,
-]
-
+// The patterns live in src/lib/reasoningLeak.js, shared with the driver chat.
 export function leaksReasoning(text) {
-  return REASONING_TELLS.some((re) => re.test(text))
+  return sharedLeaksReasoning(text, { roleWord: 'carrier' })
 }

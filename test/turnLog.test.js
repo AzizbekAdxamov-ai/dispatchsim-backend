@@ -5,13 +5,13 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdtempSync, readdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 
 import { turnRow, INSERT_TURN_SQL } from '../src/modules/chat/turnLog.js'
-import { liveRow, withGrades, summary, readJsonl } from '../scripts/trainingRows.js'
+import { liveRow, withGrades, summary, readJsonl, sumUsage } from '../scripts/trainingRows.js'
 import { promptVersionOf } from '../src/lib/promptVersion.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -123,4 +123,94 @@ test('chat-eval records the answering model for both chats', () => {
   assert.equal(records.length, 2)
   for (const r of records) assert.match(r, /\n\s+model, promptVersion/)
   assert.doesNotMatch(src, /model: config\.model/)
+})
+
+// -- 060: what each request came to -------------------------------------------
+
+const SAMPLE_ATTEMPTS = [
+  { n: 1, model: 'a', cause: 'first', status: 429, outcome: 'rate_limited', rateLimit: { code: 'TPM' }, usage: null },
+  { n: 2, model: 'b', cause: 'fallback', status: 200, outcome: 'ok', rateLimit: null, usage: { prompt: 10, completion: 5, reasoning: 1, cached: 0, total: 15 } },
+]
+
+// Kills: attempts missing from the row, put at the wrong position (the
+// INSERT lists them last), stored as text instead of a jsonb array, or the
+// placeholder count drifting from the row.
+test('the turn row carries attempts as the last jsonb value', () => {
+  const row = turnRow({ ...BASE, reply: 'ok then', attempts: SAMPLE_ATTEMPTS })
+  assert.equal(row.length, 17)
+  assert.equal((INSERT_TURN_SQL.match(/\$\d+/g) ?? []).length, 17)
+  assert.match(INSERT_TURN_SQL, /findings, attempts\)/)
+  assert.match(INSERT_TURN_SQL, /\$16::jsonb, \$17::jsonb\)/)
+  assert.deepEqual(JSON.parse(row[16]), SAMPLE_ATTEMPTS)
+  assert.equal(row[15], '[]')
+  assert.equal(turnRow({ ...BASE, reply: 'ok then' })[16], '[]')
+})
+
+// Kills: a migration that adds the column to only one table, allows a
+// non-array (jsonb_array_elements would then fail the whole daily query),
+// or is not re-runnable. 059 belongs to another task and must stay free.
+test('060 adds attempts to both tables, as a checked array', () => {
+  const sql = read('src', 'db', 'migrations', '060_chat_request_attempts.sql')
+  for (const table of ['chat_turn_log', 'chat_script_requests']) {
+    assert.match(sql, new RegExp(`ALTER TABLE ${table}\\s+ADD COLUMN IF NOT EXISTS attempts jsonb NOT NULL DEFAULT '\\[\\]'::jsonb`))
+    assert.match(sql, new RegExp(`ALTER TABLE ${table} DROP CONSTRAINT IF EXISTS ${table}_attempts_array`))
+    assert.match(sql, new RegExp(`ADD CONSTRAINT ${table}_attempts_array CHECK \\(jsonb_typeof\\(attempts\\) = 'array'\\)`))
+  }
+  assert.ok(!readdirSync(join(here, '..', 'src', 'db', 'migrations')).some((f) => f.startsWith('059_')), '059 is reserved')
+})
+
+// Kills: either service not collecting attempts, the regeneration not
+// marked as one, the attempts not reaching the turn row, or onAttempt
+// pushed between onRequest and onModel (the test above looks for onModel
+// right after onRequest).
+for (const file of ['brokerChat', 'driverChat']) {
+  test(`the ${file} service passes onAttempt to both calls and logs the attempts`, () => {
+    const src = read('src', 'modules', file, `${file}.service.js`)
+    const parts = src.split('await chatText({').slice(1).map((p) => p.split('}))')[0])
+    assert.equal(parts.length, 2)
+    for (const call of parts) assert.match(call, /onRequest,\s*onModel,\s*onAttempt,/)
+    assert.doesNotMatch(parts[0], /cause:/)
+    assert.match(parts[1], /cause: 'regenerate'/)
+    assert.match(src, /const attempts = \[\]/)
+    assert.match(src, /const onAttempt = \(a\) => attempts\.push\(\{ \.\.\.a, n: attempts\.length \+ 1 \}\)/)
+    assert.match(src, /turnRow\(\{[\s\S]*?\battempts\b[\s\S]*?\}\)\)/)
+  })
+}
+
+// Kills: the export dropping the attempts, or inventing zero tokens for a
+// row written before 060 (it has no record; 0 would say it was free).
+test('an exported live row carries its attempts and their summed tokens', () => {
+  const live = liveRow({ id: 9, chat: 'broker', created_at: '2026-10-15T10:00:00Z', model: 'b', prompt_version: 'v',
+    history: [], dispatcher_text: 'hi', system_prompt: 'S', reply: 'yo', error: null, regenerated_because: null,
+    fell_back: false, provider_requests: 2, findings: [], attempts: SAMPLE_ATTEMPTS })
+  assert.deepEqual(live.attempts, SAMPLE_ATTEMPTS)
+  assert.deepEqual(live.usage, { prompt: 10, completion: 5, reasoning: 1, cached: 0, total: 15 })
+  const old = liveRow({ id: 10, chat: 'broker', created_at: '2026-10-01T10:00:00Z', model: 'b', prompt_version: 'v',
+    history: [], dispatcher_text: 'hi', system_prompt: 'S', reply: 'yo', error: null, regenerated_because: null,
+    fell_back: false, provider_requests: 1, findings: [] })
+  assert.deepEqual(old.attempts, [])
+  assert.equal(old.usage, null)
+})
+
+// Kills: summing only the first attempt (a fallback's tokens lost) or
+// treating missing reasoning as a number.
+test('sumUsage adds every attempt that reported tokens', () => {
+  assert.equal(sumUsage([]), null)
+  assert.equal(sumUsage([{ usage: null }]), null)
+  assert.equal(sumUsage(undefined), null)
+  const two = [{ usage: { prompt: 100, completion: 20, reasoning: null, cached: null, total: 120 } }, ...SAMPLE_ATTEMPTS]
+  assert.deepEqual(sumUsage(two), { prompt: 110, completion: 25, reasoning: 1, cached: 0, total: 135 })
+})
+
+// Kills: all-null parts summed to 0 ("reasoning 0" for a model that never
+// reported reasoning), and prompt / completion invented when only total came.
+test('sumUsage keeps a part null when no attempt reported it', () => {
+  assert.deepEqual(
+    sumUsage([{ usage: { prompt: null, completion: null, reasoning: null, cached: null, total: 900 } }]),
+    { prompt: null, completion: null, reasoning: null, cached: null, total: 900 },
+  )
+  assert.deepEqual(
+    sumUsage([{ usage: { total: 40 } }, { usage: { prompt: 10, completion: 5, reasoning: 0, total: 15 } }]),
+    { prompt: 10, completion: 5, reasoning: 0, cached: null, total: 55 },
+  )
 })

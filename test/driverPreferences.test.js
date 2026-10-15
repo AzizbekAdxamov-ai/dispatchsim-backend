@@ -100,7 +100,7 @@ test('054 adds an object-only column and sets Grace\'s request only if she has n
 test('the driver is told to raise it once in the whole chat, and not tack it onto other answers', () => {
   const sent = requestLines(GRACE, LOAD_NYC).join('\n')
   assert.match(sent, /Say so ONCE in this whole chat/)
-  assert.match(sent, /not even tacked onto an answer about something else/)
+  assert.match(sent, /not\s+even tacked onto an answer about something else/)
 })
 
 // Kills: Grace promising to "check and get back" (nothing ever comes
@@ -125,4 +125,29 @@ test('the driver is told the request is hers, made to the office', () => {
 test('the driver is told the load goes where it is written', () => {
   assert.match(requestLines(GRACE, LOAD_NYC).join('\n'), /The load goes where it is written above; never say it goes anywhere else\./)
   assert.doesNotMatch(requestLines(GRACE, { ...LOAD_NYC, ...TO_DALLAS }).join('\n'), /never say it goes anywhere else/)
+})
+
+// Kills: the reason requirement removed (live ED08: "I already said I didn't
+// want that box into NYC" -- no why), or the note read out word for word
+test('the driver is told to say WHY in her own words, and not to read the note out', () => {
+  const sent = requestLines({ ...GRACE, preferences: { ...GRACE_PREFS, why: 'turns, parking and tickets' } }, LOAD_NYC).join('\n')
+  assert.match(sent, /say WHY in a few words of your own -- the\n\s+office note above is your reason; put it the way you would say it,\n\s+never read the note out\./)
+  assert.match(sent, /The office has it written down as: "turns, parking and tickets"/)
+})
+
+// Kills: "once" rule lost, or limited to the current message instead of the whole chat
+test('the driver says it once, and not again if it was said earlier in the chat', () => {
+  const sent = requestLines(GRACE, LOAD_NYC).join('\n')
+  assert.match(sent, /Say so ONCE in this whole chat, the\n\s+first time it comes up/)
+  assert.match(sent, /If\n\s+it is already said earlier in this chat, do not say it again/)
+})
+
+// Kills: bare-no rule removed (live:64 "No, not doing that."), or a reason she may invent
+test('every refusal or push-back carries a reason from the prompt or the chat, never a made-up one', () => {
+  const prompt = buildDriverSystemPrompt({ driver: GRACE, standing: STANDING, load: LOAD_NYC })
+  assert.match(prompt, /When you turn something down or push back, give the reason in a few\n\s+words, the way a driver would -- never a bare "no" or "not doing\n\s+that"\./)
+  assert.match(prompt, /The reason must be one written above or said in this chat,\n\s+never one you made up\./)
+  // It sits in HOW YOU TALK, not in a stage block.
+  assert.ok(prompt.indexOf('HOW YOU TALK:') < prompt.indexOf('never a bare "no"'))
+  assert.ok(prompt.indexOf('never a bare "no"') < prompt.indexOf('WHAT YOU KNOW:'))
 })

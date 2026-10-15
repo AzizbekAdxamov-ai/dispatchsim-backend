@@ -55,8 +55,17 @@ export const PROVIDERS = Object.freeze({
     name: 'Groq (developer plan)',
     requestsPerMinute: 30,
     requestsPerDay: 1000,
+    // Developer plan base limits, per model. Tokens are the wall that
+    // arrives first: 200K a day is about 60 chat replies at the ~3,200
+    // tokens a reply with its system prompt costs. Groq reports TPM in
+    // response headers but not TPD, so the day's tokens are counted from
+    // what the app recorded (chat_turn_log.attempts, 060).
+    models: {
+      'openai/gpt-oss-120b': { rpm: 30, rpd: 1000, tpm: 8000, tpd: 200000 },
+      'qwen/qwen3.8-27b': { rpm: 30, rpd: 1000, tpm: 8000, tpd: 200000 },
+    },
     source: 'https://console.groq.com/docs/rate-limits',
-    checked: '2026-09-13',
+    checked: '2026-10-15',
     note: 'Har model uchun alohida hisoblanadi.',
   },
 })
@@ -247,6 +256,27 @@ export function budgetMessage({ used, share, seats, accountUsed, budget, scope }
   // one message can cost more than one.
   return `Your share for today is used up: ${used}/${share} requests. `
     + `${seats} ${seats === 1 ? 'dispatcher is' : 'dispatchers are'} working today, and the ${budget} daily requests are split between them.`
+}
+
+// Where a model stands against its daily token allowance. Pure; `used` is
+// what the app has recorded today (DAILY_TOKENS_SQL), which is not Groq's
+// own count -- see chat-usage.js. It only warns: nothing is ever refused
+// on this number. A model or provider with no published token limit gives
+// `limit: null`, never a guessed one.
+export const TOKEN_WARN_AT = 0.8
+
+export function dailyTokenStatus(baseUrl, model, used) {
+  const provider = providerFor(baseUrl)
+  const limit = provider.models?.[model]?.tpd ?? null
+  const spent = Math.max(0, Number(used) || 0)
+  const pct = limit ? spent / limit : null
+  return {
+    limit,
+    pct,
+    warn: pct != null && pct >= TOKEN_WARN_AT,
+    source: provider.source,
+    checked: provider.checked,
+  }
 }
 
 // Is a 429 OpenRouter's per-ACCOUNT daily cap on free models, or one

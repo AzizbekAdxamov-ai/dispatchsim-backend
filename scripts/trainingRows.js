@@ -8,7 +8,22 @@
 // reads the export -- Azizbek, or Nova from the shared folder -- and the
 // newest grade for an id wins.
 
+// Tokens across a row's attempts (060), or null when none of them reported
+// any -- a row from before 060 has no record, and 0 would claim it was free.
+// The same holds for each part: a provider that reports only `total` leaves
+// prompt, completion, reasoning and cached null (not reported), never 0.
+export function sumUsage(attempts) {
+  const used = (Array.isArray(attempts) ? attempts : []).map((a) => a?.usage).filter(Boolean)
+  if (used.length === 0) return null
+  const sum = (key) => {
+    const reported = used.map((u) => u[key]).filter((v) => v != null)
+    return reported.length === 0 ? null : reported.reduce((n, v) => n + v, 0)
+  }
+  return { prompt: sum('prompt'), completion: sum('completion'), reasoning: sum('reasoning'), cached: sum('cached'), total: sum('total') }
+}
+
 export function liveRow(r) {
+  const attempts = r.attempts ?? []
   return {
     id: `live:${r.id}`,
     source: 'live',
@@ -25,6 +40,8 @@ export function liveRow(r) {
     regeneratedBecause: r.regenerated_because,
     fellBack: r.fell_back,
     providerRequests: r.provider_requests,
+    attempts,
+    usage: sumUsage(attempts),
     findings: r.findings ?? [],
     human: r.human_grade ? { grade: r.human_grade, note: r.human_note ?? '', by: 'database' } : null,
   }

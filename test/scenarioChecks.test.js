@@ -168,3 +168,12 @@ test('a broker telling the dispatcher to check with their own side is flagged', 
   assert.deepEqual(brokerReply("Quick pay is our accounting's call."), [])
   assert.deepEqual(brokerReply('We check with our accounting on that, and I recheck with your numbers.'), [])
 })
+
+// Kills: anyReply / brokerReply / driverReply reading the raw text (a curly apostrophe or a non-breaking hyphen slipping past), or the previous reply left unfolded
+test('the scenario checks read typographic punctuation as plain ASCII', () => {
+  assert.deepEqual(anyReply('I’ll look into it.'), ['promises to get back'])
+  assert.deepEqual(brokerReply('You’d check with your dispatcher.', null), ['sends the dispatcher back to check'])
+  assert.deepEqual(driverReply('I’ll check.', null, { onTheRoad: false }), ['promises to get back'])
+  assert.deepEqual(anyReply('Where’s your truck at right now?', 'Where’s your truck sitting?'), ['same question as last reply'])
+  assert.deepEqual(anyReply(BROKER_FALLBACK.replace('—', '–')), ['fell back'])
+})

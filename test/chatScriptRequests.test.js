@@ -34,7 +34,7 @@ test('every request of a call is recorded, fallback included', async () => {
     record: async (r) => rows.push(r),
   })
   assert.equal(reply, 'ok')
-  assert.deepEqual(rows, [{ source: 'eval', side: 'broker', model: 'fallback', requests: 3 }])
+  assert.deepEqual(rows, [{ source: 'eval', side: 'broker', model: 'fallback', requests: 3, attempts: [] }])
 })
 
 // Kills: recording only on success -- a refused call still spent requests.
@@ -44,7 +44,7 @@ test('a failed call is recorded and the error still reaches the script', async (
     chatText: fakeChatText({ n: 2, fail: true }), source: 'scenarios', side: 'driver',
     config: { model: 'main' }, record: async (r) => rows.push(r),
   }), /429/)
-  assert.deepEqual(rows, [{ source: 'scenarios', side: 'driver', model: 'main', requests: 2 }])
+  assert.deepEqual(rows, [{ source: 'scenarios', side: 'driver', model: 'main', requests: 2, attempts: [] }])
 })
 
 // Kills: the script's own onRequest tally being replaced by the recorder's.

@@ -13,7 +13,8 @@ import 'dotenv/config'
 import { pool } from '../src/db/pool.js'
 import { DAILY_USAGE_SQL } from '../src/modules/chat/chatBudget.sql.js'
 import { chatConfigFor, walletScopeFor, describeChat } from '../src/modules/chat/chatProvider.js'
-import { providerFor, dailyBudgetFor, fairShare } from '../src/constants/chatBudget.js'
+import { providerFor, dailyBudgetFor, fairShare, dailyTokenStatus } from '../src/constants/chatBudget.js'
+import { loadTokenSection } from './tokenUsageText.js'
 import appConfig from '../src/config.js'
 
 const WATCH = process.argv.includes('--watch')
@@ -63,6 +64,15 @@ async function report() {
       console.log(`  ${budget - used} ta qoldi`)
     }
   }
+
+  // Tokens per model (060). Groq's daily token allowance runs out before its
+  // request count does, and it only warns here -- nothing is blocked.
+  const baseUrls = [...new Set(['broker', 'driver'].filter((w) => describeChat(w).ok).map((w) => chatConfigFor(w).baseUrl))]
+  const statusFor = (model, total) => {
+    const statuses = baseUrls.map((u) => dailyTokenStatus(u, model, total))
+    return statuses.find((s) => s.limit) ?? statuses[0] ?? dailyTokenStatus('', model, total)
+  }
+  for (const line of await loadTokenSection((sql) => pool.query(sql), statusFor)) console.log(line)
 
   // Who is actually using it. Not a leaderboard -- the question this
   // answers is "is one thread eating the budget", which the totals above

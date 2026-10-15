@@ -15,6 +15,9 @@
 // read. The human grade in the dataset (accurate? why?) is the verdict.
 
 import { dollars, brokerReply, driverReply, isFallback, FELL_BACK } from './scenarioChecks.js'
+import { loadingMode, tarpFor, securementFor } from '../src/constants/freightHandling.js'
+import { marketClaims } from '../src/modules/brokerChat/rateTalk.js'
+import { asciiPunct } from '../src/lib/plainText.js'
 import { hoursMinutes } from '../src/constants/appClock.js'
 import { humanDuration } from '../src/modules/driverChat/driverChat.prompt.js'
 
@@ -25,7 +28,56 @@ const BREAKS_CHARACTER = /\b(i am|i'm|im) (an? )?(ai|bot|language model|assistan
 const CLASSIFIER_ONLY = /^User Safety:\s*(?:safe|unsafe)$/i
 export const CLASSIFIER_ONLY_FINDING = 'classifier-only reply'
 const FUEL_OUT = /fuel('s| is)? (excluded|separate|extra|on top)|plus fuel|\bfsc (is )?(on top|extra|separate)/i
-const QUESTION = /\?/
+// ED07 counts a request as asking too: dispatchers type "need pu address and
+// miles", not "what's the pu address?". Plain statements ("Copy that.",
+// "I need to get fuel before I roll") ask nothing about the load.
+const ASKS = /\?|(^|[.!]\s*)(need(?! to\b)|send( me)?|gimme|give me|get me|shoot me|text me|tell me|let me know|what'?s|where|which|how)\b|(^|[.!]\s*)(need(?! to\b)|i'?ll need|send me)\b[^.!]{0,60}\b(address|miles|pu|pickup|drop|delivery|rate|appt|appointment|weight|commodity|info|details|bol)\b/i
+
+// ED07 / ED11: saying the pickup cannot be made, and ED12: turning down a
+// load she can. "later" counts as the first -- asking for a later time.
+// A bare "later" is not it ("talk to you later"): it must be a later pickup.
+const CANNOT_MAKE = /\bcan'?t (?:make|do|get|be)\b|\bcannot\b|\bwon'?t (?:make|be)\b|\bnot mak|\btoo far\b|\blater (?:pickup|pick up|time|slot|appt|appointment|window)\b|\bpush (?:it|the pickup)\b|\bnot (?:gonna )?happen|\bno can do\b|\bcan'?t get there\b|\bwon'?t get there\b|\bno way\b|\bnot making (?:it|that)\b/i
+// "can't wait" is not a refusal.
+const TURNS_DOWN = /\bcan'?t (?:make|do|take)\b|\bcannot\b|\bwon'?t (?:make|take)\b|\bnot taking\b|\bnot mak|\btoo far\b|\bno way\b|\bnot doing\b|\bpass on\b/i
+// Miles a reply states, as numbers: "about 1,980 mi", "2500 miles".
+const STATED_MILES = /(\d[\d,]*)\s*(?:mi\b|miles?\b)/gi
+// Beyond this share, a stated distance is not the computed one.
+const MILES_TOLERANCE = 0.05
+export function milesOff(reply, offer) {
+  if (!offer || offer.miles == null) return false
+  return [...reply.matchAll(STATED_MILES)]
+    .map((m) => Number(m[1].replace(/,/g, '')))
+    .some((n) => Math.abs(n - offer.miles) > offer.miles * MILES_TOLERANCE)
+}
+
+// ED08: the reason behind her request. ED13: the reason for turning down a
+// long empty run -- the miles, the hours, the empty trailer.
+// Whole words: "turned it down", "return" and "tight on hours" are not it.
+const GIVES_REASON = /\bturns?\b|\bturn around\b|\bparking\b|\bpark\b|\btickets?\b|\bstreets?\b|\btraffic\b|\btight (?:streets?|turns?|spots?|corners?|quarters)\b|\bno room\b|\bfit\b|\bin there\b/i
+// Something beyond the line's own words ("2500 miles" is the question):
+// the empty run, the clock, the cost.
+const GIVES_RUN_REASON = /\bempty\b|\bdeadhead\b|\bclock\b|\bhours?\b|\bhrs\b|\brest\b|\bfuel\b|\btoo far\b|\b\d+\s*days\b|\bmy days\b|\bnot worth\b|\bfor free\b|\bunpaid\b/i
+
+// EB08: drop and hook said of a live load (or live said of a drop). A denial
+// ("no drop and hook, it's live") is not the mistake.
+const SAYS_DROP = /\bdrop(?: and|-and|&| ?n) ?hook\b|\bd&h\b|\bdrop trailer\b/i
+const NEGATED_DROP = /\b(?:no|not|isn'?t|aren'?t|never)\b[^.!?]{0,25}(?:drop|d&h)/i
+const SAYS_LIVE = /\blive (?:load|unload)/i
+const NEGATED_LIVE = /\b(?:no|not|isn'?t|aren'?t|never)\b[^.!?]{0,25}live/i
+
+// EB10: a tarp answer that says none is needed, and a count said as a digit
+// or a word ("five straps").
+const NO_TARP = /\b(?:no|none|don'?t|doesn'?t|not|without)\b[^.!?]{0,30}\btarps?\b|\btarps?\b[^.!?]{0,25}\b(?:not (?:needed|required)|none|no need)\b/i
+const NUMBER_WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen', 'twenty']
+// The count must sit next to a strap / chain / tiedown word, and a figure like
+// "$3.88" or "3,5" is not a count.
+export function saysCount(reply, n) {
+  const word = NUMBER_WORDS[n]
+  // A number word before "-inch" is the strap width ("5 four-inch straps"), not the count.
+  const num = `(?<![$\\d.,])\\b${n}\\b(?![.,]\\d)${word ? `|\\b${word}\\b(?![ -]inch)` : ''}`
+  const noun = '\\b(?:straps?|chains?|tiedowns?)\\b'
+  return new RegExp(`(?:${num})[^.!?]{0,25}${noun}|${noun}[^.!?]{0,20}(?:${num})`, 'i').test(reply)
+}
 
 // Each case: id, chat, style (R rookie / P casual pro / H hard negotiator),
 // terms (what the line is testing), pick (which posting suits it, broker
@@ -76,7 +128,16 @@ export const BROKER_CASES = [
   {
     id: 'EB06', style: 'H', terms: ['the market', 'linehaul'], pick: 'regionalOrigin',
     line: (p, m) => `DAT shows ${m.origin.region.toLowerCase()} ${p.equipmentType} at ${(m.origin.linehaul + 1.8).toFixed(2)} linehaul this week so ur way under`,
-    expect: ({ market }) => (r) => (r.includes(market.origin.linehaul.toFixed(2)) ? [] : ['real figure not given']),
+    // The figure the line quotes is read back out of the line by the same code
+    // the prompt uses (rateTalk.js), so the check and the prompt cannot drift.
+    expect: ({ posting, market, line }) => (r) => {
+      const real = market.origin.linehaul.toFixed(2)
+      const claimed = marketClaims([line], posting).find((c) => c.verdict === 'wrong')?.claimed.toFixed(2)
+      return [
+        ...(r.includes(real) ? [] : ['real figure not given']),
+        ...(claimed && r.includes(claimed) && !r.includes(real) ? ['echoes their figure'] : []),
+      ]
+    },
     good: 'Corrects the number with the real regional figure; notes the posted rate is all-in.',
   },
   {
@@ -95,11 +156,16 @@ export const BROKER_CASES = [
   {
     id: 'EB08', style: 'P', terms: ['appointment', 'FCFS', 'drop and hook', 'lumper'], pick: 'dryvan',
     line: 'appt or fcfs at pu? live load or d&h? who pays lumper',
-    expect: () => (r) => [
-      ...(/appointment|appt/i.test(r) ? [] : ['appointment not said']),
-      ...(/lumper/i.test(r) ? [] : ['lumper not answered']),
-      ...(/live|drop|d&h/i.test(r) ? [] : ['live / drop not answered']),
-    ],
+    expect: ({ posting } = {}) => (r) => {
+      const mode = posting ? loadingMode(posting) : null
+      return [
+        ...(/appointment|appt/i.test(r) ? [] : ['appointment not said']),
+        ...(/lumper/i.test(r) ? [] : ['lumper not answered']),
+        ...(/live|drop|d&h/i.test(r) ? [] : ['live / drop not answered']),
+        ...(mode === 'live load and live unload' && SAYS_DROP.test(r) && !NEGATED_DROP.test(r) ? ['says drop and hook on a live load'] : []),
+        ...(mode === 'drop and hook' && SAYS_LIVE.test(r) && !NEGATED_LIVE.test(r) ? ['says live load on a drop and hook'] : []),
+      ]
+    },
     good: 'Set appointments (not FCFS); live or drop, said once and kept; lumper paid by the broker against a receipt.',
   },
   {
@@ -114,7 +180,17 @@ export const BROKER_CASES = [
   {
     id: 'EB10', style: 'P', terms: ['tarps', 'securement'], pick: 'openDeck',
     line: 'tarps needed? how many straps',
-    expect: () => (r) => (/tarp/i.test(r) ? [] : ['tarps not answered']),
+    expect: ({ posting } = {}) => (r) => {
+      if (!/tarp/i.test(r)) return ['tarps not answered']
+      if (!posting) return []
+      const tarp = tarpFor(posting)
+      const sec = securementFor(posting)
+      return [
+        // needed: null means the prompt made no tarp claim, so there is nothing to contradict.
+        ...(tarp?.needed != null && NO_TARP.test(r) === tarp.needed ? ['tarp answer wrong'] : []),
+        ...(sec && !saysCount(r, sec.count) ? [`${sec.kind} ${sec.count} not said`] : []),
+      ]
+    },
     good: 'Tarps yes/no (and what size if yes) and the securement, as a broker who knows the freight.',
   },
 ]
@@ -164,14 +240,23 @@ export const DRIVER_CASES = [
   {
     id: 'ED07', style: 'P', terms: [],
     line: 'Grace got a dallas load next, pu tmrw 8am',
-    expect: () => (r) => (QUESTION.test(r) ? [] : ['asks nothing about the load']),
-    good: 'Takes it as news and asks what she needs: miles, where exactly, the drop.',
+    expect: ({ offer } = {}) => (r) => [
+      ...(ASKS.test(r) ? [] : ['asks nothing about the load']),
+      ...(offer?.makesIt === false && !CANNOT_MAKE.test(r) ? ['pickup unreachable not said'] : []),
+      ...(milesOff(r, offer) ? ['miles off'] : []),
+    ],
+    good: 'Takes it as news, says plainly she cannot make a pickup that soon from where she is (with the miles), and asks for a later time.',
   },
   {
     id: 'ED08', style: 'P', terms: [],
     line: 'Grace ur on the NYC load',
-    expect: () => (r) => (/new york|\bnyc\b|\bthe city\b/i.test(r) ? [] : ['her own request not raised']),
-    good: 'Says, in her way, that she asked not to be sent there; may ask for something back; does not refuse.',
+    expect: () => (r) => [
+      ...(/new york|\bnyc\b|\bthe city\b/i.test(r) ? [] : ['her own request not raised']),
+      // The office note behind her request is about turns, parking and
+      // tickets (migration 054): a reason, in her words.
+      ...(GIVES_REASON.test(r) ? [] : ['reason not said']),
+    ],
+    good: 'Says, in her way, that she asked not to be sent there and why (the turns, parking, tickets); may ask for something back; does not refuse.',
   },
   {
     id: 'ED09', style: 'P', terms: ['settlement'],
@@ -185,17 +270,45 @@ export const DRIVER_CASES = [
     expect: () => (r) => (BREAKS_CHARACTER.test(r) ? ['breaks character'] : []),
     good: 'A person\'s reaction -- a joke or a shrug -- and back to work.',
   },
+  {
+    id: 'ED11', style: 'P', terms: [],
+    line: 'Grace got a load pittsburgh to raleigh pu tmrw 3am',
+    expect: ({ offer } = {}) => (r) => [
+      ...(offer?.makesIt === false && !CANNOT_MAKE.test(r) ? ['pickup unreachable not said'] : []),
+      ...(milesOff(r, offer) ? ['miles off'] : []),
+    ],
+    good: 'Says she cannot be in Pittsburgh by then from where she is, with the miles, and asks for a later time; no invented hours.',
+  },
+  {
+    id: 'ED12', style: 'P', terms: [],
+    line: 'Grace got a spokane load, pu tmrw 6pm',
+    expect: ({ offer } = {}) => (r) => [
+      ...(offer?.makesIt === true && TURNS_DOWN.test(r) ? ['turned down a load she can make'] : []),
+      ...(milesOff(r, offer) ? ['miles off'] : []),
+    ],
+    good: 'A load she can reach in time: takes it as news and asks what she needs; does not say she cannot make it.',
+  },
+  {
+    id: 'ED13', style: 'P', terms: ['deadhead'],
+    line: 'Grace can u deadhead 2500 miles if i pay extra?',
+    expect: () => (r) => (GIVES_RUN_REASON.test(r) ? [] : ['reason not said']),
+    good: 'Says why she will not or cannot (the miles, the hours on her clock, the empty run), not a bare "no".',
+  },
 ]
 
 // Findings on any reply of either chat, plus the case's own.
+// The checks run on the reply with typographic punctuation folded to ASCII
+// (the stored reply is untouched).
 export function brokerFindings(reply, check) {
-  if (reply.startsWith('(FAILED')) return ['no reply']
-  if (isFallback(reply)) return [FELL_BACK]
-  return [...brokerReply(reply, null), ...(CLASSIFIER_ONLY.test(reply.trim()) ? [CLASSIFIER_ONLY_FINDING] : []), ...(ASKS_PAPERWORK.test(reply) ? ['asks for paperwork'] : []), ...check(reply)]
+  const r = asciiPunct(reply)
+  if (r.startsWith('(FAILED')) return ['no reply']
+  if (isFallback(r)) return [FELL_BACK]
+  return [...brokerReply(r, null), ...(CLASSIFIER_ONLY.test(r.trim()) ? [CLASSIFIER_ONLY_FINDING] : []), ...(ASKS_PAPERWORK.test(r) ? ['asks for paperwork'] : []), ...check(r)]
 }
 
 export function driverFindings(reply, check, { onTheRoad }) {
-  if (reply.startsWith('(FAILED')) return ['no reply']
-  if (isFallback(reply)) return [FELL_BACK]
-  return [...driverReply(reply, null, { onTheRoad }), ...(CLASSIFIER_ONLY.test(reply.trim()) ? [CLASSIFIER_ONLY_FINDING] : []), ...check(reply)]
+  const r = asciiPunct(reply)
+  if (r.startsWith('(FAILED')) return ['no reply']
+  if (isFallback(r)) return [FELL_BACK]
+  return [...driverReply(r, null, { onTheRoad }), ...(CLASSIFIER_ONLY.test(r.trim()) ? [CLASSIFIER_ONLY_FINDING] : []), ...check(r)]
 }
