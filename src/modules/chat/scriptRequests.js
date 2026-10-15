@@ -7,10 +7,16 @@
 import { query } from '../../db/pool.js'
 import { DAILY_USAGE_SQL } from './chatBudget.sql.js'
 import { walletScopeFor } from './chatProvider.js'
+import { UNDEFINED_COLUMN, warnOnce } from './legacySchema.js'
 
 export const INSERT_SCRIPT_REQUESTS_SQL = `
   INSERT INTO chat_script_requests (source, side, model, requests, attempts)
   VALUES ($1, $2, $3, $4, $5::jsonb)`
+
+// The same row for a database without migration 060 (no attempts column).
+export const INSERT_SCRIPT_REQUESTS_NO_ATTEMPTS_SQL = `
+  INSERT INTO chat_script_requests (source, side, model, requests)
+  VALUES ($1, $2, $3, $4)`
 
 // Calls `chatText` and writes what it cost, whether it answered or threw.
 // Every request is counted where it is sent (aiClient's onRequest), so the
@@ -42,9 +48,20 @@ export async function chatTextRecorded({ chatText, source, side, config, record 
   }
 }
 
-async function defaultRecord({ source, side, model, requests, attempts = [] }) {
-  await query(INSERT_SCRIPT_REQUESTS_SQL, [source, side, model, requests, JSON.stringify(attempts)])
+// Without migration 060 the insert names a column that is not there (42703).
+// The request still happened and the budget counts it, so the row is
+// written again without the attempts rather than lost.
+export async function insertScriptRequest({ source, side, model, requests, attempts = [] }, run = query) {
+  try {
+    await run(INSERT_SCRIPT_REQUESTS_SQL, [source, side, model, requests, JSON.stringify(attempts)])
+  } catch (err) {
+    if (err?.code !== UNDEFINED_COLUMN) throw err
+    warnOnce('chat_script_requests.attempts', 'chat_script_requests has no attempts column (migration 060 not applied): recording requests without token records.')
+    await run(INSERT_SCRIPT_REQUESTS_NO_ATTEMPTS_SQL, [source, side, model, requests])
+  }
 }
+
+const defaultRecord = (row) => insertScriptRequest(row)
 
 const NOBODY = '00000000-0000-0000-0000-000000000000'
 

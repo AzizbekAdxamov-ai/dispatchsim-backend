@@ -4,7 +4,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { parseRateLimit, redactOrg } from '../src/lib/rateLimitReason.js'
+import { parseRateLimit } from '../src/lib/rateLimitReason.js'
 
 const GROQ = 'https://api.groq.com/openai/v1'
 const OPENROUTER = 'https://openrouter.ai/api/v1'
@@ -109,14 +109,10 @@ test('a non-Groq provider gets no header inference', () => {
   }
 })
 
-// Kills: the organisation id surviving into the parsed result, or
-// redactOrg leaving it in the text.
+// Kills: the organisation id (or the raw provider message) surviving into the parsed result.
 test('the organisation id is not kept', () => {
   const r = parseRateLimit({ status: 429, message: TPM, baseUrl: GROQ, headers: null })
   assert.doesNotMatch(JSON.stringify(r), /org_|01k9abcdef|Rate limit reached/)
-  const redacted = redactOrg(TPM)
-  assert.doesNotMatch(redacted, /org_01k9abcdef/)
-  assert.match(redacted, /<ORG>/)
 })
 
 // Kills: parsing a non-429 as a rate limit, or crashing on a response

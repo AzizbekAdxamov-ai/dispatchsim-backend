@@ -201,3 +201,16 @@ test('sumUsage adds every attempt that reported tokens', () => {
   const two = [{ usage: { prompt: 100, completion: 20, reasoning: null, cached: null, total: 120 } }, ...SAMPLE_ATTEMPTS]
   assert.deepEqual(sumUsage(two), { prompt: 110, completion: 25, reasoning: 1, cached: 0, total: 135 })
 })
+
+// Kills: all-null parts summed to 0 ("reasoning 0" for a model that never
+// reported reasoning), and prompt / completion invented when only total came.
+test('sumUsage keeps a part null when no attempt reported it', () => {
+  assert.deepEqual(
+    sumUsage([{ usage: { prompt: null, completion: null, reasoning: null, cached: null, total: 900 } }]),
+    { prompt: null, completion: null, reasoning: null, cached: null, total: 900 },
+  )
+  assert.deepEqual(
+    sumUsage([{ usage: { total: 40 } }, { usage: { prompt: 10, completion: 5, reasoning: 0, total: 15 } }]),
+    { prompt: 10, completion: 5, reasoning: 0, cached: null, total: 55 },
+  )
+})

@@ -11,10 +11,10 @@
 
 import 'dotenv/config'
 import { pool } from '../src/db/pool.js'
-import { DAILY_USAGE_SQL, DAILY_TOKENS_SQL, DAILY_UNRECORDED_SQL } from '../src/modules/chat/chatBudget.sql.js'
+import { DAILY_USAGE_SQL } from '../src/modules/chat/chatBudget.sql.js'
 import { chatConfigFor, walletScopeFor, describeChat } from '../src/modules/chat/chatProvider.js'
 import { providerFor, dailyBudgetFor, fairShare, dailyTokenStatus } from '../src/constants/chatBudget.js'
-import { tokenUsageLines, tokenFootnotes } from './tokenUsageText.js'
+import { loadTokenSection } from './tokenUsageText.js'
 import appConfig from '../src/config.js'
 
 const WATCH = process.argv.includes('--watch')
@@ -68,24 +68,11 @@ async function report() {
   // Tokens per model (060). Groq's daily token allowance runs out before its
   // request count does, and it only warns here -- nothing is blocked.
   const baseUrls = [...new Set(['broker', 'driver'].filter((w) => describeChat(w).ok).map((w) => chatConfigFor(w).baseUrl))]
-  const tokens = await pool.query(DAILY_TOKENS_SQL)
-  if (tokens.rowCount > 0) {
-    console.log('\n  tokens today, by model')
-    let footer = { source: null, checked: null }
-    for (const row of tokens.rows) {
-      const statuses = baseUrls.map((u) => dailyTokenStatus(u, row.model, row.total))
-      const status = statuses.find((s) => s.limit) ?? statuses[0] ?? dailyTokenStatus('', row.model, row.total)
-      if (status.limit) footer = { source: status.source, checked: status.checked }
-      console.log(`  ${row.model}`)
-      for (const line of tokenUsageLines(row, status)) console.log(line)
-    }
-    const { unrecorded } = (await pool.query(DAILY_UNRECORDED_SQL)).rows[0]
-    for (const line of tokenFootnotes({ unrecorded, ...footer })) console.log(line)
-  } else {
-    const { unrecorded } = (await pool.query(DAILY_UNRECORDED_SQL)).rows[0]
-    console.log('\n  tokens today: no token records yet')
-    for (const line of tokenFootnotes({ unrecorded, source: null, checked: null })) console.log(line)
+  const statusFor = (model, total) => {
+    const statuses = baseUrls.map((u) => dailyTokenStatus(u, model, total))
+    return statuses.find((s) => s.limit) ?? statuses[0] ?? dailyTokenStatus('', model, total)
   }
+  for (const line of await loadTokenSection((sql) => pool.query(sql), statusFor)) console.log(line)
 
   // Who is actually using it. Not a leaderboard -- the question this
   // answers is "is one thread eating the budget", which the totals above

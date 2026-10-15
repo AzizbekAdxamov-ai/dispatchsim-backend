@@ -41,7 +41,7 @@ import { sleep } from './seed/config.js'
 import { chatTextRecorded, usedToday, budgetRefusal } from '../src/modules/chat/scriptRequests.js'
 import { dailyBudgetFor, dailyTokenStatus } from '../src/constants/chatBudget.js'
 import { DAILY_TOKENS_SQL } from '../src/modules/chat/chatBudget.sql.js'
-import { attemptsLine, attemptFields, runTokenSummary, tokenPlanWarning, DEFAULT_REPLY_TOKENS } from './evalAttempts.js'
+import { attemptsLine, attemptFields, runTokenSummary, tokenPlanWarning, parseGap, makePacer, DEFAULT_REPLY_TOKENS } from './evalAttempts.js'
 import appConfig from '../src/config.js'
 import { marketFacts } from '../src/constants/marketRates.js'
 import { relativeDay, clockDateTime } from '../src/constants/appClock.js'
@@ -76,14 +76,13 @@ if ((casePosition !== -1 && !caseId) || (caseFlag === '' && !caseId)
 // --gap <seconds>: a pause between cases. Each case sends the whole system
 // prompt (~3,000 tokens) and the per-minute token limit is 8,000, so several
 // cases in a row can be refused for tokens although requests are far under.
-const gapFlag = args.find((a) => a.startsWith('--gap='))?.slice('--gap='.length)
-const gapPosition = args.indexOf('--gap')
-const gapRaw = gapFlag ?? (gapPosition === -1 ? '0' : args[gapPosition + 1])
-const gapSec = Number(gapRaw)
-if (!Number.isFinite(gapSec) || gapSec < 0) {
-  console.error(`Invalid --gap value: ${gapRaw ?? '(missing)'} (seconds, 0 or more)`)
+const gap = parseGap(args)
+if (gap.error) {
+  console.error(gap.error)
   process.exit(1)
 }
+const gapSec = gap.seconds
+const pauseBeforeCase = makePacer({ gapSec, sleep })
 const outDir = join(here, '..', '..', 'reports', 'eval')
 const startedAt = new Date()
 const runId = nextEvalRunId(outDir, startedAt)
@@ -93,7 +92,6 @@ const rows = []
 let requests = 0
 let retries = 0
 let semanticFailure = false
-let asked = 0
 
 // Only errors created here with fixed text or a case-bank ID may be shown
 // at the terminal. Database/provider errors can carry query or prompt data.
@@ -112,7 +110,7 @@ const promptVersion = (file) => promptVersionOf(join(here, '..', 'src', 'modules
 async function ask(config, messages, side) {
   let answeredModel = config.model
   const attempts = []
-  if (asked++ > 0 && gapSec > 0) await sleep(gapSec * 1000)
+  await pauseBeforeCase()
   try {
     const reply = await chatTextRecorded({
       chatText, source: 'eval', side, messages, config,

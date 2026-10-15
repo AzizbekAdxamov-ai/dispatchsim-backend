@@ -16,12 +16,6 @@ const GROQ_MESSAGE = /on (input |output )?(requests|tokens) per (minute|day) \((
 const TRY_AGAIN = /try again in\s+(?:(\d+)m)?([\d.]+)s/i
 const KNOWN_CODES = new Set(['RPM', 'RPD', 'TPM', 'TPD', 'ITPM', 'OTPM'])
 
-// The organisation id is an account identifier. Groq prints it in every
-// rate-limit message; it has no business in a log or a dataset.
-export function redactOrg(message) {
-  return String(message ?? '').replace(/\borg_[A-Za-z0-9]+/g, '<ORG>')
-}
-
 function headerValue(headers, name) {
   const v = headers?.get?.(name)
   return v === undefined ? null : v

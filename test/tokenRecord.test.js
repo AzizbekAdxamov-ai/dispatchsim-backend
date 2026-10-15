@@ -9,8 +9,8 @@ import { fileURLToPath } from 'node:url'
 
 import { DAILY_TOKENS_SQL, DAILY_UNRECORDED_SQL } from '../src/modules/chat/chatBudget.sql.js'
 import { chatTextRecorded, INSERT_SCRIPT_REQUESTS_SQL } from '../src/modules/chat/scriptRequests.js'
-import { attemptsLine, attemptFields, runTokenSummary, tokenPlanWarning } from '../scripts/evalAttempts.js'
-import { tokenUsageLines, tokenFootnotes } from '../scripts/tokenUsageText.js'
+import { attemptsLine, attemptFields, runTokenSummary, tokenPlanWarning, parseGap, makePacer } from '../scripts/evalAttempts.js'
+import { tokenUsageLines, tokenFootnotes, tokenSectionLines, loadTokenSection } from '../scripts/tokenUsageText.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const read = (...p) => readFileSync(join(here, '..', ...p), 'utf8')
@@ -139,24 +139,58 @@ test('the usage lines show tokens against the limit, 429s, and a warning at 80%'
   assert.equal(unknown.length, 1)
 })
 
-// Kills: the "approximate" note dropped when rows predate 060, the source
-// or date missing, or the day-boundary caveat missing.
-test('the footnotes name the source, the date, unrecorded rows and the day boundary', () => {
+// Kills: the "approximate" note dropped when rows have no token record, the
+// source or date missing, the day-boundary caveat missing, the refused-as-0
+// caveat missing, or the old "(before 060)" claim back (budget refusals have
+// no record either).
+test('the footnotes name the source, the date, unrecorded rows, the 0-token cases and the day boundary', () => {
   const notes = tokenFootnotes({ unrecorded: 4, source: 'https://console.groq.com/docs/rate-limits', checked: '2026-10-15' }).join('\n')
-  assert.match(notes, /4 rows without a token record \(before 060\) — approximate/)
+  assert.match(notes, /4 rows with no token record — approximate/)
+  assert.doesNotMatch(notes, /before 060/)
+  assert.match(notes, /refused \(429\) requests and responses without a usage block count as 0 tokens/)
   assert.match(notes, /https:\/\/console\.groq\.com\/docs\/rate-limits \(checked 2026-10-15\)/)
   assert.match(notes, /database day may not match the provider's window/)
-  assert.doesNotMatch(tokenFootnotes({ unrecorded: 0, source: null, checked: null }).join('\n'), /without a token record/)
+  assert.doesNotMatch(tokenFootnotes({ unrecorded: 0, source: null, checked: null }).join('\n'), /no token record/)
 })
 
-// Kills: chat-usage not printing tokens at all.
-test('chat-usage reads the token query and prints through the text helpers', () => {
-  const src = read('scripts', 'chat-usage.js')
-  assert.match(src, /DAILY_TOKENS_SQL/)
-  assert.match(src, /DAILY_UNRECORDED_SQL/)
-  assert.match(src, /dailyTokenStatus/)
-  assert.match(src, /for \(const line of tokenUsageLines\(row, status\)\) console\.log\(line\)/)
-  assert.match(src, /for \(const line of tokenFootnotes\(/)
+const GROQ_STATUS = { limit: 200000, pct: 0.5, warn: false, source: 'https://console.groq.com/docs/rate-limits', checked: '2026-10-15' }
+
+// Kills: the section dropping a model, the footer taking its source from a
+// model with no published limit, or "no records yet" printed over real rows.
+test('the token section lists every model, takes the source from a model with a limit, and says when there is nothing', () => {
+  const rows = [{ model: 'free-model', total: 500, rate_limited: 0 }, { model: 'groq-model', total: 100000, rate_limited: 1 }]
+  const statusFor = (model, total) => (model === 'groq-model' ? GROQ_STATUS : { limit: null, pct: null, warn: false, source: null, checked: null })
+  const text = tokenSectionLines({ rows, unrecorded: 0, statusFor }).join('\n')
+  assert.match(text, /tokens today, by model/)
+  assert.match(text, /free-model\n {2}tokens ~500 \(no published daily limit\) · 429: 0/)
+  assert.match(text, /groq-model\n {2}tokens ~100,000\/200,000 \(50%\) · 429: 1/)
+  assert.match(text, /limits: https:\/\/console\.groq\.com\/docs\/rate-limits \(checked 2026-10-15\)/)
+  assert.doesNotMatch(text, /no token records yet/)
+
+  const none = tokenSectionLines({ rows: [], unrecorded: 3, statusFor }).join('\n')
+  assert.match(none, /tokens today: no token records yet/)
+  assert.match(none, /3 rows with no token record/)
+  assert.doesNotMatch(none, /by model/)
+})
+
+// Kills: the usage report dying on a database without migration 060 (42703),
+// or hiding a different error behind the same message.
+test('the token section says the records are unavailable on 42703 and rethrows anything else', async () => {
+  const statusFor = () => GROQ_STATUS
+  const missing = async () => { throw Object.assign(new Error('column "attempts" does not exist'), { code: '42703' }) }
+  assert.deepEqual(await loadTokenSection(missing, statusFor), ['', '  token records unavailable (migration 060 not applied)'])
+  const down = async () => { throw Object.assign(new Error('connection refused'), { code: 'ECONNREFUSED' }) }
+  await assert.rejects(loadTokenSection(down, statusFor), /connection refused/)
+
+  const asked = []
+  const fine = async (sql) => {
+    asked.push(sql)
+    return sql === DAILY_TOKENS_SQL ? { rows: [{ model: 'm', total: 1000, rate_limited: 0 }] } : { rows: [{ unrecorded: 2 }] }
+  }
+  const lines = (await loadTokenSection(fine, statusFor)).join('\n')
+  assert.deepEqual(asked, [DAILY_TOKENS_SQL, DAILY_UNRECORDED_SQL])
+  assert.match(lines, /tokens ~1,000\/200,000/)
+  assert.match(lines, /2 rows with no token record/)
 })
 
 // -- chat:eval -------------------------------------------------------------------
@@ -173,19 +207,36 @@ test('the eval request line explains a 429 and the fallback that answered', () =
   assert.match(attemptsLine([{ n: 1, model: 'm', cause: 'first', status: 200, outcome: 'ok', usage: null }]), /tokens not reported/)
 })
 
-// Kills: a dataset row without attempts/usage/requests, or a usage that
-// leaves out the refused attempts' (zero) share by double-counting.
+// Kills: a part the provider did not report printed as 0 ("reasoning 0" for a
+// model that never said), instead of n/a.
+test('the eval request line prints n/a for a token part that was not reported', () => {
+  const onlyTotal = { n: 1, model: 'm', cause: 'first', status: 200, outcome: 'ok', usage: { prompt: null, completion: null, reasoning: null, cached: null, total: 900 } }
+  assert.equal(attemptsLine([onlyTotal]), '1 — #1 m ok · tokens n/a in / n/a out (reasoning n/a, cached n/a)')
+  const noReasoning = { ...onlyTotal, usage: { prompt: 800, completion: 100, reasoning: null, cached: 0, total: 900 } }
+  assert.match(attemptsLine([noReasoning]), /tokens 800 in \/ 100 out \(reasoning n\/a, cached 0\)/)
+})
+
+// Kills: a dataset row without attempts/usage/requests, or a usage that is
+// not the sum of its attempts (only the last one, or one counted twice).
 test('a dataset row carries requests, attempts and summed usage', () => {
   const f = attemptFields([TPM_429, FALLBACK_OK])
   assert.equal(f.requests, 2)
   assert.deepEqual(f.attempts, [TPM_429, FALLBACK_OK])
   assert.deepEqual(f.usage, FALLBACK_OK.usage)
   assert.deepEqual(attemptFields(undefined), { requests: 0, attempts: [], usage: null })
+  // Two answered attempts: the usage is their sum, each counted once.
+  const two = attemptFields([
+    { n: 1, model: 'a', status: 200, outcome: 'ok', usage: { prompt: 100, completion: 10, reasoning: 5, cached: 0, total: 110 } },
+    { n: 2, model: 'b', status: 200, outcome: 'ok', usage: { prompt: 50, completion: 20, reasoning: null, cached: 0, total: 70 } },
+  ])
+  assert.deepEqual(two.usage, { prompt: 150, completion: 30, reasoning: 5, cached: 0, total: 180 })
 })
 
 // Kills: both eval records not carrying the fields (one chat's rows would
 // silently lack tokens), the ask() result not returning its attempts, the
 // 429 code missing from the stop message, or the report line missing.
+// (A source check on purpose: chat-eval.js needs a database and a provider
+// to run, so its wiring cannot be exercised here.)
 test('chat-eval records attempts for both chats and names the 429 code', () => {
   const src = read('scripts', 'chat-eval.js')
   assert.equal((src.match(/\.\.\.attemptFields\(attempts\)/g) ?? []).length, 2)
@@ -222,12 +273,55 @@ test('the token plan warning compares the plan to what is left, and only warns',
   assert.equal(tokenPlanWarning({ planned: 20, avgTokens: 3000, limit: null, used: 0 }), null)
 })
 
-// Kills: --gap parsed but never waited on, or waited on before the first
-// case (a pointless delay), or a bad value accepted.
-test('chat-eval pauses between cases only, for a validated --gap', () => {
+// Kills: a made-up average used when today's is known (the default 3,200 x 20
+// = 64,000 would overflow the 30,000 left; today's 1,000 x 20 = 20,000 fits)
+test('the token plan warning uses the known average, not the default', () => {
+  assert.equal(tokenPlanWarning({ planned: 20, avgTokens: 1000, limit: 200000, used: 170000 }), null)
+  assert.match(tokenPlanWarning({ planned: 20, avgTokens: 0, limit: 200000, used: 170000 }), /~64,000 tokens/)
+})
+
+// Kills: --gap parsed wrongly (the `=` form, a missing value, a negative or a
+// non-number accepted)
+test('--gap is read as seconds, in both forms, and a bad value is rejected', () => {
+  assert.deepEqual(parseGap([]), { seconds: 0 })
+  assert.deepEqual(parseGap(['driver', '--gap', '20']), { seconds: 20 })
+  assert.deepEqual(parseGap(['--gap=7.5', 'broker']), { seconds: 7.5 })
+  for (const bad of [['--gap'], ['--gap', '-1'], ['--gap', 'abc'], ['--gap', 'broker'], ['--gap=']]) {
+    assert.match(parseGap(bad).error, /Invalid --gap value/, bad.join(' '))
+  }
+  assert.equal(parseGap(['--gap', '-1']).error, 'Invalid --gap value: -1 (seconds, 0 or more)')
+})
+
+// Kills: waiting before the first case (a pointless delay), never waiting
+// between cases, or waiting the wrong length
+test('the pacer waits between cases only, for the gap in milliseconds', async () => {
+  const slept = []
+  const pause = makePacer({ gapSec: 20, sleep: async (ms) => { slept.push(ms) } })
+  await pause()
+  assert.deepEqual(slept, [])
+  await pause()
+  await pause()
+  assert.deepEqual(slept, [20000, 20000])
+
+  const quick = []
+  const none = makePacer({ gapSec: 0, sleep: async (ms) => { quick.push(ms) } })
+  await none(); await none(); await none()
+  assert.deepEqual(quick, [])
+})
+
+// Kills: chat-eval ignoring parseGap / makePacer (a source check on purpose:
+// the script needs a database and a provider to run)
+test('chat-eval takes its gap and pauses from the tested helpers', () => {
   const src = read('scripts', 'chat-eval.js')
-  assert.match(src, /--gap/)
-  assert.match(src, /if \(asked\+\+ > 0 && gapSec > 0\) await sleep\(gapSec \* 1000\)/)
-  assert.match(src, /!Number\.isFinite\(gapSec\) \|\| gapSec < 0/)
-  assert.match(src, /process\.exit\(1\)/)
+  assert.match(src, /const gap = parseGap\(args\)/)
+  assert.match(src, /makePacer\(\{ gapSec, sleep \}\)/)
+  assert.match(src, /await pauseBeforeCase\(\)/)
+})
+
+// Kills: chat-usage printing the token section by its own copy of the logic
+// (a source check on purpose: chat-usage.js needs a database to run)
+test('chat-usage prints the token section from the tested helper', () => {
+  const src = read('scripts', 'chat-usage.js')
+  assert.match(src, /await loadTokenSection\(\(sql\) => pool\.query\(sql\), statusFor\)/)
+  assert.doesNotMatch(src, /DAILY_TOKENS_SQL/)
 })

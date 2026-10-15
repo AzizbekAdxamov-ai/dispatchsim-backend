@@ -10,6 +10,8 @@ import { sumUsage } from './trainingRows.js'
 export const DEFAULT_REPLY_TOKENS = 3200
 
 const n = (v) => Number(v).toLocaleString('en-US')
+// A part the provider did not report is "n/a", not 0.
+const part = (v) => (v == null ? 'n/a' : n(v))
 
 function attemptText(a, i) {
   const head = `#${i + 1} ${a.model}${a.cause && a.cause !== 'first' ? ` ${a.cause}` : ''}`
@@ -32,7 +34,7 @@ export function attemptsLine(attempts) {
   if (list.length === 0) return '0'
   const usage = sumUsage(list)
   const tokens = usage
-    ? `tokens ${n(usage.prompt)} in / ${n(usage.completion)} out (reasoning ${n(usage.reasoning)}, cached ${n(usage.cached)})`
+    ? `tokens ${part(usage.prompt)} in / ${part(usage.completion)} out (reasoning ${part(usage.reasoning)}, cached ${part(usage.cached)})`
     : 'tokens not reported'
   return `${list.length} — ${list.map(attemptText).join(' → ')} · ${tokens}`
 }
@@ -70,4 +72,29 @@ export function tokenPlanWarning({ planned, avgTokens, limit, used }) {
   if (need <= left) return null
   return `Planned ~${n(planned)} requests x ~${n(Math.round(avg))} tokens = ~${n(Math.round(need))} tokens, `
     + `but ~${n(left)} of today's ${n(limit)} remain. Continuing anyway; the provider may refuse partway.`
+}
+
+// -- Pacing between cases ------------------------------------------------------
+
+// `--gap <seconds>` or `--gap=<seconds>` from the command line: { seconds }
+// (0 when absent) or { error } for a value that is missing, not a number or
+// negative.
+export function parseGap(args) {
+  const flag = args.find((a) => a.startsWith('--gap='))?.slice('--gap='.length)
+  const position = args.indexOf('--gap')
+  const raw = flag ?? (position === -1 ? '0' : args[position + 1])
+  const seconds = Number(raw)
+  if (raw === undefined || raw === '' || !Number.isFinite(seconds) || seconds < 0) {
+    return { error: `Invalid --gap value: ${raw ?? '(missing)'} (seconds, 0 or more)` }
+  }
+  return { seconds }
+}
+
+// The pause before a case: none before the first, `gapSec` seconds before
+// every later one. `sleep` is injected so a test does not wait.
+export function makePacer({ gapSec, sleep }) {
+  let asked = 0
+  return async () => {
+    if (asked++ > 0 && gapSec > 0) await sleep(gapSec * 1000)
+  }
 }
