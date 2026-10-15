@@ -15,6 +15,8 @@ import { leaksReasoning as sharedLeaksReasoning } from '../../lib/reasoningLeak.
 import { brokerTerms, termsLines } from '../../constants/accessorials.js'
 import { loadingMode, tarpFor, securementFor, isOpenDeck } from '../../constants/freightHandling.js'
 import { marketClaims, ratePushes } from './rateTalk.js'
+import { truckFacts } from './truckTalk.js'
+import { DRIVING_LIMIT_HOURS, REQUIRED_REST_HOURS } from '../../constants/hosClock.js'
 import { marketFacts, seasonNote, benchmarkAgeDays, STALE_AFTER_DAYS } from '../../constants/marketRates.js'
 
 const BANNED_WORDS = BANNED.source
@@ -257,6 +259,29 @@ export function rateTalkBlock({ posting, said = null }) {
   return out
 }
 
+// Where the dispatcher said their truck is, against this posting's pickup,
+// worked out by code (truckTalk.js) and put in front of the broker as fact.
+// Empty unless a city was said. The driver's hours are not known to a
+// broker, so a full day is assumed -- and the broker is told that.
+export function truckBlock({ posting, said = null, now = new Date() }) {
+  const f = truckFacts({ texts: said, posting, now })
+  if (!f) return []
+  const place = `${f.city}, ${f.state}`
+  const pickup = f.pickupAt ? clockDateTimeDay(f.pickupAt.toISOString(), now.toISOString()) : null
+  const lines = ['WHERE THEY SAID THEIR TRUCK IS (worked out from the miles):']
+  if (f.miles === 0) {
+    lines.push(`  They said the truck is in ${place}, which is your pickup city.`)
+  } else {
+    lines.push(
+      `  They said the truck is in ${place}: about ${f.miles.toLocaleString('en-US')} road miles from ${posting.originCity}, ${posting.originState}.`,
+      `  Driven legally (${DRIVING_LIMIT_HOURS} hours a day, a ${REQUIRED_REST_HOURS}-hour rest between days; you do not know their hours, so a full day is assumed) it gets there around ${clockDateTime(f.earliestAt.toISOString())}`
+        + (pickup ? ` -- ${f.makesIt ? 'before' : 'after'} your ${pickup} pickup.` : '.'),
+    )
+  }
+  lines.push('  Use this to answer whether they can make it. Never send them to check with anyone.', '')
+  return lines
+}
+
 // Tarps and securement for an open-deck load, from the freight and its
 // weight (src/constants/freightHandling.js). Empty for every other trailer,
 // so a dry van is never told about tarps.
@@ -336,6 +361,7 @@ export function buildBrokerSystemPrompt({ broker, posting, carrier = null, now =
     ...loadSituation({ posting, now }),
     ...marketBlock(posting, now),
     ...rateTalkBlock({ posting, said }),
+    ...truckBlock({ posting, said, now }),
     ...talkBlock(talk),
     'HOW YOU TALK:',
     '- One to three sentences. Never a list, never a wall of text. This is a',
