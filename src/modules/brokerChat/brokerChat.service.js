@@ -5,6 +5,8 @@
 // 22 requests a day, chat is per-message and open-ended — so they get
 // separate budgets, keys and models.
 import { chatText } from '../../../scripts/seed/aiClient.js'
+import { ignoresUnreachable } from '../../lib/cannotMake.js'
+import { truckFacts } from './truckTalk.js'
 import { fileURLToPath } from 'node:url'
 import { promptVersionOf } from '../../lib/promptVersion.js'
 import { turnRow, logTurn } from '../chat/turnLog.js'
@@ -122,15 +124,21 @@ export async function sendMessage({ conversationId, userId, text }) {
 
   const history = (await repo.listMessages(conversationId)).slice(-HISTORY_TURNS - 1, -1)
   const carrier = await getCarrier()
+  // The dispatcher's own words so far, this one included. Read by code for
+  // market claims and rate pushes (rateTalk.js). History is capped at
+  // HISTORY_TURNS, so a very old push can fall out of the count.
+  const said = [...dispatcherTexts(history), text]
+  // One clock for the prompt and for the check below: the verdict on the
+  // reply must be the one the prompt's truck block was written from.
+  const now = new Date()
+  const truck = truckFacts({ texts: said, posting, now })
   const systemPrompt = buildBrokerSystemPrompt({
     carrier,
     broker: { name: posting.name, contactName: posting.contactName, persona: posting.persona },
     posting,
-    // The dispatcher's own words so far, this one included.
-    talk: talkFacts([...dispatcherTexts(history), text], posting.equipmentType),
-    // Read by code for market claims and rate pushes (rateTalk.js). History is
-    // capped at HISTORY_TURNS, so a very old push can fall out of the count.
-    said: [...dispatcherTexts(history), text],
+    now,
+    talk: talkFacts(said, posting.equipmentType),
+    said,
   })
 
   // Every request this turn sends to the provider, counted where they are
@@ -182,17 +190,28 @@ export async function sendMessage({ conversationId, userId, text }) {
     //   than about the reply plus whatever the model thought first.
     const unusable = (t) => trippedBannedWord(t) !== null || leaksReasoning(t) || tooLongForChat(t)
 
-    if (unusable(reply)) {
-      const why = trippedBannedWord(reply)
+    const unusableWhy = unusable(reply)
+      ? (trippedBannedWord(reply)
         ? 'used a forbidden word'
         : leaksReasoning(reply)
           ? 'showed your own reasoning instead of speaking as the broker'
-          : `ran to ${reply.trim().length} characters when the limit is ${CHAT_REPLY_MAX_CHARS}`
+          : `ran to ${reply.trim().length} characters when the limit is ${CHAT_REPLY_MAX_CHARS}`)
+      : null
+    // Third way: the carrier's truck cannot reach the pickup in time
+    // (computed from the city they named and the clock) and the reply never
+    // says so. Same single second call -- one more request from the daily
+    // budget, only on turns where makesIt === false.
+    const missedPickup = ignoresUnreachable(reply, truck, { broker: true })
+    const why = unusableWhy ?? (missedPickup ? 'did not tell the carrier their truck gets there after your pickup' : null)
+
+    if (why) {
       console.warn(`[brokerChat] retrying — reply ${why}`)
       regenerated = why
       reply = clean(await chatText({
         messages: buildMessages({
-          systemPrompt: `${systemPrompt}\n\nYour last reply ${why}. Reply again as the broker, in character, one to three sentences only.`,
+          systemPrompt: `${systemPrompt}
+
+Your last reply ${why}.${missedPickup ? ' The facts above say their truck gets there after your pickup: say so plainly, with the miles, then ask one thing.' : ''} Reply again as the broker, in character, one to three sentences only.`,
           history,
           newMessage: text,
         }),
@@ -203,6 +222,7 @@ export async function sendMessage({ conversationId, userId, text }) {
         cause: 'regenerate',
       }))
       if (unusable(reply)) reply = FALLBACK_REPLY
+      else if (ignoresUnreachable(reply, truck, { broker: true })) console.warn('[brokerChat] regenerated reply still does not say the truck gets there after the pickup')
     }
   } catch (err) {
     failure = err.message

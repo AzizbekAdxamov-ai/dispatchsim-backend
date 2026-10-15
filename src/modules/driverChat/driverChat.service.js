@@ -15,6 +15,7 @@
 //   has just been paid -- because that is what happened.
 
 import { chatText } from '../../../scripts/seed/aiClient.js'
+import { ignoresUnreachable } from '../../lib/cannotMake.js'
 import { fileURLToPath } from 'node:url'
 import { promptVersionOf } from '../../lib/promptVersion.js'
 import { turnRow, logTurn } from '../chat/turnLog.js'
@@ -113,19 +114,21 @@ export async function sendMessage({ conversationId, userId, text, images }) {
   // prompt: renaming the company must not mean re-deploying it.
   const carrier = await getCarrier()
 
+  // A load the dispatcher is offering, worked out by code from this
+  // message and the last four of theirs (a pickup time said a message
+  // earlier still counts) -- offerTalk.js. Held here, not inline, because
+  // the reply is checked against the same facts the prompt was given.
+  const offer = offerFacts({
+    driver: context.driver,
+    load: context.load,
+    texts: [...history.filter((m) => m.role === 'dispatcher').slice(-4).map((m) => m.content), text],
+  })
   const systemPrompt = buildDriverSystemPrompt({
     driver: context.driver,
     standing,
     load: context.load,
     carrier,
-    // A load the dispatcher is offering, worked out by code from this
-    // message and the last four of theirs (a pickup time said a message
-    // earlier still counts) -- offerTalk.js.
-    offer: offerFacts({
-      driver: context.driver,
-      load: context.load,
-      texts: [...history.filter((m) => m.role === 'dispatcher').slice(-4).map((m) => m.content), text],
-    }),
+    offer,
   })
 
   // Every request this turn sends to the provider, counted where they are
@@ -169,17 +172,28 @@ export async function sendMessage({ conversationId, userId, text, images }) {
     //   than about the reply plus whatever the model thought first.
     const unusable = (t) => trippedBannedWord(t) !== null || leaksReasoning(t) || tooLongForChat(t)
 
-    if (unusable(reply)) {
-      const why = trippedBannedWord(reply)
+    const unusableWhy = unusable(reply)
+      ? (trippedBannedWord(reply)
         ? 'used a forbidden word'
         : leaksReasoning(reply)
           ? 'showed your own reasoning instead of speaking as the driver'
-          : `ran to ${reply.trim().length} characters when the limit is ${CHAT_REPLY_MAX_CHARS}`
+          : `ran to ${reply.trim().length} characters when the limit is ${CHAT_REPLY_MAX_CHARS}`)
+      : null
+    // Third way: the facts say she cannot make the pickup (computed from
+    // her position and the clock) and the reply never says so. Same single
+    // second call -- it costs one more request from the daily budget, only
+    // on turns where makesIt === false.
+    const missedPickup = ignoresUnreachable(reply, offer)
+    const why = unusableWhy ?? (missedPickup ? 'did not say you cannot make that pickup' : null)
+
+    if (why) {
       console.warn(`[driverChat] retrying — reply ${why}`)
       regenerated = why
       reply = clean(await chatText({
         messages: buildMessages({
-          systemPrompt: `${systemPrompt}\n\nYour last reply ${why}. Reply again as the driver, in character, one to three sentences only.`,
+          systemPrompt: `${systemPrompt}
+
+Your last reply ${why}.${missedPickup ? ' The facts above say you cannot make that pickup: say so plainly, with the miles, and ask for a later pickup time.' : ''} Reply again as the driver, in character, one to three sentences only.`,
           history,
           newMessage: text,
           images,
@@ -191,6 +205,7 @@ export async function sendMessage({ conversationId, userId, text, images }) {
         cause: 'regenerate',
       }))
       if (unusable(reply)) reply = FALLBACK_REPLY
+      else if (ignoresUnreachable(reply, offer)) console.warn('[driverChat] regenerated reply still does not say the pickup cannot be made')
     }
   } catch (err) {
     failure = err.message

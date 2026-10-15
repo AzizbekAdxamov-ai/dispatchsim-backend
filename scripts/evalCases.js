@@ -18,6 +18,7 @@ import { dollars, brokerReply, driverReply, isFallback, FELL_BACK } from './scen
 import { loadingMode, tarpFor, securementFor } from '../src/constants/freightHandling.js'
 import { marketClaims } from '../src/modules/brokerChat/rateTalk.js'
 import { asciiPunct } from '../src/lib/plainText.js'
+import { saysCannotMake } from '../src/lib/cannotMake.js'
 import { hoursMinutes } from '../src/constants/appClock.js'
 import { humanDuration } from '../src/modules/driverChat/driverChat.prompt.js'
 
@@ -33,10 +34,8 @@ const FUEL_OUT = /fuel('s| is)? (excluded|separate|extra|on top)|plus fuel|\bfsc
 // "I need to get fuel before I roll") ask nothing about the load.
 const ASKS = /\?|(^|[.!]\s*)(need(?! to\b)|send( me)?|gimme|give me|get me|shoot me|text me|tell me|let me know|what'?s|where|which|how)\b|(^|[.!]\s*)(need(?! to\b)|i'?ll need|send me)\b[^.!]{0,60}\b(address|miles|pu|pickup|drop|delivery|rate|appt|appointment|weight|commodity|info|details|bol)\b/i
 
-// ED07 / ED11: saying the pickup cannot be made, and ED12: turning down a
-// load she can. "later" counts as the first -- asking for a later time.
-// A bare "later" is not it ("talk to you later"): it must be a later pickup.
-const CANNOT_MAKE = /\bcan'?t (?:make|do|get|be)\b|\bcannot\b|\bwon'?t (?:make|be)\b|\bnot mak|\btoo far\b|\blater (?:pickup|pick up|time|slot|appt|appointment|window)\b|\bpush (?:it|the pickup)\b|\bnot (?:gonna )?happen|\bno can do\b|\bcan'?t get there\b|\bwon'?t get there\b|\bno way\b|\bnot making (?:it|that)\b/i
+// ED12: turning down a load she can. (ED07 / ED11 use saysCannotMake, the
+// same words the driver service regenerates on: src/lib/cannotMake.js.)
 // "can't wait" is not a refusal.
 const TURNS_DOWN = /\bcan'?t (?:make|do|take)\b|\bcannot\b|\bwon'?t (?:make|take)\b|\bnot taking\b|\bnot mak|\btoo far\b|\bno way\b|\bnot doing\b|\bpass on\b/i
 // Miles a reply states, as numbers: "about 1,980 mi", "2500 miles".
@@ -242,7 +241,7 @@ export const DRIVER_CASES = [
     line: 'Grace got a dallas load next, pu tmrw 8am',
     expect: ({ offer } = {}) => (r) => [
       ...(ASKS.test(r) ? [] : ['asks nothing about the load']),
-      ...(offer?.makesIt === false && !CANNOT_MAKE.test(r) ? ['pickup unreachable not said'] : []),
+      ...(offer?.makesIt === false && !saysCannotMake(r) ? ['pickup unreachable not said'] : []),
       ...(milesOff(r, offer) ? ['miles off'] : []),
     ],
     good: 'Takes it as news, says plainly she cannot make a pickup that soon from where she is (with the miles), and asks for a later time.',
@@ -274,7 +273,7 @@ export const DRIVER_CASES = [
     id: 'ED11', style: 'P', terms: [],
     line: 'Grace got a load pittsburgh to raleigh pu tmrw 3am',
     expect: ({ offer } = {}) => (r) => [
-      ...(offer?.makesIt === false && !CANNOT_MAKE.test(r) ? ['pickup unreachable not said'] : []),
+      ...(offer?.makesIt === false && !saysCannotMake(r) ? ['pickup unreachable not said'] : []),
       ...(milesOff(r, offer) ? ['miles off'] : []),
     ],
     good: 'Says she cannot be in Pittsburgh by then from where she is, with the miles, and asks for a later time; no invented hours.',

@@ -228,3 +228,10 @@ test('ED12 does not take "can\'t wait" for a refusal', () => {
   assert.deepEqual(check("I'm not taking it."), ['turned down a load she can make'])
   assert.deepEqual(check('I will pass on it.'), ['turned down a load she can make'])
 })
+
+// Kills: ED07 keeping its own copy of the words (the eval flagging what the
+// service accepts). No "later pickup" here -- that would pass on the old list.
+test('ED07 uses the shared cannot-make words', () => {
+  const check = d('ED07').expect({ offer: seattleOffer(1982, false) })
+  assert.deepEqual(check('Not gonna make 8am, earliest I could be there is Sun. Any other time?'), [])
+})
