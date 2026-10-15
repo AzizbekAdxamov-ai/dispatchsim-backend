@@ -24,8 +24,9 @@ import {
 // Dollar amounts as numbers: "$3,750" and "$3750" are the same figure.
 // (Moved here from scripts/scenarioChecks.js so src does not depend on
 // scripts; scenarioChecks imports it from here.)
+export const DOLLAR_RE = /\$\s?\d[\d,]*(\.\d+)?/g
 export function dollars(text) {
-  return (String(text).match(/\$\s?\d[\d,]*(\.\d+)?/g) ?? []).map((d) => Number(d.replace(/[$,\s]/g, '')))
+  return (String(text).match(DOLLAR_RE) ?? []).map((d) => Number(d.replace(/[$,\s]/g, '')))
 }
 
 // -- The market claim -------------------------------------------------------

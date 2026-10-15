@@ -15,6 +15,7 @@ import { FALLBACK_REPLY as DRIVER_FALLBACK } from '../src/modules/driverChat/dri
 import { FALLBACK_REPLY as BROKER_FALLBACK } from '../src/modules/brokerChat/brokerChat.prompt.js'
 import {
   PROMISE, anyReply, brokerReply, driverReply, repeatsQuestion, dollars, summarize, BROKER_EXPECT, DRIVER_EXPECT,
+  agreesWithClaim,
 } from '../scripts/scenarioChecks.js'
 
 // Kills: a promise pattern that misses "let me look at the paperwork"
@@ -176,4 +177,14 @@ test('the scenario checks read typographic punctuation as plain ASCII', () => {
   assert.deepEqual(driverReply('I’ll check.', null, { onTheRoad: false }), ['promises to get back'])
   assert.deepEqual(anyReply('Where’s your truck at right now?', 'Where’s your truck sitting?'), ['same question as last reply'])
   assert.deepEqual(anyReply(BROKER_FALLBACK.replace('—', '–')), ['fell back'])
+})
+
+// Kills: S3 counting the echo of the ask as a move (dollars(r) back in
+// S3), and "I hear you on X" no longer flagged (BARE_ACK test deleted).
+test('S3 does not count an echo of the ask; S4 still flags "I hear you on X"', () => {
+  const s3 = BROKER_EXPECT.S3({ posting: { rateUsd: 3541 }, ask: 3966 })
+  const echo = 'So you’re looking for $3,966. $3541 is what this lane pays.'
+  assert.deepEqual(s3[0](echo), [])
+  assert.deepEqual(s3[1](echo), [])
+  assert.equal(agreesWithClaim('I hear you on the reload. This lane is already above it.'), true)
 })

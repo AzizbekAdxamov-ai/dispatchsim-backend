@@ -237,7 +237,9 @@ test('the prompt tells her to say she cannot make it and ask for later, not to r
 test('the driver chat service passes the offer to the prompt, built from this message and the last four', async () => {
   const { readFileSync } = await import('node:fs')
   const code = readFileSync(new URL('../src/modules/driverChat/driverChat.service.js', import.meta.url), 'utf8')
-  assert.match(code, /offer: offerFacts\(\{/)
+  // Held in a const (the reply is checked against the same facts), then handed over.
+  assert.match(code, /const offer = offerFacts\(\{/)
+  assert.match(code, /buildDriverSystemPrompt\(\{[\s\S]*?\n\s+offer,\n/)
   assert.match(code, /\.slice\(-4\)\.map\(\(m\) => m\.content\), text\]/)
 })
 

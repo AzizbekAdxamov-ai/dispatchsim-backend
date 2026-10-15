@@ -235,3 +235,21 @@ test('ED07 uses the shared cannot-make words', () => {
   const check = d('ED07').expect({ offer: seattleOffer(1982, false) })
   assert.deepEqual(check('Not gonna make 8am, earliest I could be there is Sun. Any other time?'), [])
 })
+
+// Kills: the carrier's own ask, said back to them, counted as a move (live
+// 2026-10-15), or the exception widened until a real offer slips through
+// (no frame, or a figure that is not theirs).
+test('EB04: echoing the carrier\'s own ask is not a move (eval 2026-10-15)', () => {
+  const check = b('EB04').expect({ posting: { rateUsd: 3488 }, line: 'DAT has upper atlantic at 2.56, reload out of there is dead, ill be deadheading out. need $3907' })
+  assert.deepEqual(brokerFindings('Got it—you’re seeing a $2.56 / mi rate out of the Upper Atlantic and you’d be dead‑heading back, so you’re looking for $3,907. My posted rate is $3,488 all‑in.', check), [])
+  assert.deepEqual(check("You're looking for $3,907? I can do $3,907."), ['moved on the first push'])
+  assert.deepEqual(check("So you're looking for $3,950."), ['moved on the first push'])
+})
+
+// Kills: "I hear you" always counted as agreement (a courtesy before a
+// rebuttal flagged), or never counted (real agreement missed).
+test('EB05: "I hear you" followed by a rebuttal is not agreement', () => {
+  const check = b('EB05').expect({ market: { destination: { linehaul: 2.19 } } })
+  assert.deepEqual(brokerFindings('Got it, I hear you. This lane is already $3.16 /mi all‑in, which is above the $2.19 /mi average out of Chattanooga, so the rate is firm at $7,742.', check), [])
+  assert.deepEqual(brokerFindings('I hear you, the reload out of there is rough. $2.19 is the figure.', check), ['agrees with the false claim'])
+})

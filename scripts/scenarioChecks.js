@@ -14,7 +14,7 @@
 // still the record.
 
 import { asciiPunct } from '../src/lib/plainText.js'
-import { dollars } from '../src/modules/brokerChat/rateTalk.js'
+import { dollars, DOLLAR_RE } from '../src/modules/brokerChat/rateTalk.js'
 import { FALLBACK_REPLY as DRIVER_FALLBACK } from '../src/modules/driverChat/driverChat.prompt.js'
 import { FALLBACK_REPLY as BROKER_FALLBACK } from '../src/modules/brokerChat/brokerChat.prompt.js'
 
@@ -85,7 +85,40 @@ const CEILING = /\b(ceiling|my limit|room left|room before)\b/i
 // 2026-10-13 live: "you'd check with your dispatcher" / "check with your
 // office" -- said to the dispatcher, so it sends them back to themselves.
 const SENDS_BACK = /\b(you(?:['’]?d| would| should|['’]ll want to)\s+check with|check with (?:your|ur))\b/i
-const AGREES = /\b(i hear you|you'?re right|fair point|good point|can'?t argue)\b/i
+// Agreement with a claim the broker should not accept. "I hear you" alone
+// is the usual courtesy before a rebuttal ("I hear you. This lane is
+// already above it."), so it counts only when nothing after it argues back.
+const AGREES = /\b(you'?re right|fair point|good point|can'?t argue)\b/i
+const HEAR_YOU = /\bi hear you\b/i
+const BARE_ACK = /^i hear you\s*(?:[.!,;-]|$)/i
+const REBUTS = /\b(?:already|above|higher than|better than|isn'?t|is not|not (?:that )?(?:bad|weak|terrible|dead)|firm|actually|solid|strong)\b/i
+
+export function agreesWithClaim(text) {
+  const r = asciiPunct(text)
+  if (AGREES.test(r)) return true
+  const m = HEAR_YOU.exec(r)
+  if (!m) return false
+  // "I hear you on the reload" -- it goes on to take the claim up.
+  if (!BARE_ACK.test(r.slice(m.index))) return true
+  return !REBUTS.test(r.slice(m.index + m[0].length))
+}
+
+// A dollar figure the dispatcher already named, said back to them ("so
+// you're looking for $3,907"), is the carrier's number, not an offer. Only
+// that exact shape is excused: the figure must be one of theirs AND sit
+// right after a "you're looking for" frame. "I can do $3,907" is an offer.
+const ECHO_FRAME = /\b(?:you'?re|you are|you'?d be|you)\s+(?:looking for|asking(?: for)?|after|hoping for|want(?:ing)?|need(?:ing)?)\s+(?:about\s+|around\s+)?$/i
+
+export function offeredFigures(reply, theirs = []) {
+  const r = asciiPunct(reply)
+  const out = []
+  for (const m of r.matchAll(DOLLAR_RE)) {
+    const value = Number(m[0].replace(/[$,\s]/g, ''))
+    const echoed = theirs.includes(value) && ECHO_FRAME.test(r.slice(Math.max(0, m.index - 40), m.index))
+    if (!echoed) out.push(value)
+  }
+  return out
+}
 
 export function brokerReply(rawReply, rawPrevious) {
   const reply = asciiPunct(rawReply)
@@ -112,18 +145,18 @@ export const BROKER_EXPECT = {
   // A real reason (weak reload) earns part of the way; the whole ask in a
   // step does not, and the first push is held.
   S3: ({ posting, ask }) => ({
-    0: (r) => (dollars(r).some((d) => d > posting.rateUsd) ? ['moved on the first push'] : []),
-    1: (r) => (dollars(r).some((d) => d >= ask) ? ['gave the whole ask'] : []),
+    0: (r) => (offeredFigures(r, [ask]).some((d) => d > posting.rateUsd) ? ['moved on the first push'] : []),
+    1: (r) => (offeredFigures(r, [ask]).some((d) => d >= ask) ? ['gave the whole ask'] : []),
   }),
   S4: ({ market }) => ({
     0: (r) => [
-      ...(AGREES.test(r) ? ['agrees with the false claim'] : []),
+      ...(agreesWithClaim(r) ? ['agrees with the false claim'] : []),
       ...(r.includes(market.destination.linehaul.toFixed(2)) ? [] : ['reload figure not given']),
     ],
   }),
   S5: ({ market }) => ({
     0: (r) => [
-      ...(AGREES.test(r) ? ['agrees with the wrong number'] : []),
+      ...(agreesWithClaim(r) ? ['agrees with the wrong number'] : []),
       ...(r.includes(market.origin.linehaul.toFixed(2)) ? [] : ['real figure not given']),
     ],
   }),

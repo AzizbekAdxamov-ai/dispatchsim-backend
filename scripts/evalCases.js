@@ -14,7 +14,7 @@
 // Every check is a pattern and can be wrong; what it flags is a line to
 // read. The human grade in the dataset (accurate? why?) is the verdict.
 
-import { dollars, brokerReply, driverReply, isFallback, FELL_BACK } from './scenarioChecks.js'
+import { dollars, brokerReply, driverReply, isFallback, FELL_BACK, offeredFigures, agreesWithClaim } from './scenarioChecks.js'
 import { loadingMode, tarpFor, securementFor } from '../src/constants/freightHandling.js'
 import { marketClaims } from '../src/modules/brokerChat/rateTalk.js'
 import { asciiPunct } from '../src/lib/plainText.js'
@@ -112,14 +112,14 @@ export const BROKER_CASES = [
   {
     id: 'EB04', style: 'H', terms: ['the market', 'reload', 'deadhead'], pick: 'weak',
     line: (p, m) => `DAT has ${m.destination.region.toLowerCase()} at ${m.destination.linehaul}, reload out of there is dead, ill be deadheading out. need $${Math.round(p.rateUsd * 1.12)}`,
-    expect: ({ posting }) => (r) => (dollars(r).some((d) => d > posting.rateUsd) ? ['moved on the first push'] : []),
+    expect: ({ posting, line }) => (r) => (offeredFigures(r, line ? dollars(asciiPunct(line)) : []).some((d) => d > posting.rateUsd) ? ['moved on the first push'] : []),
     good: 'Hears the real point (weak reload) but holds the posted rate on the first push.',
   },
   {
     id: 'EB05', style: 'H', terms: ['reload'], pick: 'strong',
     line: (p) => `reload out of ${p.destinationCity.toLowerCase()} is terrible bro, i need more`,
     expect: ({ market }) => (r) => [
-      ...(/\b(i hear you|you'?re right|fair point|good point|can'?t argue)\b/i.test(r) ? ['agrees with the false claim'] : []),
+      ...(agreesWithClaim(r) ? ['agrees with the false claim'] : []),
       ...(r.includes(market.destination.linehaul.toFixed(2)) ? [] : ['reload figure not given']),
     ],
     good: 'Disagrees, with the destination region\'s figure; does not raise the rate for it.',
