@@ -226,8 +226,8 @@ export async function getWeeklyRevenue() {
 // Daily on-time-delivery percentage for the trailing `days` calendar days,
 // for GET /stats/dashboard's onTimeTrend[]. Only days with at least one
 // delivery produce a row (an empty day has nothing to compute a
-// percentage of); stats.service.js fills any gap with 0 the same way
-// fleet's utilization trend does.
+// percentage of); stats.service.js represents those gaps as null so
+// they cannot be mistaken for days with 0% on-time deliveries.
 export async function getOnTimeTrend(days = 7) {
   const result = await query(
     `SELECT

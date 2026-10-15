@@ -12,7 +12,7 @@ import * as metricsRepo from '../fleet/metrics.repository.js'
 
 const TREND_DAYS = 7
 
-function fillDailyTrend(rows, days, valueKey, defaultValue = 0) {
+export function fillDailyTrend(rows, days, valueKey, defaultValue = 0) {
   const byDay = new Map(rows.map((r) => [new Date(r.day).toISOString().slice(0, 10), r]))
   const out = []
   for (let i = days - 1; i >= 0; i -= 1) {
@@ -52,7 +52,8 @@ export async function getDashboard() {
       weekRevenueUsd: revenue.currentUsd,
       previousWeekRevenueUsd: revenue.previousUsd,
     },
-    onTimeTrend: fillDailyTrend(onTimeRows, TREND_DAYS, 'onTimePct'),
+    // A missing delivery day has no percentage; 0 is reserved for actual late deliveries.
+    onTimeTrend: fillDailyTrend(onTimeRows, TREND_DAYS, 'onTimePct', null),
     utilizationTrend: utilizationRows.map((r) => ({
       day: new Date(r.day).toISOString().slice(0, 10),
       utilization: r.utilization,
