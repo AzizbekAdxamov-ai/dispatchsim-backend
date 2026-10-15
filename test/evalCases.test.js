@@ -186,3 +186,45 @@ test('ED13 flags a refusal of a long empty run that gives no reason', () => {
   assert.deepEqual(check("Can't, I would run out of clock after 11 hours."), [])
   assert.equal(d('ED13').line, 'Grace can u deadhead 2500 miles if i pay extra?')
 })
+
+// -- Review round 2: the regexes -------------------------------------------------
+
+// Kills: GIVES_REASON matching parts of words ("turned it down", "return") or "tight on hours"
+test('ED08 does not take a look-alike word as the reason', () => {
+  const check = d('ED08').expect()
+  for (const reply of ['I asked not to get NYC, turned it down before.', 'NYC again? I need a return load.', 'NYC is tight on hours for me.']) {
+    assert.deepEqual(check(reply), ['reason not said'], reply)
+  }
+  assert.deepEqual(check('NYC, no room to turn that box around.'), [])
+  assert.deepEqual(check('NYC means parking nowhere and a ticket.'), [])
+  assert.deepEqual(check('NYC? Tight streets, I asked not to.'), [])
+})
+
+// Kills: ED13 counting the line's own "miles", "interest", "today" as a reason
+test('ED13 fires on a bare no, an echo of the miles and look-alike words', () => {
+  const check = d('ED13').expect()
+  for (const reply of ['2500 miles? no.', 'No interest in that.', 'Not today.', 'Not doing it.']) {
+    assert.deepEqual(check(reply), ['reason not said'], reply)
+  }
+  for (const reply of ['No, that is a long empty run.', 'Out of hours after 11.', 'Not worth the fuel.', 'Not for free, no.', 'Can\'t, two days of deadhead.']) {
+    assert.deepEqual(check(reply), [], reply)
+  }
+})
+
+// Kills: a bare "later" ("talk to you later") passing as saying the pickup cannot be made
+test('ED07 needs a later pickup, not the word later', () => {
+  const check = d('ED07').expect({ offer: seattleOffer(1982, false) })
+  assert.deepEqual(check('Copy, talk to you later. What is the pay?'), ['pickup unreachable not said'])
+  assert.deepEqual(check('Copy, any chance for a later pickup?'), [])
+  assert.deepEqual(check('Copy, can you push the pickup?'), [])
+  assert.deepEqual(check('Copy, no way I am there by 8. Later time?'), [])
+})
+
+// Kills: "can't wait" flagged as turning down a load she can make
+test('ED12 does not take "can\'t wait" for a refusal', () => {
+  const check = d('ED12').expect({ offer: seattleOffer(270, true) })
+  assert.deepEqual(check("Copy, can't wait to roll. Where does it drop?"), [])
+  assert.deepEqual(check("Can't take that one."), ['turned down a load she can make'])
+  assert.deepEqual(check("I'm not taking it."), ['turned down a load she can make'])
+  assert.deepEqual(check('I will pass on it.'), ['turned down a load she can make'])
+})

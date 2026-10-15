@@ -35,8 +35,10 @@ const ASKS = /\?|(^|[.!]\s*)(need(?! to\b)|send( me)?|gimme|give me|get me|shoot
 
 // ED07 / ED11: saying the pickup cannot be made, and ED12: turning down a
 // load she can. "later" counts as the first -- asking for a later time.
-const CANNOT_MAKE = /can'?t|cannot|won'?t|not mak|too far|later/i
-const TURNS_DOWN = /can'?t|cannot|won'?t|not mak|too far|no way|not doing|pass on/i
+// A bare "later" is not it ("talk to you later"): it must be a later pickup.
+const CANNOT_MAKE = /\bcan'?t (?:make|do|get|be)\b|\bcannot\b|\bwon'?t (?:make|be)\b|\bnot mak|\btoo far\b|\blater (?:pickup|pick up|time|slot|appt|appointment|window)\b|\bpush (?:it|the pickup)\b/i
+// "can't wait" is not a refusal.
+const TURNS_DOWN = /\bcan'?t (?:make|do|take)\b|\bcannot\b|\bwon'?t (?:make|take)\b|\bnot taking\b|\bnot mak|\btoo far\b|\bno way\b|\bnot doing\b|\bpass on\b/i
 // Miles a reply states, as numbers: "about 1,980 mi", "2500 miles".
 const STATED_MILES = /(\d[\d,]*)\s*(?:mi\b|miles?\b)/gi
 // Beyond this share, a stated distance is not the computed one.
@@ -50,8 +52,11 @@ export function milesOff(reply, offer) {
 
 // ED08: the reason behind her request. ED13: the reason for turning down a
 // long empty run -- the miles, the hours, the empty trailer.
-const GIVES_REASON = /turn|park|ticket|tight|street|traffic/i
-const GIVES_RUN_REASON = /miles?|hours?|hrs?|empty|clock|rest|fuel|too far|days?/i
+// Whole words: "turned it down", "return" and "tight on hours" are not it.
+const GIVES_REASON = /\bturns?\b|\bturn around\b|\bparking\b|\bpark\b|\btickets?\b|\bstreets?\b|\btraffic\b|\btight (?:streets?|turns?|spots?|corners?|quarters)\b|\bno room\b|\bfit\b|\bin there\b/i
+// Something beyond the line's own words ("2500 miles" is the question):
+// the empty run, the clock, the cost.
+const GIVES_RUN_REASON = /\bempty\b|\bdeadhead\b|\bclock\b|\bhours?\b|\bhrs\b|\brest\b|\bfuel\b|\btoo far\b|\bdays\b|\bnot worth\b|\bfor free\b|\bunpaid\b/i
 
 // EB08: drop and hook said of a live load (or live said of a drop). A denial
 // ("no drop and hook, it's live") is not the mistake.

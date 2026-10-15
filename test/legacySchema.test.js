@@ -1,7 +1,7 @@
 // A database without migration 060 (no `attempts` column): the two writers
 // must keep the row instead of losing it. Fake database, no network.
 
-import { test, beforeEach } from 'node:test'
+import { test, beforeEach, after } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { insertScriptRequest, INSERT_SCRIPT_REQUESTS_SQL, INSERT_SCRIPT_REQUESTS_NO_ATTEMPTS_SQL } from '../src/modules/chat/scriptRequests.js'
@@ -22,6 +22,9 @@ function fakeDb(err) {
 }
 
 const quiet = []
+const realWarn = console.warn
+// Each test captures the warning; the real console.warn is put back at the end.
+after(() => { console.warn = realWarn })
 beforeEach(() => {
   resetWarnings()
   quiet.length = 0

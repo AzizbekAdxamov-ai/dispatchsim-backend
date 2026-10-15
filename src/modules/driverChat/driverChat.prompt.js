@@ -20,7 +20,7 @@
 // in the industry. The driver is a professional: firm, specific about
 // numbers, never abusive, never threatening.
 
-import { DRIVER_STAGES, SETTLEMENT_TERM_SIM_DAYS, describeWait } from '../../constants/driverPay.js'
+import { DRIVER_STAGES, SETTLEMENT_TERM_SIM_DAYS, describeWait, willAcceptWork } from '../../constants/driverPay.js'
 import { clockDateTime, clockWhen } from '../../constants/appClock.js'
 import { readPreferences, hasRequests, preferenceConflicts, avoidedPlaces } from '../../constants/driverPreferences.js'
 import { emptyRunToPickup } from '../loads/whereabouts.js'
@@ -212,6 +212,10 @@ export function offerLines(offer) {
       '  You cannot say yet whether you would make a pickup time, so do not say you can or cannot.',
     ]
   }
+  // No arrival time without her driving time left: miles only.
+  if (!offer.earliestAt) {
+    return [...head, `  Pickup in ${place} is about ${miles} road miles from where you are.`, '  You cannot say yet whether you would make a pickup time, so do not say you can or cannot.']
+  }
   const lines = [
     ...head,
     `  Pickup in ${place} is about ${miles} road miles from where you are.`,
@@ -305,7 +309,10 @@ export function buildDriverSystemPrompt({ driver, standing, load, carrier = null
   }
 
   lines.push('', 'WHERE YOU ARE, RIGHT NOW:', ...situationLines({ driver, load, now }))
-  lines.push(...offerLines(offer))
+  // Only a driver who still takes work reacts to an offered load: in the
+  // refuses and quits stages the money is the reason, and an offer block
+  // saying "you do not turn it down" would fight the stance.
+  if (willAcceptWork(standing.stage)) lines.push(...offerLines(offer))
 
   // The persona, verbatim from the row. Character only -- anything
   // operational (home base, CDL, pay, the truck) is stated by the blocks

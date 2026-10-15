@@ -212,3 +212,107 @@ test('the driver chat service passes the offer to the prompt, built from this me
   assert.match(code, /offer: offerFacts\(\{/)
   assert.match(code, /\.slice\(-4\)\.map\(\(m\) => m\.content\), text\]/)
 })
+
+// -- Review round 2 -------------------------------------------------------------
+
+// Kills: a stale time attaching to a new city (Dallas inheriting "tmrw 3am"
+// said about Pittsburgh)
+test('a time said about another city is not carried to the new city', () => {
+  const o = offerFacts({ driver: seattle, texts: ['got a load pittsburgh to raleigh pu tmrw 3am', 'ok what about dallas to austin'], now: NOW })
+  assert.equal(o.city, 'Dallas')
+  assert.equal(o.pickupAt, null)
+  assert.equal(o.makesIt, null)
+})
+
+// Kills: live:60 -> live:61 broken -- the same load talked about again must keep its time
+test('the same city named again keeps the earlier time, and a later message can bring the time', () => {
+  const again = offerFacts({ driver: seattle, texts: ['got a load pittsburgh to raleigh pu tmrw 3am', 'can u make pittsburgh by 3am tho?'], now: NOW })
+  assert.equal(again.city, 'Pittsburgh')
+  assert.equal(again.makesIt, false)
+  assert.equal(central(again.pickupAt), 'Wed 3:00 AM')
+  const samePu = offerFacts({ driver: seattle, texts: ['got a load pittsburgh to raleigh pu tmrw 3am', 'pu pittsburgh by 3am ok?'], now: NOW })
+  assert.equal(central(samePu.pickupAt), 'Wed 3:00 AM')
+  // The time in a newer message belongs to the load named before it.
+  const later = offerFacts({ driver: seattle, texts: ['got a dallas load', 'pu tmrw 8am'], now: NOW })
+  assert.equal(later.city, 'Dallas')
+  assert.equal(central(later.pickupAt), 'Wed 8:00 AM')
+  // A different city in between ends the carry.
+  const between = offerFacts({ driver: seattle, texts: ['pu tmrw 3am', 'got a spokane load', 'what about a dallas load'], now: NOW })
+  assert.equal(between.city, 'Dallas')
+  assert.equal(between.pickupAt, null)
+})
+
+// Kills: "ur on the NYC load" with no load in the database read as an offer
+test('a statement about the load she is on offers nothing, with or without a load in the database', () => {
+  for (const text of ['ur on the NYC load', "you're on the dallas load", 'your dallas load is set', 'you are on dallas']) {
+    assert.equal(offerFacts({ driver: seattle, texts: [text], now: NOW }), null, text)
+  }
+  // "your next load" is an offer.
+  assert.equal(offerFacts({ driver: seattle, texts: ['your next load: dallas pu tmrw 8am'], now: NOW })?.city, 'Dallas')
+})
+
+// Kills: a common word that is also a city read as a pickup
+test('mobile, jackson and austin as ordinary words are not loads', () => {
+  for (const text of ['got a load jackson called me about', 'load: mobile app is down', 'hey austin, any load? reading the board']) {
+    assert.equal(offerFacts({ driver: seattle, texts: [text], now: NOW }), null, text)
+    assert.deepEqual(placesIn(text), [], text)
+  }
+  assert.equal(offerFacts({ driver: seattle, texts: ['got a dallas load'], now: NOW }).city, 'Dallas')
+})
+
+// Kills: an order cue not rescuing a common-word city (the guard dropping them all)
+test('a common-word city with an order cue is a pickup', () => {
+  assert.equal(pickupCity('got a load in mobile pu tmrw 8am')?.city, 'Mobile')
+  assert.equal(pickupCity('load from jackson tmrw')?.city, 'Jackson')
+  assert.equal(pickupCity('pu austin tmrw 8am')?.city, 'Austin')
+  assert.equal(pickupCity('pu in madison tmrw 8am')?.city, 'Madison')
+  assert.equal(pickupCity('got a lincoln load')?.city, 'Lincoln')
+  assert.equal(pickupCity('augusta to dallas')?.city, 'Augusta')
+  assert.equal(pickupCity('pickup in columbia')?.city, 'Columbia')
+})
+
+// Kills: an offer block shown to a driver who refuses or has quit (the stance
+// says turn it down; the offer rule says do not)
+test('the offer block is shown only while she still takes work', () => {
+  const offer = offerFacts({ driver: base.driver, texts: ['got a dallas load, pu tmrw 8am'], now: NOW })
+  for (const stage of ['ok', 'asks']) {
+    assert.match(buildDriverSystemPrompt({ ...base, standing: { ...base.standing, stage }, offer }), /THE LOAD DISPATCH JUST MENTIONED:/, stage)
+  }
+  for (const stage of ['refuses', 'quits']) {
+    const prompt = buildDriverSystemPrompt({ ...base, standing: { ...base.standing, stage, unpaidCount: 1, owedUsd: 900, daysOverdue: 9 }, offer })
+    assert.doesNotMatch(prompt, /THE LOAD DISPATCH JUST MENTIONED:/, stage)
+  }
+  assert.match(buildDriverSystemPrompt({ ...base, standing: { ...base.standing, stage: 'refuses', unpaidCount: 1, owedUsd: 900, daysOverdue: 9 }, offer }), /If they offer you a load, turn it down/)
+})
+
+// Kills: an unknown driving time assumed to be a full day
+test('with no driving time known there are miles but no arrival time or verdict', () => {
+  const o = offerFacts({ driver: { ...seattle, hosRemainingMin: null }, texts: ['got a dallas load, pu tmrw 8am'], now: NOW })
+  assert.equal(o.miles, 1982)
+  assert.equal(o.earliestAt, null)
+  assert.equal(o.makesIt, null)
+  const lines = offerLines(o).join('\n')
+  assert.match(lines, /1,982 road miles from where you are/)
+  assert.doesNotMatch(lines, /earliest|cannot make it|can make it/)
+  // Zero minutes left is known, not unknown.
+  assert.equal(offerFacts({ driver: { ...seattle, hosRemainingMin: 0 }, texts: ['got a spokane load'], now: NOW }).earliestAt instanceof Date, true)
+})
+
+// Kills: the clock change ignored across the night it happens (Nov 1, 2026, 2 AM)
+test('tomorrow 8 AM from Saturday evening, across the end of daylight time, is 14:00Z', () => {
+  const sat7pm = new Date(Date.UTC(2026, 10, 1, 0, 0)) // Sat Oct 31, 7:00 PM CDT
+  assert.equal(pickupWhen('pu tmrw 8am', sat7pm).toISOString(), '2026-11-01T14:00:00.000Z')
+  // 5 AM that night exists only after the change: 05:00 CST = 11:00Z (needs the second offset pass).
+  assert.equal(pickupWhen('pu tmrw 5am', sat7pm).toISOString(), '2026-11-01T11:00:00Z'.replace('Z', '.000Z'))
+  // The same wall hour the day before the change is 13:00Z.
+  assert.equal(pickupWhen('pu tmrw 8am', new Date(Date.UTC(2026, 9, 31, 0, 0))).toISOString(), '2026-10-31T13:00:00.000Z')
+})
+
+// Kills: "today" with an hour already gone treated as tomorrow, or as ahead
+test('today with an hour that has already passed is that hour today, in the past, and cannot be made', () => {
+  const past = pickupWhen('pu today 8am', NOW)
+  assert.equal(past.toISOString(), '2026-10-13T13:00:00.000Z')
+  assert.ok(past.getTime() < NOW.getTime())
+  const o = offerFacts({ driver: seattle, texts: ['got a spokane load, pu today 8am'], now: NOW })
+  assert.equal(o.makesIt, false)
+})

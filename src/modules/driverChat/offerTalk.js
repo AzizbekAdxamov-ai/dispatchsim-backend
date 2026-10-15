@@ -51,14 +51,48 @@ const STATES = new Set(CITIES.map((c) => c.state))
 // Charleston) with no state beside it is skipped -- guessing the one the
 // dispatcher meant would put a wrong number in front of the driver.
 // `except` (a { city, state }) is left out: the place Grace already is.
-export function placesIn(text, { except = null } = {}) {
-  return scan(text).filter((c) => !c.ambiguous && !(except && c.city === except.city && c.state === except.state))
+export function placesIn(text, { except = null, guard = true } = {}) {
+  return scan(text, { guard }).filter((c) => !c.ambiguous && !(except && c.city === except.city && c.state === except.state))
+}
+
+// City names that are also ordinary words or first names. "mobile app",
+// "hey austin", "jackson called me" are not loads. Such a name counts only
+// with an order cue (see cued below). Scanned from CITIES on 2026-10-15;
+// "Reading" and "Independence" are not in the list. A name added to CITIES
+// later that is also a word belongs here.
+const COMMON_WORD_CITIES = new Set([
+  'Augusta', 'Austin', 'Burlington', 'Casper', 'Charlotte', 'Cleveland', 'Columbia', 'Columbus', 'Dayton',
+  'Dover', 'Erie', 'Eugene', 'Huntington', 'Jackson', 'Lansing', 'Lexington', 'Lincoln', 'Macon', 'Madison',
+  'Manchester', 'Mobile', 'Ontario', 'Orlando', 'Phoenix', 'Providence', 'Reading', 'Independence', 'Richmond',
+  'Salem', 'Savannah', 'Trenton', 'Washington',
+].map((n) => n.toLowerCase()))
+
+// "load in/from/out of X", "pickup in X", "pu X" / "pu in X".
+const CUE_BEFORE = /\b(?:loads?|pickups?|pick ?up|picking up)\s+(?:in|from|out of|at|near)\s+$|\b(?:pu|p\/u)\s+(?:(?:in|from|at|near|out of)\s+)?$/i
+const LOAD_AFTER = /^\s*loads?\b/i
+
+// Whether a common-word city is being used as a place: an order cue before
+// it, "X load" after it, or one end of an "X to Y" pair.
+function cued(src, e, prev, next) {
+  return CUE_BEFORE.test(src.slice(0, e.index))
+    || LOAD_AFTER.test(src.slice(e.end))
+    || Boolean(next && LINK_RE.test(src.slice(e.end, next.index)))
+    || Boolean(prev && LINK_RE.test(src.slice(prev.end, e.index)))
 }
 
 // Every city name in the text, the unresolvable ones marked `ambiguous`.
 // pickupCity needs them: in "portland to dallas tx" the pickup is the
-// Portland nobody could place, not the Dallas beside it.
-function scan(text) {
+// Portland nobody could place, not the Dallas beside it. A common-word
+// city with no cue is dropped (unless `guard` is false: the truck chat has
+// its own cue, "truck is in").
+function scan(text, { guard = true } = {}) {
+  const raw = scanRaw(text)
+  if (!guard) return raw
+  const src = String(text ?? '')
+  return raw.filter((e, i) => e.ambiguous || !COMMON_WORD_CITIES.has(e.city.toLowerCase()) || cued(src, e, raw[i - 1], raw[i + 1]))
+}
+
+function scanRaw(text) {
   const src = String(text ?? '')
   const out = []
   for (const m of src.matchAll(NAME_RE)) {
@@ -192,6 +226,40 @@ export function pickupWhen(text, now = new Date()) {
 
 // -- The facts the prompt is given ---------------------------------------------
 
+// "ur on the NYC load", "you're on the dallas load", "your dallas load":
+// something said about the load she has, not a load offered to her.
+// "your next load" / "your new load" ARE offers and do not match.
+const HER_LOAD_RE = /\b(?:ur|u r|you'?re|youre|you are|your)\s+(?:on\s+|in\s+|taking\s+|driving\s+|running\s+)?(?:the\s+|that\s+|this\s+)?(?!next\b|new\b|another\b)[a-z.]+(?:\s[a-z.]+)?\s+loads?\b|\b(?:ur|u r|you'?re|youre|you are)\s+on\b/i
+
+export function aboutHerLoad(text) {
+  return HER_LOAD_RE.test(String(text ?? ''))
+}
+
+// The pickup time that belongs to the chosen load (message `chosen`, city C):
+//  - the time in that same message;
+//  - else the time in a NEWER message (those name no offered city);
+//  - else the time in an older message, but only back to the first one that
+//    names a different city -- "ok what about dallas to austin" after a
+//    Pittsburgh pickup at 3 AM must not inherit the 3 AM. Relative words
+//    ("tmrw") of an older message are read against `now` (a message has no
+//    stored time); that is only reached for the same load.
+function pickupTimeFor({ list, placeOf, chosen, now }) {
+  const own = pickupWhen(list[chosen], now)
+  if (own) return own
+  for (let j = list.length - 1; j > chosen; j--) {
+    const w = aboutHerLoad(list[j]) ? null : pickupWhen(list[j], now)
+    if (w) return w
+  }
+  const c = placeOf[chosen]
+  for (let k = chosen - 1; k >= 0; k--) {
+    const other = placeOf[k]
+    if (other && (other.city !== c.city || other.state !== c.state)) return null
+    const w = pickupWhen(list[k], now)
+    if (w) return w
+  }
+  return null
+}
+
 // What the dispatcher's last words say about a load, against Grace's own
 // day -- or null when no load is being offered.
 //
@@ -215,17 +283,17 @@ export function offerFacts({ driver, load = null, texts, now = new Date() }) {
   // Most recent message first: the load being talked about now.
   const recent = [...list].reverse()
 
-  let place = null
-  for (const t of recent) {
-    place = pickupCity(t, { except: here })
-    if (place) break
-  }
+  // What each message offers, by itself: a statement about the load she is
+  // on offers nothing.
+  const placeOf = list.map((t) => (aboutHerLoad(t) ? null : pickupCity(t, { except: here })))
+  const chosen = placeOf.reduce((last, p, i) => (p ? i : last), -1)
+  let place = chosen === -1 ? null : placeOf[chosen]
   // The load she is already on, named: "ur on the NYC load" is not an offer.
   if (place && load && ((place.city === load.destinationCity && place.state === load.destinationState)
     || (place.city === load.originCity && place.state === load.originState))) place = null
 
   if (!place) {
-    const name = recent.map(unknownPlace).find(Boolean)
+    const name = recent.filter((t) => !aboutHerLoad(t)).map(unknownPlace).find(Boolean)
     return name ? { city: name, state: null, miles: null, fromCity: null, onLoad: Boolean(load), earliestAt: null, pickupAt: null, makesIt: null } : null
   }
 
@@ -238,11 +306,12 @@ export function offerFacts({ driver, load = null, texts, now = new Date() }) {
   const from = findCity(driver?.currentCity, driver?.currentState)
   if (!from) return { ...base, miles: null, fromCity: null, onLoad: false, earliestAt: null, pickupAt: null, makesIt: null }
   const miles = roadMiles(from, place)
-  const earliestAt = new Date(now.getTime() + legalTransitHours(miles, driver.hosRemainingMin) * 3600e3)
-  let pickupAt = null
-  for (const t of recent) {
-    pickupAt = pickupWhen(t, now)
-    if (pickupAt) break
+  // Her driving time left is unknown: the miles are still true, an arrival
+  // time would be a guess (legalTransitHours would assume a full day).
+  if (driver.hosRemainingMin == null) {
+    return { ...base, miles, fromCity: `${from.city}, ${from.state}`, onLoad: false, earliestAt: null, pickupAt: null, makesIt: null }
   }
+  const earliestAt = new Date(now.getTime() + legalTransitHours(miles, driver.hosRemainingMin) * 3600e3)
+  const pickupAt = pickupTimeFor({ list, placeOf, chosen, now })
   return { ...base, miles, fromCity: `${from.city}, ${from.state}`, onLoad: false, earliestAt, pickupAt, makesIt: pickupAt ? earliestAt.getTime() <= pickupAt.getTime() : null }
 }
