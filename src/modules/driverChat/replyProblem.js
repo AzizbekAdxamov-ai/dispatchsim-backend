@@ -13,6 +13,7 @@
 import { trippedBannedWord, leaksReasoning } from './driverChat.prompt.js'
 import { tooLongForChat, CHAT_REPLY_MAX_CHARS } from '../../constants/chatBudget.js'
 import { ignoresUnreachable } from '../../lib/cannotMake.js'
+import { refusesWithoutReason } from '../../lib/refusalReason.js'
 
 export function driverReplyProblem(reply, { offer, text } = {}) {
   if (trippedBannedWord(reply) !== null) return { why: 'used a forbidden word', hint: '', unusable: true }
@@ -26,6 +27,14 @@ export function driverReplyProblem(reply, { offer, text } = {}) {
     return {
       why: 'did not say you cannot make that pickup',
       hint: ' The facts above say you cannot make that pickup: say so plainly, with the miles, and ask for a later pickup time.',
+      unusable: false,
+    }
+  }
+  // She was asked to do something and said no without saying why.
+  if (refusesWithoutReason(reply, text)) {
+    return {
+      why: 'turned it down without a reason',
+      hint: ' Give the reason in a few words from what is written above (the miles, your hours, the rule, the empty run) -- never a bare no.',
       unusable: false,
     }
   }

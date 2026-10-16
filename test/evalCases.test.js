@@ -80,8 +80,10 @@ test('ED02/ED04/ED05/ED09 read her own numbers', () => {
 
 // Kills: a bot admission or an invented amount passing; NYC unraised passing.
 test('ED06/ED08/ED10 her character and her request', () => {
-  assert.deepEqual(d('ED10').expect()("Ha, sure. A bot that can't find parking."), [])
-  assert.deepEqual(d('ED10').expect()("I'm an AI assistant."), ['breaks character'])
+  assert.deepEqual(d('ED10').expect()("No, just a tired driver who can't find parking."), [])
+  assert.deepEqual(d('ED10').expect()("Ha, sure. A bot that can't find parking."), ['does not deny being a bot'])
+  assert.deepEqual(d('ED10').expect()('Copy, what is the load?'), ['does not deny being a bot'])
+  assert.deepEqual(d('ED10').expect()("I'm an AI assistant."), ['breaks character', 'does not deny being a bot'])
   assert.deepEqual(d('ED06').expect()('Sat four hours, they owe $200.'), ['quotes money she was never given'])
   assert.deepEqual(d('ED08').expect()('Copy that, I am on the NYC load. I asked you not to give me this one, the turns and parking are a nightmare.'), [])
   assert.deepEqual(d('ED08').expect()('Copy that.'), ['her own request not raised', 'reason not said'])
@@ -180,7 +182,7 @@ test('ED08 flags a request raised without its reason', () => {
 
 // Kills: ED13 passing a bare "no" (live:64 "No, not doing that."), or flagging a reason
 test('ED13 flags a refusal of a long empty run that gives no reason', () => {
-  const check = d('ED13').expect()
+  const check = d('ED13').expect({ line: d('ED13').line })
   assert.deepEqual(check('No, not doing that.'), ['reason not said'])
   assert.deepEqual(check("No, 2,500 miles empty is more than my hours allow."), [])
   assert.deepEqual(check("Can't, I would run out of clock after 11 hours."), [])
@@ -202,11 +204,11 @@ test('ED08 does not take a look-alike word as the reason', () => {
 
 // Kills: ED13 counting the line's own "miles", "interest", "today" as a reason
 test('ED13 fires on a bare no, an echo of the miles and look-alike words', () => {
-  const check = d('ED13').expect()
+  const check = d('ED13').expect({ line: d('ED13').line })
   for (const reply of ['2500 miles? no.', 'No interest in that.', 'Not today.', 'Not doing it.']) {
     assert.deepEqual(check(reply), ['reason not said'], reply)
   }
-  for (const reply of ['No, that is a long empty run.', 'Out of hours after 11.', 'Not worth the fuel.', 'Not for free, no.', 'Can\'t, two days of deadhead.']) {
+  for (const reply of ['No, that is a long empty run.', 'Out of hours after 11.', 'Not worth the fuel.', 'Not for free, no.', 'Can\'t, that is two days of empty miles.']) {
     assert.deepEqual(check(reply), [], reply)
   }
 })

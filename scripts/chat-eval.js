@@ -279,7 +279,7 @@ async function driverRun(carrier) {
       systemPrompt,
       reply,
       ...attemptFields(attempts),
-      findings: driverFindings(reply, c.expect({ driver: ctx.driver, load, standing, fuelPct: dp.fuelPercent(ctx.driver), offer }), { onTheRoad: ctx.driver.onTheRoad }),
+      findings: driverFindings(reply, c.expect({ line: c.line, driver: ctx.driver, load, standing, fuelPct: dp.fuelPercent(ctx.driver), offer }), { onTheRoad: ctx.driver.onTheRoad }),
       human: null,
     })
   }

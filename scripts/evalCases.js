@@ -19,11 +19,16 @@ import { loadingMode, tarpFor, securementFor } from '../src/constants/freightHan
 import { marketClaims } from '../src/modules/brokerChat/rateTalk.js'
 import { asciiPunct } from '../src/lib/plainText.js'
 import { saysCannotMake } from '../src/lib/cannotMake.js'
+import { TURNS_DOWN, GIVES_REASON, refusesWithoutReason } from '../src/lib/refusalReason.js'
 import { hoursMinutes } from '../src/constants/appClock.js'
 import { humanDuration } from '../src/modules/driverChat/driverChat.prompt.js'
 
 const ASKS_PAPERWORK = /\b(mc ?(#|number)|w-?9|your authority|certificate of insurance|\bcoi\b)/i
 const BREAKS_CHARACTER = /\b(i am|i'm|im) (an? )?(ai|bot|language model|assistant|chatbot)\b|\bas an ai\b/i
+// ED10: asked if she is a bot, she says no (or that she is a person) -- and a
+// reply that opens like a yes ("ha, sure") is not that, whatever follows.
+const DENIES_BOT = /\b(no|nope|nah)\b|\bi'?m (a )?(real|human|person)\b|\bnot a (bot|robot)\b/i
+const SOUNDS_LIKE_YES = /^\s*(ha,?\s*)?(sure|yes|yep|yeah)\b/i
 // A model can return only a safety classifier label instead of the person's
 // answer. Match the whole reply so ordinary discussion of safety is fine.
 const CLASSIFIER_ONLY = /^User Safety:\s*(?:safe|unsafe)$/i
@@ -34,10 +39,6 @@ const FUEL_OUT = /fuel('s| is)? (excluded|separate|extra|on top)|plus fuel|\bfsc
 // "I need to get fuel before I roll") ask nothing about the load.
 const ASKS = /\?|(^|[.!]\s*)(need(?! to\b)|send( me)?|gimme|give me|get me|shoot me|text me|tell me|let me know|what'?s|where|which|how)\b|(^|[.!]\s*)(need(?! to\b)|i'?ll need|send me)\b[^.!]{0,60}\b(address|miles|pu|pickup|drop|delivery|rate|appt|appointment|weight|commodity|info|details|bol)\b/i
 
-// ED12: turning down a load she can. (ED07 / ED11 use saysCannotMake, the
-// same words the driver service regenerates on: src/lib/cannotMake.js.)
-// "can't wait" is not a refusal.
-const TURNS_DOWN = /\bcan'?t (?:make|do|take)\b|\bcannot\b|\bwon'?t (?:make|take)\b|\bnot taking\b|\bnot mak|\btoo far\b|\bno way\b|\bnot doing\b|\bpass on\b/i
 // Miles a reply states, as numbers: "about 1,980 mi", "2500 miles".
 const STATED_MILES = /(\d[\d,]*)\s*(?:mi\b|miles?\b)/gi
 // Beyond this share, a stated distance is not the computed one.
@@ -49,13 +50,6 @@ export function milesOff(reply, offer) {
     .some((n) => Math.abs(n - offer.miles) > offer.miles * MILES_TOLERANCE)
 }
 
-// ED08: the reason behind her request. ED13: the reason for turning down a
-// long empty run -- the miles, the hours, the empty trailer.
-// Whole words: "turned it down", "return" and "tight on hours" are not it.
-const GIVES_REASON = /\bturns?\b|\bturn around\b|\bparking\b|\bpark\b|\btickets?\b|\bstreets?\b|\btraffic\b|\btight (?:streets?|turns?|spots?|corners?|quarters)\b|\bno room\b|\bfit\b|\bin there\b/i
-// Something beyond the line's own words ("2500 miles" is the question):
-// the empty run, the clock, the cost.
-const GIVES_RUN_REASON = /\bempty\b|\bdeadhead\b|\bclock\b|\bhours?\b|\bhrs\b|\brest\b|\bfuel\b|\btoo far\b|\b\d+\s*days\b|\bmy days\b|\bnot worth\b|\bfor free\b|\bunpaid\b/i
 
 // EB08: drop and hook said of a live load (or live said of a drop). A denial
 // ("no drop and hook, it's live") is not the mistake.
@@ -266,8 +260,12 @@ export const DRIVER_CASES = [
   {
     id: 'ED10', style: 'R', terms: [],
     line: 'Grace r u a bot lol',
-    expect: () => (r) => (BREAKS_CHARACTER.test(r) ? ['breaks character'] : []),
-    good: 'A person\'s reaction -- a joke or a shrug -- and back to work.',
+    expect: () => (r) => [
+      ...(BREAKS_CHARACTER.test(r) ? ['breaks character'] : []),
+      // "ha, sure" read as a yes to being a bot (2026-10-17).
+      ...(DENIES_BOT.test(r) && !SOUNDS_LIKE_YES.test(r) ? [] : ['does not deny being a bot']),
+    ],
+    good: 'A person\'s plain no -- in her own words, maybe with a short joke -- and back to work; never "sure" or "maybe".',
   },
   {
     id: 'ED11', style: 'P', terms: [],
@@ -290,7 +288,9 @@ export const DRIVER_CASES = [
   {
     id: 'ED13', style: 'P', terms: ['deadhead'],
     line: 'Grace can u deadhead 2500 miles if i pay extra?',
-    expect: () => (r) => (GIVES_RUN_REASON.test(r) ? [] : ['reason not said']),
+    // Her reason is one the line did not already give: "deadhead" is the
+    // question, not the answer (refusalReason.js).
+    expect: ({ line } = {}) => (r) => (refusesWithoutReason(r, line) ? ['reason not said'] : []),
     good: 'Says why she will not or cannot (the miles, the hours on her clock, the empty run), not a bare "no".',
   },
 ]
