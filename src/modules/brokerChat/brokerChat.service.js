@@ -5,13 +5,12 @@
 // 22 requests a day, chat is per-message and open-ended — so they get
 // separate budgets, keys and models.
 import { chatText } from '../../../scripts/seed/aiClient.js'
-import { ignoresUnreachable } from '../../lib/cannotMake.js'
+import { brokerReplyProblem, brokerRetryPrompt } from './replyProblem.js'
 import { truckFacts } from './truckTalk.js'
 import { fileURLToPath } from 'node:url'
 import { promptVersionOf } from '../../lib/promptVersion.js'
 import { turnRow, logTurn } from '../chat/turnLog.js'
 import { assertCanSend } from '../chat/chatBudget.service.js'
-import { tooLongForChat, CHAT_REPLY_MAX_CHARS } from '../../constants/chatBudget.js'
 import { chatConfigFor } from '../chat/chatProvider.js'
 import { AppError } from '../../lib/errors.js'
 import { stripSpeakerLabel } from '../../lib/speakerLabel.js'
@@ -23,8 +22,6 @@ import { bookPosting } from '../loadBoard/loadBoard.service.js'
 import {
   buildBrokerSystemPrompt,
   buildMessages,
-  trippedBannedWord,
-  leaksReasoning,
   FALLBACK_REPLY,
 } from './brokerChat.prompt.js'
 
@@ -172,46 +169,23 @@ export async function sendMessage({ conversationId, userId, text }) {
       onAttempt,
     }))
 
-    // Two ways a reply can be unusable, both regenerated once and then
-    // replaced with a short in-character line. Neither can be silently
-    // dropped the way a bad seed row can — someone is waiting for an answer.
-    //
-    // Banned word: breaks the product's own vocabulary rule.
-    // Leaked reasoning: the model answers with its own thinking
-    //   ("We need to respond as Devin Marlowe...") instead of the broker's
-    //   words. Seen live on 2026-08-31 from a 120B model. Nothing destroys
-    //   the illusion faster.
-    //
-    // Too long: the token budget used to enforce this by itself -- a reply
-    //   could not exceed 220 tokens because 220 was all it was given. That
-    //   stopped being true when the budget had to grow to let a reasoning
-    //   model think (src/constants/chatBudget.js). The length rule did not
-    //   go away with it; it moved here, where it is about the REPLY rather
-    //   than about the reply plus whatever the model thought first.
-    const unusable = (t) => trippedBannedWord(t) !== null || leaksReasoning(t) || tooLongForChat(t)
-
-    const unusableWhy = unusable(reply)
-      ? (trippedBannedWord(reply)
-        ? 'used a forbidden word'
-        : leaksReasoning(reply)
-          ? 'showed your own reasoning instead of speaking as the broker'
-          : `ran to ${reply.trim().length} characters when the limit is ${CHAT_REPLY_MAX_CHARS}`)
-      : null
-    // Third way: the carrier's truck cannot reach the pickup in time
-    // (computed from the city they named and the clock) and the reply never
-    // says so. Same single second call -- one more request from the daily
-    // budget, only on turns where makesIt === false.
-    const missedPickup = ignoresUnreachable(reply, truck, { broker: true })
-    const why = unusableWhy ?? (missedPickup ? 'did not tell the carrier their truck gets there after your pickup' : null)
+    // What is wrong with a reply is decided in replyProblem.js, the same
+    // function the eval scripts use. Banned word, leaked reasoning and a
+    // too-long reply are unusable: regenerated once, then replaced with a
+    // short in-character line -- someone is waiting for an answer, so they
+    // cannot be silently dropped the way a bad seed row can. A content
+    // problem (the truck cannot reach the pickup and the reply never says
+    // so) is regenerated once, with one more request from the daily budget,
+    // and logged if it persists.
+    const problem = brokerReplyProblem(reply, { truck })
+    const why = problem?.why ?? null
 
     if (why) {
       console.warn(`[brokerChat] retrying — reply ${why}`)
       regenerated = why
       reply = clean(await chatText({
         messages: buildMessages({
-          systemPrompt: `${systemPrompt}
-
-Your last reply ${why}.${missedPickup ? ' The facts above say their truck gets there after your pickup: say so plainly, with the miles, then ask one thing.' : ''} Reply again as the broker, in character, one to three sentences only.`,
+          systemPrompt: brokerRetryPrompt(systemPrompt, problem),
           history,
           newMessage: text,
         }),
@@ -221,8 +195,9 @@ Your last reply ${why}.${missedPickup ? ' The facts above say their truck gets t
         onAttempt,
         cause: 'regenerate',
       }))
-      if (unusable(reply)) reply = FALLBACK_REPLY
-      else if (ignoresUnreachable(reply, truck, { broker: true })) console.warn('[brokerChat] regenerated reply still does not say the truck gets there after the pickup')
+      const remaining = brokerReplyProblem(reply, { truck })
+      if (remaining?.unusable) reply = FALLBACK_REPLY
+      else if (remaining) console.warn(`[brokerChat] regenerated reply still ${remaining.why}`)
     }
   } catch (err) {
     failure = err.message

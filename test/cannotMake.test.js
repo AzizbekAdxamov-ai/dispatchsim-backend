@@ -13,6 +13,9 @@ import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { saysCannotMake, ignoresUnreachable } from '../src/lib/cannotMake.js'
+import { brokerReplyProblem, brokerRetryPrompt } from '../src/modules/brokerChat/replyProblem.js'
+import { driverReplyProblem, driverRetryPrompt } from '../src/modules/driverChat/replyProblem.js'
+import { CHAT_REPLY_MAX_CHARS } from '../src/constants/chatBudget.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const read = (...p) => readFileSync(join(here, '..', ...p), 'utf8').replace(/\r\n/g, '\n')
@@ -49,20 +52,55 @@ test('the broker may say it as "after your pickup"; the driver check does not ta
   assert.equal(ignoresUnreachable('Where is your truck at?', { makesIt: false }, { broker: true }), true)
 })
 
-// Kills: a service that stops checking the computed fact, checks it against
-// a different clock than the prompt's, or adds a third chatText call
-// (turnLog.test.js pins exactly two).
+// Kills: a service that stops asking the shared check, checks it against a
+// different clock than the prompt's, or adds a third chatText call
+// (turnLog.test.js pins exactly two). The check itself lives in
+// replyProblem.js, where the eval scripts read the same one.
 test('the services regenerate on an unreachable pickup through the one existing second call', () => {
   const driver = read('src', 'modules', 'driverChat', 'driverChat.service.js')
   assert.match(driver, /const offer = offerFacts\(/)
-  assert.match(driver, /ignoresUnreachable\(reply, offer\)/)
-  assert.match(driver, /unusableWhy \?\? \(missedPickup/)
+  assert.match(driver, /driverReplyProblem\(reply, \{ offer/)
+  assert.match(driver, /const why = problem\?\.why \?\? null/)
   const broker = read('src', 'modules', 'brokerChat', 'brokerChat.service.js')
   assert.match(broker, /truckFacts\(\{ texts: said, posting, now \}\)/)
-  assert.match(broker, /ignoresUnreachable\(reply, truck, \{ broker: true \}\)/)
+  assert.match(broker, /brokerReplyProblem\(reply, \{ truck/)
   assert.match(broker, /buildBrokerSystemPrompt\(\{[\s\S]*?\bnow\b/)
-  assert.match(broker, /unusableWhy \?\? \(missedPickup/)
+  assert.match(broker, /const why = problem\?\.why \?\? null/)
   for (const src of [driver, broker]) {
     assert.equal(src.match(/await chatText\(\{/g).length, 2)
   }
+  const driverCheck = read('src', 'modules', 'driverChat', 'replyProblem.js')
+  assert.match(driverCheck, /ignoresUnreachable\(reply, offer\)/)
+  const brokerCheck = read('src', 'modules', 'brokerChat', 'replyProblem.js')
+  assert.match(brokerCheck, /ignoresUnreachable\(reply, truck, \{ broker: true \}\)/)
+})
+
+// Kills: the shared check dropping one of its four problems, reporting them
+// in a different order (the first found is the one the retry names), or
+// marking the unreachable pickup as unusable (it would then be replaced by
+// the holding line instead of kept when the second try still misses it).
+test('the shared reply checks report banned word, leak, length, then the unreachable pickup', () => {
+  const truck = { makesIt: false }
+  const offer = { makesIt: false }
+  assert.equal(brokerReplyProblem('Copy that. Where is your truck at?', { truck: { makesIt: true } }), null)
+  assert.deepEqual(brokerReplyProblem('Where is your truck at?', { truck }), {
+    why: 'did not tell the carrier their truck gets there after your pickup',
+    hint: ' The facts above say their truck gets there after your pickup: say so plainly, with the miles, then ask one thing.',
+    unusable: false,
+  })
+  assert.equal(brokerReplyProblem('x'.repeat(CHAT_REPLY_MAX_CHARS + 1), { truck }).unusable, true)
+  assert.match(brokerReplyProblem('We need to respond as the broker and push back.', {}).why, /reasoning/)
+  assert.equal(driverReplyProblem('Copy that, send it over.', { offer: { makesIt: true } }), null)
+  assert.equal(driverReplyProblem(LIVE60, { offer }).why, 'did not say you cannot make that pickup')
+  assert.equal(driverReplyProblem(LIVE60, { offer }).unusable, false)
+  assert.equal(driverReplyProblem('x'.repeat(CHAT_REPLY_MAX_CHARS + 1), { offer }).unusable, true)
+})
+
+// Kills: a retry prompt that differs from what the services used to send
+// (the model is told what was wrong with its last reply, then to try again).
+test('the retry prompts name the problem and keep the system prompt first', () => {
+  const broker = brokerRetryPrompt('SYSTEM', { why: 'used a forbidden word', hint: '' })
+  assert.equal(broker, 'SYSTEM\n\nYour last reply used a forbidden word. Reply again as the broker, in character, one to three sentences only.')
+  const driver = driverRetryPrompt('SYSTEM', { why: 'x', hint: ' Do y.' })
+  assert.equal(driver, 'SYSTEM\n\nYour last reply x. Do y. Reply again as the driver, in character, one to three sentences only.')
 })

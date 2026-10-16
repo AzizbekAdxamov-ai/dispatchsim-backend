@@ -15,12 +15,11 @@
 //   has just been paid -- because that is what happened.
 
 import { chatText } from '../../../scripts/seed/aiClient.js'
-import { ignoresUnreachable } from '../../lib/cannotMake.js'
+import { driverReplyProblem, driverRetryPrompt } from './replyProblem.js'
 import { fileURLToPath } from 'node:url'
 import { promptVersionOf } from '../../lib/promptVersion.js'
 import { turnRow, logTurn } from '../chat/turnLog.js'
 import { assertCanSend } from '../chat/chatBudget.service.js'
-import { tooLongForChat, CHAT_REPLY_MAX_CHARS } from '../../constants/chatBudget.js'
 import { chatConfigFor } from '../chat/chatProvider.js'
 import { AppError } from '../../lib/errors.js'
 import { stripSpeakerLabel } from '../../lib/speakerLabel.js'
@@ -33,8 +32,6 @@ import { offerFacts } from './offerTalk.js'
 import {
   buildDriverSystemPrompt,
   buildMessages,
-  trippedBannedWord,
-  leaksReasoning,
   FALLBACK_REPLY,
 } from './driverChat.prompt.js'
 
@@ -160,40 +157,22 @@ export async function sendMessage({ conversationId, userId, text, images }) {
       onAttempt,
     }))
 
-    // Two ways a reply is unusable, both regenerated once and then replaced
-    // with a short in-character line. Neither can be dropped silently --
-    // someone is waiting for an answer.
-    //
-    // Too long: the token budget used to enforce this by itself -- a reply
-    //   could not exceed 220 tokens because 220 was all it was given. That
-    //   stopped being true when the budget had to grow to let a reasoning
-    //   model think (src/constants/chatBudget.js). The length rule did not
-    //   go away with it; it moved here, where it is about the REPLY rather
-    //   than about the reply plus whatever the model thought first.
-    const unusable = (t) => trippedBannedWord(t) !== null || leaksReasoning(t) || tooLongForChat(t)
-
-    const unusableWhy = unusable(reply)
-      ? (trippedBannedWord(reply)
-        ? 'used a forbidden word'
-        : leaksReasoning(reply)
-          ? 'showed your own reasoning instead of speaking as the driver'
-          : `ran to ${reply.trim().length} characters when the limit is ${CHAT_REPLY_MAX_CHARS}`)
-      : null
-    // Third way: the facts say she cannot make the pickup (computed from
-    // her position and the clock) and the reply never says so. Same single
-    // second call -- it costs one more request from the daily budget, only
-    // on turns where makesIt === false.
-    const missedPickup = ignoresUnreachable(reply, offer)
-    const why = unusableWhy ?? (missedPickup ? 'did not say you cannot make that pickup' : null)
+    // What is wrong with a reply is decided in replyProblem.js, the same
+    // function the eval scripts use. Banned word, leaked reasoning and a
+    // too-long reply are unusable: regenerated once, then replaced with a
+    // short in-character line -- someone is waiting for an answer, so they
+    // cannot be dropped silently. A content problem (she cannot make the
+    // pickup and the reply never says so) is regenerated once, with one
+    // more request from the daily budget, and logged if it persists.
+    const problem = driverReplyProblem(reply, { offer, text })
+    const why = problem?.why ?? null
 
     if (why) {
       console.warn(`[driverChat] retrying — reply ${why}`)
       regenerated = why
       reply = clean(await chatText({
         messages: buildMessages({
-          systemPrompt: `${systemPrompt}
-
-Your last reply ${why}.${missedPickup ? ' The facts above say you cannot make that pickup: say so plainly, with the miles, and ask for a later pickup time.' : ''} Reply again as the driver, in character, one to three sentences only.`,
+          systemPrompt: driverRetryPrompt(systemPrompt, problem),
           history,
           newMessage: text,
           images,
@@ -204,8 +183,9 @@ Your last reply ${why}.${missedPickup ? ' The facts above say you cannot make th
         onAttempt,
         cause: 'regenerate',
       }))
-      if (unusable(reply)) reply = FALLBACK_REPLY
-      else if (ignoresUnreachable(reply, offer)) console.warn('[driverChat] regenerated reply still does not say the pickup cannot be made')
+      const remaining = driverReplyProblem(reply, { offer, text })
+      if (remaining?.unusable) reply = FALLBACK_REPLY
+      else if (remaining) console.warn(`[driverChat] regenerated reply still ${remaining.why}`)
     }
   } catch (err) {
     failure = err.message
