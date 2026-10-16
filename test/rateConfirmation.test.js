@@ -145,3 +145,39 @@ test('the paper carries the same accessorial terms the broker quotes', async () 
     assert.ok(text.includes(line), `missing: ${line}`)
   }
 })
+
+// -- Booking-call fields (2026-10-17) -----------------------------------------
+
+import { stopsFor } from '../src/modules/brokerChat/stops.js'
+
+const STOPS = stopsFor({ id: 'p-1', ...POSTING })
+const TOLD = { driverName: 'Grace Lindqvist', truckNumber: 'RS-9278-CY', dispatcherEmail: 'dispatch@cedar-ridge.example' }
+
+// Kills: shipper, receiver or the details the dispatcher gave missing from the paper
+test('the paper carries shipper, receiver, appointments, driver, truck and email', async () => {
+  const buf = await generateRateConfirmation({
+    conversation: CONVERSATION, posting: { ...POSTING, ...STOPS }, broker: BROKER, carrier: { ...CARRIER, mcNumber: 'MC-741309', ...TOLD },
+  })
+  const text = pdfText(buf)
+  for (const s of [STOPS.shipper, STOPS.receiver]) {
+    assert.ok(text.includes(s.name), s.name)
+    assert.ok(text.includes(s.street), s.street)
+    assert.ok(text.includes(`${s.city}, ${s.state}`))
+  }
+  assert.ok(text.includes('SHIPPER') && text.includes('RECEIVER'))
+  assert.ok(text.includes('Appt'))
+  for (const v of ['Grace Lindqvist', 'RS-9278-CY', 'dispatch@cedar-ridge.example', 'MC-741309']) assert.ok(text.includes(v), v)
+  // Kills: all the new fields pushing the footer onto a second page
+  const pages = (buf.toString('latin1').match(/\/Type \/Page[^s]/g) ?? []).length
+  assert.equal(pages, 1, `the rate confirmation came out ${pages} pages`)
+})
+
+// Kills: a placeholder printed for what was never said
+test('driver, truck and email lines are absent when they were not said', async () => {
+  const text = pdfText(await generateRateConfirmation({
+    conversation: CONVERSATION, posting: { ...POSTING, ...STOPS }, broker: BROKER, carrier: { ...CARRIER, dispatcherEmail: null },
+  }))
+  assert.ok(!text.includes('DISPATCH EMAIL'))
+  assert.ok(!text.includes('DRIVER'))
+  assert.ok(!text.includes('TRUCK'))
+})

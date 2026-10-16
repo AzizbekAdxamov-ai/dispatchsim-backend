@@ -116,6 +116,17 @@ export function generateRateConfirmation({ conversation, posting, broker, carrie
     doc.text(carrier?.addressLine ?? '', rightCol, y)
     y += 11
     doc.text(carrier?.phone ?? '', rightCol, y)
+    // What the dispatcher told the broker. A line appears only when it was
+    // said: no placeholder that reads as a field somebody forgot.
+    for (const [label, value] of [
+      ['DRIVER', carrier?.driverName],
+      ['TRUCK', carrier?.truckNumber],
+      ['DISPATCH EMAIL', carrier?.dispatcherEmail],
+    ]) {
+      if (!value) continue
+      y += 11
+      doc.text(`${label}  ${value}`, rightCol, y)
+    }
     doc.fontSize(10).fillColor('#000000')
 
     // --- Separator ---
@@ -140,11 +151,24 @@ export function generateRateConfirmation({ conversation, posting, broker, carrie
     y += 15
     doc.text(`${posting.commodity || '—'}  ·  ${(posting.weightLbs || 0).toLocaleString()} lbs`, leftCol, y)
 
-    y += 15
-    doc.text(`Pickup   ${formatDateTime(posting.pickupAt)}`, leftCol, y)
-
-    y += 15
-    doc.text(`Delivery ${formatDateTime(posting.deliveryAt)}`, leftCol, y)
+    // Shipper and receiver side by side, each with its appointment. The names
+    // and streets are made up per posting (stops.js).
+    y += 18
+    const stopBlock = (title, stop, appt, x) => {
+      let sy = y
+      doc.fontSize(9).font('Helvetica-Bold').fillColor('#000000').text(title, x, sy)
+      doc.font('Helvetica').fillColor('#000000')
+      for (const line of [stop?.name, stop?.street, stop ? `${stop.city}, ${stop.state}` : null, `Appt  ${formatDateTime(appt)}`]) {
+        if (!line) continue
+        sy += 12
+        doc.fontSize(9).text(line, x, sy)
+      }
+      return sy
+    }
+    const shipperEnd = stopBlock('SHIPPER', posting.shipper, posting.pickupAt, leftCol)
+    const receiverEnd = stopBlock('RECEIVER', posting.receiver, posting.deliveryAt, rightCol)
+    y = Math.max(shipperEnd, receiverEnd)
+    doc.fontSize(10)
 
     // --- Separator ---
     y += 25

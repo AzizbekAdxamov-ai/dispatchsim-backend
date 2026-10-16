@@ -8,6 +8,7 @@ import { chatText } from '../../../scripts/seed/aiClient.js'
 import { brokerReplyProblem, brokerRetryPrompt } from './replyProblem.js'
 import { truckFacts } from './truckTalk.js'
 import { bookingFacts, carrierNotVerified } from './bookingTalk.js'
+import { stopsFor } from './stops.js'
 import { fileURLToPath } from 'node:url'
 import { promptVersionOf } from '../../lib/promptVersion.js'
 import { turnRow, logTurn } from '../chat/turnLog.js'
@@ -386,5 +387,12 @@ export async function getRateConfirmation({ conversationId, userId }) {
   if (row.status !== 'agreed' && row.status !== 'booked') throw new AppError('NOT_AGREED_YET')
   // The document cannot be opened before the broker has sent it.
   if (!(await repo.rateConDelivered(conversationId))) throw new AppError('RATE_CON_NOT_ARRIVED')
-  return row
+  // What the dispatcher told the broker (driver, truck number, email for the
+  // paper) and the invented shipper and receiver for this posting.
+  const booking = bookingFacts({
+    texts: dispatcherTexts(await repo.listMessages(conversationId)),
+    carrier: await getCarrier(),
+    posting: row,
+  })
+  return { ...row, booking, stops: stopsFor({ id: row.postingId, ...row }) }
 }

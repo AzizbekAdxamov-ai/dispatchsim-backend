@@ -75,6 +75,7 @@ export async function rateConfirmation(req, res) {
       equipmentLengthFt: data.equipmentLengthFt, commodity: data.commodity,
       weightLbs: data.weightLbs, pickupAt: data.pickupAt, deliveryAt: data.deliveryAt,
       bookedLoadId: data.bookedLoadId, rateUsd: data.rateUsd,
+      shipper: data.stops.shipper, receiver: data.stops.receiver,
     },
     broker: {
       name: data.brokerName, contactName: data.brokerContactName,
@@ -97,6 +98,10 @@ export async function rateConfirmation(req, res) {
       dotNumber: carrier?.dotNumber ?? null,
       addressLine: carrier ? carrierAddressLine(carrier) : null,
       phone: carrier?.phone ?? null,
+      // Only what the dispatcher said in the chat; absent otherwise.
+      driverName: data.booking.driverName,
+      truckNumber: data.booking.truckNumber,
+      dispatcherEmail: data.booking.email,
     },
   })
 
