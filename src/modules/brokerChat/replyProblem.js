@@ -12,6 +12,7 @@
 import { trippedBannedWord, leaksReasoning } from './brokerChat.prompt.js'
 import { tooLongForChat, CHAT_REPLY_MAX_CHARS } from '../../constants/chatBudget.js'
 import { ignoresUnreachable } from '../../lib/cannotMake.js'
+import { lumperPayerWrong } from './termsTalk.js'
 
 export function brokerReplyProblem(reply, { truck } = {}) {
   if (trippedBannedWord(reply) !== null) return { why: 'used a forbidden word', hint: '', unusable: true }
@@ -25,6 +26,15 @@ export function brokerReplyProblem(reply, { truck } = {}) {
     return {
       why: 'did not tell the carrier their truck gets there after your pickup',
       hint: ' The facts above say their truck gets there after your pickup: say so plainly, with the miles, then ask one thing.',
+      unusable: false,
+    }
+  }
+  // The terms say the broker pays the lumper against a receipt (the same
+  // line the prompt carries); the reply puts it on someone else.
+  if (lumperPayerWrong(reply)) {
+    return {
+      why: 'said someone other than you pays the lumper',
+      hint: ' YOUR TERMS say: Lumper: paid by the broker against a receipt. Say that.',
       unusable: false,
     }
   }

@@ -15,6 +15,7 @@
 
 import { asciiPunct } from '../src/lib/plainText.js'
 import { dollars, DOLLAR_RE } from '../src/modules/brokerChat/rateTalk.js'
+import { lumperPayerWrong } from '../src/modules/brokerChat/termsTalk.js'
 import { FALLBACK_REPLY as DRIVER_FALLBACK } from '../src/modules/driverChat/driverChat.prompt.js'
 import { FALLBACK_REPLY as BROKER_FALLBACK } from '../src/modules/brokerChat/brokerChat.prompt.js'
 
@@ -138,6 +139,7 @@ export function brokerReply(rawReply, rawPrevious) {
   const out = anyReply(reply, previousReply)
   if (CEILING.test(reply)) out.push('names a ceiling or room')
   if (SENDS_BACK.test(reply)) out.push('sends the dispatcher back to check')
+  if (lumperPayerWrong(reply)) out.push('lumper payer wrong')
   return out
 }
 
