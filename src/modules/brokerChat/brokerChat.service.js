@@ -7,7 +7,7 @@
 import { chatText } from '../../../scripts/seed/aiClient.js'
 import { brokerReplyProblem, brokerRetryPrompt } from './replyProblem.js'
 import { truckFacts } from './truckTalk.js'
-import { bookingFacts } from './bookingTalk.js'
+import { bookingFacts, carrierNotVerified } from './bookingTalk.js'
 import { fileURLToPath } from 'node:url'
 import { promptVersionOf } from '../../lib/promptVersion.js'
 import { turnRow, logTurn } from '../chat/turnLog.js'
@@ -45,6 +45,19 @@ function assertPostingOpen(posting) {
   if (posting.status !== 'open') throw new AppError('POSTING_TAKEN')
   if (new Date(posting.expiresAt) <= new Date()) throw new AppError('POSTING_EXPIRED')
   if (!posting.brokerId) throw new AppError('BROKER_UNAVAILABLE')
+}
+
+// No agreement and no signed paper until the MC the dispatcher gave checks
+// out (decision 2, 2026-10-17). The broker's own sentence goes to the screen
+// in details.message -- the dispatcher is told why, never just refused.
+async function assertCarrierVerified(conversationId, posting) {
+  const booking = bookingFacts({
+    texts: dispatcherTexts(await repo.listMessages(conversationId)),
+    carrier: await getCarrier(),
+    posting,
+  })
+  const blocked = carrierNotVerified({ booking, contactName: posting.contactName })
+  if (blocked) throw new AppError('CARRIER_NOT_VERIFIED', blocked)
 }
 
 export async function openConversation({ postingId, userId }) {
@@ -183,7 +196,7 @@ export async function sendMessage({ conversationId, userId, text }) {
     // problem (the truck cannot reach the pickup and the reply never says
     // so) is regenerated once, with one more request from the daily budget,
     // and logged if it persists.
-    const problem = brokerReplyProblem(reply, { truck })
+    const problem = brokerReplyProblem(reply, { truck, booking })
     const why = problem?.why ?? null
 
     if (why) {
@@ -201,7 +214,7 @@ export async function sendMessage({ conversationId, userId, text }) {
         onAttempt,
         cause: 'regenerate',
       }))
-      const remaining = brokerReplyProblem(reply, { truck })
+      const remaining = brokerReplyProblem(reply, { truck, booking })
       if (remaining?.unusable) reply = FALLBACK_REPLY
       else if (remaining) console.warn(`[brokerChat] regenerated reply still ${remaining.why}`)
     }
@@ -286,6 +299,7 @@ export async function agreeRate({ conversationId, userId, rateUsd }) {
   }
 
   if (conversation.status === 'booked') throw new AppError('ALREADY_BOOKED')
+  await assertCarrierVerified(conversationId, posting)
 
   const updated = await repo.setAgreedRate(conversationId, userId, rateUsd)
   if (!updated) throw new AppError('CONVERSATION_NOT_FOUND')
@@ -337,6 +351,7 @@ export async function acceptRateCon({ conversationId, userId }) {
 
   const posting = await repo.getPostingWithBroker(conversation.postingId)
   assertPostingOpen(posting)
+  await assertCarrierVerified(conversationId, posting)
 
   // No driver here on purpose. Accepting the paper commits the company to
   // the freight; deciding who runs it is dispatch's next decision, made

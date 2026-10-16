@@ -37,6 +37,9 @@ const CODES_WITH_PUBLIC_DETAILS = new Set([
   // classmates logged on and their share shrank -- and those call for
   // different things. The numbers ship.
   'CHAT_DAILY_LIMIT',
+  // The broker's own sentence about the MC; without it the dispatcher sees
+  // only the generic line and does not learn what to fix.
+  'CARRIER_NOT_VERIFIED',
 ])
 
 export function errorHandler(err, req, res, next) {

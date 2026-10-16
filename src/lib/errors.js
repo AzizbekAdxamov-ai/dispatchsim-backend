@@ -80,6 +80,9 @@ export const ERROR_CODES = {
   DRIVER_HAS_TRUCK:       { status: 409, message: 'This driver already has a truck assigned' },
   NOT_AGREED_YET:         { status: 409, message: 'No agreement on file — agree on a rate first' },
   ALREADY_BOOKED:         { status: 409, message: 'This rate confirmation has already been accepted' },
+  // The MC the dispatcher gave the broker is missing or is not ours: no agreement
+  // and no signed paper (the broker's own sentence rides in details.message).
+  CARRIER_NOT_VERIFIED:   { status: 409, message: 'The broker will not send a rate confirmation until your MC checks out' },
   RATE_CON_NOT_ARRIVED:   { status: 409, message: 'The broker has not sent the rate confirmation yet' },
   BROKER_NOT_FOUND:       { status: 404, message: 'No carrier record found for that MC number' },
   TICK_NOT_CONFIGURED:    { status: 503, message: 'OPS_TICK_SECRET is not set on this deployment' },

@@ -213,3 +213,20 @@ export function asksMc(reply) {
   const text = asciiPunct(reply)
   return MC_WORD.test(text) && ASKING.test(text)
 }
+
+// -- The booking gate -------------------------------------------------------
+
+// null when the MC checks out; otherwise { reason, message } where message is
+// the broker's own sentence (shown to the dispatcher as it is -- never a
+// silent failure).
+export function carrierNotVerified({ booking, contactName }) {
+  if (booking?.mc?.verdict === 'match') return null
+  const who = contactName || 'The broker'
+  if (booking?.mc?.verdict === 'mismatch') {
+    return {
+      reason: 'mc-mismatch',
+      message: `${who}: "That MC doesn't come up on my end -- I can't send paper until I have the right one."`,
+    }
+  }
+  return { reason: 'mc-missing', message: `${who}: "I still need your MC before I send the rate con."` }
+}

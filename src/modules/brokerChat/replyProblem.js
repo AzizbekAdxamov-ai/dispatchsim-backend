@@ -13,8 +13,9 @@ import { trippedBannedWord, leaksReasoning } from './brokerChat.prompt.js'
 import { tooLongForChat, CHAT_REPLY_MAX_CHARS } from '../../constants/chatBudget.js'
 import { ignoresUnreachable } from '../../lib/cannotMake.js'
 import { lumperPayerWrong } from './termsTalk.js'
+import { saysBooked } from './bookingTalk.js'
 
-export function brokerReplyProblem(reply, { truck } = {}) {
+export function brokerReplyProblem(reply, { truck, booking = null } = {}) {
   if (trippedBannedWord(reply) !== null) return { why: 'used a forbidden word', hint: '', unusable: true }
   if (leaksReasoning(reply)) return { why: 'showed your own reasoning instead of speaking as the broker', hint: '', unusable: true }
   if (tooLongForChat(reply)) {
@@ -35,6 +36,15 @@ export function brokerReplyProblem(reply, { truck } = {}) {
     return {
       why: 'said someone other than you pays the lumper',
       hint: ' YOUR TERMS say: Lumper: paid by the broker against a receipt. Say that.',
+      unusable: false,
+    }
+  }
+  // Booked, or paper on its way, while the MC is missing or wrong. Only when
+  // the caller passed the booking facts (the live service and --service do).
+  if (booking && booking.mc.verdict !== 'match' && saysBooked(reply)) {
+    return {
+      why: 'told them it is booked without a verified MC',
+      hint: ' Their MC is missing or does not come up (see WHO IS CALLING): do not book or promise paper; say what you still need from them.',
       unusable: false,
     }
   }

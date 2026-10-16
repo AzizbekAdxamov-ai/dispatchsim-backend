@@ -188,3 +188,58 @@ test('MC_REJECT and asksMc', () => {
   assert.equal(asksMc('Got it, thanks.'), false)
 })
 
+
+// -- The booking gate -----------------------------------------------------
+
+import { readFileSync } from 'node:fs'
+import { join, dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { carrierNotVerified } from '../src/modules/brokerChat/bookingTalk.js'
+import { brokerReplyProblem } from '../src/modules/brokerChat/replyProblem.js'
+import { ERROR_CODES } from '../src/lib/errors.js'
+
+// Kills: a verified MC blocked
+test('gate: a matching MC passes', () => {
+  assert.equal(carrierNotVerified({ booking: facts(['MC 741309']), contactName: 'Devin' }), null)
+})
+
+// Kills: a wrong MC allowed to agree / sign, or a silent refusal
+test('gate: a wrong MC is refused in the broker\'s own sentence', () => {
+  const r = carrierNotVerified({ booking: facts(['MC 999999']), contactName: 'Devin' })
+  assert.equal(r.reason, 'mc-mismatch')
+  assert.match(r.message, /^Devin: "That MC doesn't come up on my end/)
+})
+
+// Kills: no MC at all allowed to book
+test('gate: no MC is refused and says what is needed', () => {
+  const r = carrierNotVerified({ booking: facts(['just book it']), contactName: 'Devin' })
+  assert.equal(r.reason, 'mc-missing')
+  assert.match(r.message, /I still need your MC/)
+})
+
+// Kills: the error code missing from the catalog or from the public-details list
+test('CARRIER_NOT_VERIFIED is a 409 whose details reach the screen', () => {
+  assert.equal(ERROR_CODES.CARRIER_NOT_VERIFIED.status, 409)
+  const handler = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'middleware', 'errorHandler.js'), 'utf8')
+  assert.match(handler, /'CARRIER_NOT_VERIFIED'/)
+})
+
+// Kills: the gate called in only one of the two places that book
+test('the service checks the carrier in agreeRate and in acceptRateCon', () => {
+  const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'modules', 'brokerChat', 'brokerChat.service.js'), 'utf8')
+  const agree = src.slice(src.indexOf('export async function agreeRate'), src.indexOf('export async function acceptRateCon'))
+  const accept = src.slice(src.indexOf('export async function acceptRateCon'), src.indexOf('export async function listConversations'))
+  assert.match(agree, /await assertCarrierVerified\(conversationId, posting\)/)
+  assert.match(accept, /await assertCarrierVerified\(conversationId, posting\)/)
+  // not on the idempotent already-booked path
+  assert.ok(accept.indexOf('alreadyAccepted: true') < accept.indexOf('assertCarrierVerified'))
+})
+
+// Kills: "you're booked" let through when the MC is missing or wrong
+test('a reply that books without a verified MC is a problem; with one it is not', () => {
+  const reply = "You're all set, sending the rate con over now."
+  assert.equal(brokerReplyProblem(reply, { booking: facts(['MC 999999']) }).why, 'told them it is booked without a verified MC')
+  assert.equal(brokerReplyProblem(reply, { booking: facts(['hi']) }).unusable, false)
+  assert.equal(brokerReplyProblem(reply, { booking: facts(['MC 741309']) }), null)
+  assert.equal(brokerReplyProblem("I need your MC before I book anything.", { booking: facts(['hi']) }), null)
+})
