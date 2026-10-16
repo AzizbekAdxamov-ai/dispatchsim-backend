@@ -240,7 +240,7 @@ test('a dataset row carries requests, attempts and summed usage', () => {
 test('chat-eval records attempts for both chats and names the 429 code', () => {
   const src = read('scripts', 'chat-eval.js')
   assert.equal((src.match(/\.\.\.attemptFields\(attempts\)/g) ?? []).length, 2)
-  assert.equal((src.match(/const \{ reply, model, attempts \} = await ask\(/g) ?? []).length, 2)
+  assert.equal((src.match(/const \{ reply, model, attempts, outcome \} = await answer\(/g) ?? []).length, 2)
   assert.match(src, /return \{ reply: reply\.trim\(\), model: answeredModel, attempts \}/)
   assert.match(src, /rate limit\$\{code \? ` \(\$\{code\}\)` : ''\}/)
   assert.match(src, /\*\*Requests:\*\* \$\{attemptsLine\(row\.attempts\)\}/)

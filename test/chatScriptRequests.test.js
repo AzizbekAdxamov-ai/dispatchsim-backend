@@ -90,8 +90,12 @@ for (const [file, source] of [['chat-eval.js', 'eval'], ['chat-scenarios.js', 's
     assert.equal((src.match(/await chatText\(/g) ?? []).length, 0)
     assert.equal((src.match(/await chatTextRecorded\(/g) ?? []).length, 1)
     assert.match(src, new RegExp(`source: '${source}'`))
+    // Every request goes through ask(), which names the side; each turn
+    // reaches it via answer(), which is given the side (broker/driver).
     const asks = (src.match(/await ask\(/g) ?? []).length
-    assert.equal((src.match(/\), '(broker|driver)'\)/g) ?? []).length, asks)
+    assert.equal((src.match(/await ask\([^\n]*, side(, cause|, 'regenerate')?\)/g) ?? []).length, asks)
+    const answers = (src.match(/await answer\(\{/g) ?? []).length
+    assert.equal((src.match(/side: '(broker|driver)'/g) ?? []).length, answers)
   })
 }
 

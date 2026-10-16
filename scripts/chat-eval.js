@@ -10,6 +10,8 @@
 //   npm run chat:eval -- driver --case ED01  # one Grace case
 //   npm run chat:eval -- --case EB04,ED07    # several cases, either side
 //   npm run chat:eval -- --gap 20            # wait 20 s between cases (per-minute token limit)
+//   npm run chat:eval -- --service           # what the live app would show: the same reply
+//                                            # check and ONE regeneration (up to 2x requests)
 //
 // Azizbek, 2026-10-09: from today the AIs are checked on a fixed set of
 // trade phrases, and every answer is kept -- what it said, what data it
@@ -27,7 +29,7 @@
 //                     the prompt version, and `human` (null until graded).
 //
 // Nothing is written to the database. Each case is one request; a second
-// try (aiClient) adds one. A plan larger than the provider's daily budget
+// try (aiClient) adds one, and so does a --service regeneration. A plan larger than the provider's daily budget
 // is refused before the first request.
 
 import 'dotenv/config'
@@ -58,9 +60,17 @@ import { getCarrier } from '../src/modules/carrier/carrier.repository.js'
 import { BROKER_CASES, DRIVER_CASES, brokerFindings, driverFindings, CLASSIFIER_ONLY_FINDING } from './evalCases.js'
 import { nycFixtureLoad, FIXTURE_LOAD_CASES } from './evalFixtures.js'
 import { nextEvalRunId, writeEvalReport } from './evalReport.js'
+import { serviceReply } from './serviceReply.js'
+import { brokerReplyProblem, brokerRetryPrompt } from '../src/modules/brokerChat/replyProblem.js'
+import { driverReplyProblem, driverRetryPrompt } from '../src/modules/driverChat/replyProblem.js'
+import { truckFacts } from '../src/modules/brokerChat/truckTalk.js'
+import { stripSpeakerLabel } from '../src/lib/speakerLabel.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const args = process.argv.slice(2)
+// --service: answer the way the live service does (reply check, one
+// regeneration, holding line) instead of showing the model's first reply.
+const service = args.includes('--service')
 const only = args.find((a) => a === 'broker' || a === 'driver') ?? 'both'
 const caseList = parseIdList(args, '--case')
 if (caseList.error) {
@@ -118,7 +128,7 @@ function safeEvalError(message) {
 // The same hash the live services write into chat_turn_log (056).
 const promptVersion = (file) => promptVersionOf(join(here, '..', 'src', 'modules', file))
 
-async function ask(config, messages, side) {
+async function ask(config, messages, side, cause) {
   let answeredModel = config.model
   const attempts = []
   await pauseBeforeCase()
@@ -129,6 +139,7 @@ async function ask(config, messages, side) {
       onRetry: () => { retries += 1 },
       onModel: (model) => { answeredModel = model },
       onAttempt: (a) => { attempts.push(a) },
+      ...(cause ? { cause } : {}),
     })
     return { reply: reply.trim(), model: answeredModel, attempts }
   } catch (err) {
@@ -140,10 +151,37 @@ async function ask(config, messages, side) {
   }
 }
 
+// One case's answer. Raw: the model's first reply, as before. Service: the
+// live service's path (serviceReply.js) with the shared checks; the requests
+// of both tries are merged into one attempts list.
+async function answer({ config, side, messages, systemPrompt, clean, problemOf, retryPrompt, fallback }) {
+  if (!service) {
+    const r = await ask(config, messages(systemPrompt), side)
+    return { ...r, outcome: { mode: 'raw', rawReply: r.reply, regeneratedBecause: null, fellBack: false, stillFailing: null } }
+  }
+  const attempts = []
+  let model
+  const call = (sys, cause) => async () => {
+    const r = await ask(config, messages(sys), side, cause)
+    attempts.push(...r.attempts)
+    model = r.model
+    return clean(r.reply)
+  }
+  const out = await serviceReply({
+    first: call(systemPrompt),
+    again: (sys) => call(sys, 'regenerate')(),
+    problemOf, retryPrompt, fallback, systemPrompt,
+  })
+  return {
+    reply: out.reply, model, attempts: attempts.map((a, i) => ({ ...a, n: i + 1 })),
+    outcome: { mode: 'service', rawReply: out.raw, regeneratedBecause: out.regeneratedBecause, fellBack: out.fellBack, stillFailing: out.stillFailing },
+  }
+}
+
 // Run header: the primary, and the fallback too when one is configured.
 function modelHeader(config) {
   const models = config.fallbackModel ? `primary ${config.model} · fallback ${config.fallbackModel}` : `primary ${config.model}`
-  return `${models} · reasoning_effort ${reasoningEffortOf(config)}`
+  return `${models} · reasoning_effort ${reasoningEffortOf(config)} · mode ${service ? 'service' : 'raw'}`
 }
 
 // What the request asks for, 'n/a' where the model takes no such field.
@@ -159,7 +197,15 @@ function record(fields) {
   say(`**Data the model had:** ${row.dataSummary}`)
   say('')
   say(`- **Dispatcher:** \`${row.line}\``)
-  say(`- **${row.chat === 'broker' ? 'Broker' : 'Grace'}:** ${row.reply}`)
+  const who = row.chat === 'broker' ? 'Broker' : 'Grace'
+  if (row.regeneratedBecause) {
+    say(`- **First reply:** ${row.rawReply}`)
+    say(`- **Regenerated because:** it ${row.regeneratedBecause}`)
+    say(`- **Final reply (${who}):** ${row.reply}${row.fellBack ? ' _(holding line)_' : ''}`)
+    if (row.stillFailing) say(`- **Still failing after the second try:** it ${row.stillFailing}`)
+  } else {
+    say(`- **${who}:** ${row.reply}`)
+  }
   say(`- **Answering model:** \`${row.model}\``)
   say(`- **Requests:** ${attemptsLine(row.attempts)}`)
   say(`- **Automatic findings:** ${row.findings.length ? row.findings.join(' · ') : 'none'}`)
@@ -207,14 +253,26 @@ async function brokerRun(carrier) {
     const market = marketFacts(posting)
     const terms = brokerTerms(posting.name, posting.equipmentType)
     const line = typeof c.line === 'function' ? c.line(posting, market) : c.line
+    // One clock for the prompt and the truck check, as in the live service.
+    const now = new Date()
+    const truck = truckFacts({ texts: [line], posting, now })
     const systemPrompt = bp.buildBrokerSystemPrompt({
       carrier,
       broker: { name: posting.name, contactName: posting.contactName, persona: posting.persona },
       posting,
+      now,
       talk: talkFacts([line], posting.equipmentType),
       said: [line],
     })
-    const { reply, model, attempts } = await ask(config, bp.buildMessages({ systemPrompt, history: [], newMessage: line }), 'broker')
+    const { reply, model, attempts, outcome } = await answer({
+      config, side: 'broker', systemPrompt,
+      messages: (sys) => bp.buildMessages({ systemPrompt: sys, history: [], newMessage: line }),
+      clean: (t) => stripSpeakerLabel(t, posting.contactName),
+      problemOf: (r) => brokerReplyProblem(r, { truck }),
+      retryPrompt: brokerRetryPrompt,
+      fallback: bp.FALLBACK_REPLY,
+    })
+    const expected = c.expect({ posting, market, terms, line })
     const rpm = (posting.rateUsd / posting.distanceMi).toFixed(2)
     const side = (s) => (s.source === 'regional' ? `${s.region} $${s.linehaul}` : `${s.region ?? '?'} (no regional figure)`)
     record({
@@ -234,7 +292,9 @@ async function brokerRun(carrier) {
         + ` · terms: ${termsLines(terms).slice(0, 3).join(' ')}`,
       systemPrompt,
       reply,
-      findings: brokerFindings(reply, c.expect({ posting, market, terms, line })),
+      findings: brokerFindings(reply, expected),
+      rawFindings: brokerFindings(outcome.rawReply, expected),
+      ...outcome,
       ...attemptFields(attempts),
       human: null,
     })
@@ -264,7 +324,15 @@ async function driverRun(carrier) {
     // chat does (driverChat.service.js).
     const offer = offerFacts({ driver: ctx.driver, load, texts: [c.line] })
     const systemPrompt = dp.buildDriverSystemPrompt({ driver: ctx.driver, standing, load, carrier, offer })
-    const { reply, model, attempts } = await ask(config, dp.buildMessages({ systemPrompt, history: [], newMessage: c.line }), 'driver')
+    const { reply, model, attempts, outcome } = await answer({
+      config, side: 'driver', systemPrompt,
+      messages: (sys) => dp.buildMessages({ systemPrompt: sys, history: [], newMessage: c.line }),
+      clean: (t) => stripSpeakerLabel(t, ctx.driver.name),
+      problemOf: (r) => driverReplyProblem(r, { offer, text: c.line }),
+      retryPrompt: driverRetryPrompt,
+      fallback: dp.FALLBACK_REPLY,
+    })
+    const expected = c.expect({ line: c.line, driver: ctx.driver, load, standing, fuelPct: dp.fuelPercent(ctx.driver), offer })
     const situation = [...dp.situationLines({ driver: ctx.driver, load }), ...dp.offerLines(offer)].map((l) => l.trim()).filter(Boolean)
     record({
       runId, at: new Date().toISOString(), chat: 'driver', caseId: c.id, style: c.style, terms: c.terms, line: c.line, good: c.good,
@@ -278,8 +346,10 @@ async function driverRun(carrier) {
         + ` · pay: ${standing.unpaidCount > 0 ? `owed $${Math.round(standing.owedUsd)} (${standing.unpaidCount})` : 'nothing owed'}`,
       systemPrompt,
       reply,
+      ...outcome,
       ...attemptFields(attempts),
-      findings: driverFindings(reply, c.expect({ line: c.line, driver: ctx.driver, load, standing, fuelPct: dp.fuelPercent(ctx.driver), offer }), { onTheRoad: ctx.driver.onTheRoad }),
+      findings: driverFindings(reply, expected, { onTheRoad: ctx.driver.onTheRoad }),
+      rawFindings: driverFindings(outcome.rawReply, expected, { onTheRoad: ctx.driver.onTheRoad }),
       human: null,
     })
   }
@@ -322,7 +392,7 @@ let aborted = null
 try {
   const carrier = await getCarrier()
   say(`# Chat evaluation — ${startedAt.toISOString()}`)
-  say(`Cases: ${planned} · planned requests ~${planned} of a daily budget of ${budget} (a second try adds one).`)
+  say(`Cases: ${planned} · planned requests ~${planned}${service ? ` (up to ${planned * 2}: a regeneration adds one)` : ''} of a daily budget of ${budget} (a second try adds one).`)
   say('')
   if (runBroker) await brokerRun(carrier)
   if (runDriver) await driverRun(carrier)

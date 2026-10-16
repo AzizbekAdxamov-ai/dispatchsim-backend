@@ -8,6 +8,8 @@
 //   npm run chat:scenarios -- --scenario S2,G1   # only those scenarios
 //   npm run chat:scenarios -- broker --times 3   # every scenario 3 times (~39)
 //   npm run chat:scenarios -- broker --gap 20    # wait 20 s between requests (per-minute token limit)
+//   npm run chat:scenarios -- --service          # what the live app would show: the same reply
+//                                                # check and ONE regeneration per turn (up to 2x requests)
 //
 // --times runs the same conversations on the same loads again, so a
 // finding can be counted ("S4 agreed in 2 of 3") instead of seen once.
@@ -28,7 +30,9 @@
 // The transcript goes to ../reports/chat-scenarios-<time>.md. Every reply
 // carries the same checks the services run before showing a reply:
 // banned word, leaked reasoning, too long. Here they are reported, not
-// regenerated -- the point is to see what the model does. On top of those,
+// regenerated (unless --service, which does what the live service does and
+// shows the model's first reply beside the final one) -- the point is to
+// see what the model does. On top of those,
 // the checks in scenarioChecks.js -- each one a failure seen in a real run
 // -- and a count of them at the end.
 
@@ -56,9 +60,16 @@ import * as dp from '../src/modules/driverChat/driverChat.prompt.js'
 import { getDriverContext } from '../src/modules/driverChat/driverChat.repository.js'
 import { driverStanding } from '../src/modules/payroll/payroll.service.js'
 import { getCarrier } from '../src/modules/carrier/carrier.repository.js'
+import { serviceReply } from './serviceReply.js'
+import { brokerReplyProblem, brokerRetryPrompt } from '../src/modules/brokerChat/replyProblem.js'
+import { driverReplyProblem, driverRetryPrompt } from '../src/modules/driverChat/replyProblem.js'
+import { truckFacts } from '../src/modules/brokerChat/truckTalk.js'
+import { offerFacts } from '../src/modules/driverChat/offerTalk.js'
+import { stripSpeakerLabel } from '../src/lib/speakerLabel.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const args = process.argv.slice(2)
+const service = args.includes('--service')
 const sideArg = args.find((a) => a === 'broker' || a === 'driver') ?? 'both'
 const timesArg = args.find((a) => a.startsWith('--times'))
 const times = timesArg
@@ -127,17 +138,45 @@ function flags(text, prompt, findings = []) {
 
 // Counted where requests are actually sent (aiClient onRequest), so a
 // second try and a backoff retry are in the number.
-async function ask(config, messages, side) {
+async function ask(config, messages, side, cause) {
   await pauseBeforeRequest()
   try {
     return (await chatTextRecorded({
       chatText, source: 'scenarios', side, messages,
       config,
+      ...(cause ? { cause } : {}),
       onRequest: () => { requests += 1 },
       onRetry: () => { retries += 1 },
     })).trim()
   } catch (err) {
     return `(FAILED: ${err.message})`
+  }
+}
+
+// One turn's reply. Raw: the model's first reply. Service: the live
+// service's path (serviceReply.js) with the shared checks; the system
+// prompt of the retry is the one the live service would send.
+async function answer({ config, side, messages, systemPrompt, clean, problemOf, retryPrompt, fallback }) {
+  if (!service) {
+    const reply = await ask(config, messages(systemPrompt), side)
+    return { reply, raw: reply, regeneratedBecause: null, fellBack: false, stillFailing: null }
+  }
+  return serviceReply({
+    first: async () => clean(await ask(config, messages(systemPrompt), side)),
+    again: async (sys) => clean(await ask(config, messages(sys), side, 'regenerate')),
+    problemOf, retryPrompt, fallback, systemPrompt,
+  })
+}
+
+// The lines of one turn: the model's first reply when the final one differs.
+function sayReply(label, out, prompt, findings) {
+  if (out.regeneratedBecause) {
+    say(`- **${label} (first):** ${out.raw}`)
+    say(`- _regenerated because it ${out.regeneratedBecause}_`)
+    say(`- **${label}:** ${out.reply}${out.fellBack ? ' _(holding line)_' : ''}${flags(out.reply, prompt, findings)}`)
+    if (out.stillFailing) say(`- _still failing after the second try: it ${out.stillFailing}_`)
+  } else {
+    say(`- **${label}:** ${out.reply}${flags(out.reply, prompt, findings)}`)
   }
 }
 
@@ -189,20 +228,32 @@ async function brokerConversation({ key, title, posting, lines }, carrier, confi
   for (const [turn, raw] of lines.entries()) {
     const text = typeof raw === 'function' ? raw(posting, m) : raw
     const dispatcherSoFar = [...history.filter((h) => h.role === 'dispatcher').map((h) => h.content), text]
+    // One clock for the prompt and the truck check, as in the live service.
+    const now = new Date()
+    const truck = truckFacts({ texts: dispatcherSoFar, posting, now })
     const systemPrompt = bp.buildBrokerSystemPrompt({
       carrier,
       broker: { name: posting.name, contactName: posting.contactName, persona: posting.persona },
       posting,
+      now,
       talk: talkFacts(dispatcherSoFar, posting.equipmentType),
       said: dispatcherSoFar,
     })
-    const reply = await ask(config, bp.buildMessages({ systemPrompt, history, newMessage: text }), 'broker')
+    const out = await answer({
+      config, side: 'broker', systemPrompt,
+      messages: (sys) => bp.buildMessages({ systemPrompt: sys, history, newMessage: text }),
+      clean: (t) => stripSpeakerLabel(t, posting.contactName),
+      problemOf: (r) => brokerReplyProblem(r, { truck }),
+      retryPrompt: brokerRetryPrompt,
+      fallback: bp.FALLBACK_REPLY,
+    })
+    const reply = out.reply
     const findings = reply.startsWith('(FAILED')
       ? ['no reply']
       : [...brokerReply(reply, previous), ...(expect[turn]?.(asciiPunct(reply)) ?? [])]
     results.push({ scenario: key, run, findings })
     say(`- **D:** \`${text}\``)
-    say(`- **B:** ${reply}${flags(reply, bp, findings)}`)
+    sayReply('B', out, bp, findings)
     history.push({ role: 'dispatcher', content: text }, { role: 'broker', content: reply })
     previous = reply
   }
@@ -274,14 +325,29 @@ async function driverConversation({ key, title, load, lines }, base, config, run
   const history = []
   let previous = null
   for (const [turn, text] of lines.entries()) {
-    const systemPrompt = dp.buildDriverSystemPrompt({ driver: base.driver, standing: base.standing, load, carrier: base.carrier })
-    const reply = await ask(config, dp.buildMessages({ systemPrompt, history, newMessage: text }), 'driver')
+    // The load the lines mention, worked out by code as the live chat does
+    // (driverChat.service.js): this line and the last four of theirs.
+    const offer = offerFacts({
+      driver: base.driver,
+      load,
+      texts: [...history.filter((h) => h.role === 'dispatcher').slice(-4).map((h) => h.content), text],
+    })
+    const systemPrompt = dp.buildDriverSystemPrompt({ driver: base.driver, standing: base.standing, load, carrier: base.carrier, offer })
+    const out = await answer({
+      config, side: 'driver', systemPrompt,
+      messages: (sys) => dp.buildMessages({ systemPrompt: sys, history, newMessage: text }),
+      clean: (t) => stripSpeakerLabel(t, base.driver.name),
+      problemOf: (r) => driverReplyProblem(r, { offer, text }),
+      retryPrompt: driverRetryPrompt,
+      fallback: dp.FALLBACK_REPLY,
+    })
+    const reply = out.reply
     const findings = reply.startsWith('(FAILED')
       ? ['no reply']
       : [...driverReply(reply, previous, { onTheRoad: base.driver.onTheRoad }), ...(expect[turn]?.(asciiPunct(reply)) ?? [])]
     results.push({ scenario: key, run, findings })
     say(`- **D:** \`${text}\``)
-    say(`- **G:** ${reply}${flags(reply, dp, findings)}`)
+    sayReply('G', out, dp, findings)
     history.push({ role: 'dispatcher', content: text }, { role: 'driver', content: reply })
     previous = reply
   }
@@ -333,7 +399,7 @@ if (refusal) {
 const carrier = await getCarrier()
 const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')
 say(`# Chat scenarios — ${new Date().toISOString()}`)
-say(`Planned requests: ~${planned}${times > 1 ? ` (${times} runs)` : ''} of a daily budget of ${budget}. A second try adds one.${gapSec > 0 ? ` ${gapSec} s between requests.` : ''}`)
+say(`Planned requests: ~${planned}${times > 1 ? ` (${times} runs)` : ''} of a daily budget of ${budget}. A second try adds one.${service ? ` --service: a regeneration adds one more per turn (up to ${planned * 2}).` : ''}${gapSec > 0 ? ` ${gapSec} s between requests.` : ''}`)
 say('')
 try {
   if (only !== 'driver') await runBroker(carrier)
