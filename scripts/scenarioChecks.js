@@ -16,6 +16,7 @@
 import { asciiPunct } from '../src/lib/plainText.js'
 import { dollars, DOLLAR_RE } from '../src/modules/brokerChat/rateTalk.js'
 import { lumperPayerWrong } from '../src/modules/brokerChat/termsTalk.js'
+import { MC_REJECT, saysBooked, asksMc } from '../src/modules/brokerChat/bookingTalk.js'
 import { FALLBACK_REPLY as DRIVER_FALLBACK } from '../src/modules/driverChat/driverChat.prompt.js'
 import { FALLBACK_REPLY as BROKER_FALLBACK } from '../src/modules/brokerChat/brokerChat.prompt.js'
 
@@ -155,6 +156,12 @@ export function correctCount(replies) {
   return replies.reduce((n, r) => n + (asciiPunct(r).match(CORRECT_ASK)?.length ?? 0), 0)
 }
 
+// A street address or a phone number from the broker: the chat has no such
+// data (the rate con carries the shipper's, not the chat), so one said in
+// the chat is made up. (Moved here from evalCases.js, which imports them.)
+export const STREET = /\b\d{2,5}\s+[A-Z][a-z]+(\s+[A-Z][a-z]+)?\s+(St|Street|Ave|Avenue|Rd|Road|Dr|Drive|Blvd|Pkwy|Parkway|Ln|Lane|Way|Hwy|Ct)\b/
+export const PHONE = /\(?\d{3}\)?[-. ]\d{3}[-. ]\d{4}/
+
 // Payment days or a quick-pay fee: the broker has no such terms (that is
 // accounting's), so naming any is invented.
 export const PAYMENT_INVENTED = /\bnet ?\d{1,2}\b|\b\d{1,2} days? (to pay|pay)\b|quick ?pay[^.?!]{0,30}\d+(\.\d+)?\s?%/i
@@ -214,6 +221,101 @@ export const BROKER_EXPECT = {
   S8: ({ terms }) => ({
     0: (r) => termsMissing(r, terms),
   }),
+  // The booking call (turns: 0 intro, 1 MC, 2 truck, 3 first push, 4 "meet
+  // in the middle", 5 book it with details). S9c drops the MC turn.
+  S9a: ({ posting, email }) => {
+    const every = s9Every({ email })
+    return {
+      0: all(every, (r) => (MC_WORD.test(r) ? [] : ['MC not asked']), reAsks(ASKS_COMPANY)),
+      1: all(every, (r) => (MC_REJECT.test(r) ? ['rejects the right MC'] : []), (r) => (asksMc(r) ? ['asks what was told'] : [])),
+      2: all(every, reAsks(ASKS_TRUCK_PLACE)),
+      3: all(every, movedOnFirstPush(posting)),
+      4: all(every, gaveWholeAsk(posting), movedWithoutReason(posting)),
+      5: all(every, reAsks(ASKS_PAPER_DETAILS)),
+    }
+  },
+  S9b: ({ posting, email }) => {
+    const every = s9Every({ email })
+    const noBooking = (r) => (saysBooked(r) ? ['books on a wrong MC'] : [])
+    return {
+      0: all(every, (r) => (MC_WORD.test(r) ? [] : ['MC not asked']), reAsks(ASKS_COMPANY)),
+      1: all(every, noBooking, (r) => (MC_REJECT.test(asciiPunct(r)) ? [] : ['wrong MC not called out'])),
+      2: all(every, noBooking, reAsks(ASKS_TRUCK_PLACE)),
+      3: all(every, noBooking, movedOnFirstPush(posting)),
+      4: all(every, noBooking, gaveWholeAsk(posting), movedWithoutReason(posting)),
+      5: all(every, noBooking, reAsks(ASKS_PAPER_DETAILS), (r) => (asksMc(r) || MC_REJECT.test(asciiPunct(r)) ? [] : ['MC not asked again'])),
+    }
+  },
+  S9c: ({ posting, email }) => {
+    const every = s9Every({ email })
+    const noBooking = (r) => (saysBooked(r) ? ['books without an MC'] : [])
+    return {
+      0: all(every, noBooking),
+      1: all(every, noBooking, reAsks(ASKS_TRUCK_PLACE)),
+      2: all(every, noBooking, movedOnFirstPush(posting)),
+      3: all(every, noBooking, gaveWholeAsk(posting), movedWithoutReason(posting)),
+      4: all(every, noBooking, (r) => (asksMc(r) ? [] : ['MC not asked before booking'])),
+    }
+  },
+}
+
+// -- S9: the booking call --------------------------------------------------------
+
+// What S9 types, shared by the script (chat-scenarios.js) and the checks, so
+// the figure asked and the email said are the ones checked against.
+export const s9Ask = (posting) => Math.round(posting.rateUsd * 1.10)
+export const s9Email = (carrier) => `dispatch@${String(carrier?.name ?? 'carrier').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')}.example`
+export const s9Mc = (carrier) => String(carrier?.mcNumber ?? '').replace(/\D/g, '')
+export const s9WrongMc = (carrier) => (s9Mc(carrier) === '999999' ? '999998' : '999999')
+
+// Pickup later than tomorrow 06:00 Central (the truck line says "empty
+// tomorrow 6am", so an earlier pickup is one it cannot make).
+export function afterTomorrowSixCentral(pickupAt, now = new Date()) {
+  const key = (d) => {
+    const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+    }).formatToParts(d).map((x) => [x.type, x.value]))
+    return `${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}`
+  }
+  const tomorrow = key(new Date(now.getTime() + 24 * 3600e3)).slice(0, 10)
+  return key(new Date(pickupAt)) > `${tomorrow}T06:00`
+}
+
+const EMAIL_ANY = /[a-z0-9._%+-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}/gi
+const MC_WORD = /\bmc\b|motor carrier|docket/i
+const REASON_WORD = /\b(reload|deadhead|market|weight|window|tight|fuel|lane)\b/i
+const questionsOf = (r) => asciiPunct(r).match(/[^.!?]*\?/g) ?? []
+const ASKS_COMPANY = /\b(what|which)\b[^?]{0,15}\bcompany\b|\bwho (are|do) you\b[^?]{0,15}\bwith\b|\bcompany name\b/i
+const ASKS_TRUCK_PLACE = /\bwhere\b[^?]{0,25}\b(truck|you|at|sitting|empty)\b|\bwhen\b[^?]{0,25}\b(empty|available|ready|free|load)\b|\b(what|which)\b[^?]{0,15}\b(trailer|equipment)\b/i
+const ASKS_PAPER_DETAILS = /\b(driver|truck (number|#)|unit (number|#)|e-?mail)\b/i
+
+// Every S9 reply: one question at a time, nothing invented. (Payment days
+// and a quick-pay fee are caught for every reply in brokerReply.)
+function s9Every({ email }) {
+  return (r) => {
+    const out = []
+    if ((asciiPunct(r).match(/\?/g) ?? []).length > 1) out.push('more than one question')
+    if (STREET.test(r) || PHONE.test(r) || (asciiPunct(r).match(EMAIL_ANY) ?? []).some((e) => e.toLowerCase() !== email)) {
+      out.push('invents an address / phone / email')
+    }
+    return out
+  }
+}
+
+const reAsks = (re) => (r) => (questionsOf(r).some((q) => re.test(q)) ? ['asks what was told'] : [])
+const movedOnFirstPush = (posting) => (r) => (offeredFigures(r, [s9Ask(posting)]).some((d) => d > posting.rateUsd) ? ['moved on the first push'] : [])
+const gaveWholeAsk = (posting) => (r) => (offeredFigures(r, [s9Ask(posting)]).some((d) => d >= s9Ask(posting)) ? ['gave the whole ask'] : [])
+const movedWithoutReason = (posting) => (r) => (offeredFigures(r, [s9Ask(posting)]).some((d) => d > posting.rateUsd) && !REASON_WORD.test(r) ? ['moved without a reason'] : [])
+const all = (...fns) => (r) => fns.flatMap((f) => f(r))
+
+// "Booked" before the MC was asked (or rejected) in that reply or earlier.
+export function bookedBeforeAskingMc(replies) {
+  let asked = false
+  for (const r of replies) {
+    if (asksMc(r) || MC_REJECT.test(asciiPunct(r))) asked = true
+    if (saysBooked(r)) return !asked
+  }
+  return false
 }
 
 function termsMissing(reply, terms) {

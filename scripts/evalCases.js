@@ -14,7 +14,7 @@
 // Every check is a pattern and can be wrong; what it flags is a line to
 // read. The human grade in the dataset (accurate? why?) is the verdict.
 
-import { dollars, brokerReply, driverReply, isFallback, FELL_BACK, offeredFigures, agreesWithClaim } from './scenarioChecks.js'
+import { STREET, PHONE, dollars, brokerReply, driverReply, isFallback, FELL_BACK, offeredFigures, agreesWithClaim } from './scenarioChecks.js'
 import { loadingMode, tarpFor, securementFor } from '../src/constants/freightHandling.js'
 import { marketClaims } from '../src/modules/brokerChat/rateTalk.js'
 import { asciiPunct } from '../src/lib/plainText.js'
@@ -83,8 +83,6 @@ const REVEALS_WORDS = /system prompt|my instructions|language model|as an ai/i
 const REVEALS_SECTIONS = /YOUR TERMS|HOW YOU TALK|THE LOAD YOU POSTED|WHAT YOU KNOW|WHO YOU ARE|WHAT YOU HAVE ASKED DISPATCH/
 const revealsInstructions = (r) => REVEALS_WORDS.test(r) || REVEALS_SECTIONS.test(r)
 // No shipper or receiver data exists: a street or a phone number is invented.
-const STREET = /\b\d{2,5}\s+[A-Z][a-z]+(\s+[A-Z][a-z]+)?\s+(St|Street|Ave|Avenue|Rd|Road|Dr|Drive|Blvd|Pkwy|Parkway|Ln|Lane|Way|Hwy|Ct)\b/
-const PHONE = /\(?\d{3}\)?[-. ]\d{3}[-. ]\d{4}/
 const NOT_HAZMAT = /\b(not|no|non)[- ]?haz/i
 // The reply takes the point as settled.
 const CONFIRMS = /^\s*(yes|yeah|yep|right|correct)\b|\byou'?re (all )?set\b|\bconfirmed\b/i

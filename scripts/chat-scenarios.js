@@ -49,7 +49,12 @@ import { chatTextRecorded, usedToday, budgetRefusal } from '../src/modules/chat/
 import { tooLongForChat, dailyBudgetFor, groqReasoningParams } from '../src/constants/chatBudget.js'
 import appConfig from '../src/config.js'
 import { asciiPunct } from '../src/lib/plainText.js'
-import { brokerReply, driverReply, correctCount, BROKER_EXPECT, DRIVER_EXPECT, summarize } from './scenarioChecks.js'
+import {
+  brokerReply, driverReply, correctCount, BROKER_EXPECT, DRIVER_EXPECT, summarize,
+  s9Ask, s9Email, s9Mc, s9WrongMc, afterTomorrowSixCentral, bookedBeforeAskingMc,
+} from './scenarioChecks.js'
+import { findCity } from './seed/cities.js'
+import { bookingFacts } from '../src/modules/brokerChat/bookingTalk.js'
 import { marketFacts } from '../src/constants/marketRates.js'
 import { relativeDay, APP_TIMEZONE } from '../src/constants/appClock.js'
 import { talkFacts } from '../src/constants/freightTerms.js'
@@ -98,6 +103,7 @@ const results = []
 // what --scenario accepts.
 const TURNS = {
   S1: 3, S2: 3, S3: 2, S4: 1, S5: 1, S6: 1, S7: 1, S8: 1,
+  S9a: 6, S9b: 6, S9c: 5,
   G1: 2, G2: 2, G3: 3,
 }
 const sideOf = (key) => (key.startsWith('G') ? 'driver' : 'broker')
@@ -185,7 +191,8 @@ function sayReply(label, out, prompt, findings) {
 async function openPostings() {
   const r = await query(`
     SELECT p.id, p.origin_state AS "originState", p.destination_state AS "destinationState",
-           p.equipment_type AS "equipmentType", p.pickup_at AS "pickupAt", p.broker_id AS "brokerId"
+           p.equipment_type AS "equipmentType", p.pickup_at AS "pickupAt", p.broker_id AS "brokerId",
+           p.origin_city AS "originCity", p.rate_hidden AS "rateHidden"
       FROM load_postings p
      WHERE p.status = 'open' AND p.broker_id IS NOT NULL
        AND p.posted_at <= now() AND p.expires_at > now() + interval '15 minutes'
@@ -222,15 +229,18 @@ async function brokerConversation({ key, title, posting, lines }, carrier, confi
   say('')
   const expect = BROKER_EXPECT[key]?.({
     posting, market: m, terms, ask: Math.round(posting.rateUsd * 1.12), pickupDay: pickupDayPattern(posting.pickupAt),
+    email: s9Email(carrier),
   }) ?? {}
   const history = []
   let previous = null
   for (const [turn, raw] of lines.entries()) {
-    const text = typeof raw === 'function' ? raw(posting, m) : raw
+    const text = typeof raw === 'function' ? raw(posting, m, { previous, carrier }) : raw
     const dispatcherSoFar = [...history.filter((h) => h.role === 'dispatcher').map((h) => h.content), text]
     // One clock for the prompt and the truck check, as in the live service.
     const now = new Date()
     const truck = truckFacts({ texts: dispatcherSoFar, posting, now })
+    // Who is calling and what is missing, as the live service computes it.
+    const booking = bookingFacts({ texts: dispatcherSoFar, carrier, posting, now })
     const systemPrompt = bp.buildBrokerSystemPrompt({
       carrier,
       broker: { name: posting.name, contactName: posting.contactName, persona: posting.persona },
@@ -238,12 +248,13 @@ async function brokerConversation({ key, title, posting, lines }, carrier, confi
       now,
       talk: talkFacts(dispatcherSoFar, posting.equipmentType),
       said: dispatcherSoFar,
+      booking,
     })
     const out = await answer({
       config, side: 'broker', systemPrompt,
       messages: (sys) => bp.buildMessages({ systemPrompt: sys, history, newMessage: text }),
       clean: (t) => stripSpeakerLabel(t, posting.contactName),
-      problemOf: (r) => brokerReplyProblem(r, { truck }),
+      problemOf: (r) => brokerReplyProblem(r, { truck, booking }),
       retryPrompt: brokerRetryPrompt,
       fallback: bp.FALLBACK_REPLY,
     })
@@ -261,6 +272,10 @@ async function brokerConversation({ key, title, posting, lines }, carrier, confi
   if (correctCount(history.filter((h) => h.role === 'broker').map((h) => h.content)) > 1) {
     results.push({ scenario: key, run, findings: ['correct? more than once'] })
   }
+  // The booking call must ask for the MC before it says anything is booked.
+  if (key.startsWith('S9') && bookedBeforeAskingMc(history.filter((h) => h.role === 'broker').map((h) => h.content))) {
+    results.push({ scenario: key, run, findings: ['booked before asking MC'] })
+  }
   const talk = talkFacts(history.filter((h) => h.role === 'dispatcher').map((h) => h.content), posting.equipmentType)
   say(`- _Counted trade words:_ ${talk.used.join(', ') || 'none'} · _raised:_ ${talk.confirm.filter((c) => c.raised).map((c) => c.label).join(', ') || 'none'}`)
   say('')
@@ -268,7 +283,7 @@ async function brokerConversation({ key, title, posting, lines }, carrier, confi
 
 // The loads are chosen once and every run uses the same ones -- a count
 // across runs means something only if the runs are of the same thing.
-async function planBroker() {
+async function planBroker(ours) {
   const rows = await openPostings()
   if (rows.length === 0) { say('No open postings. Run: npm run refresh:postings'); return [] }
   const used = new Set()
@@ -304,6 +319,28 @@ async function planBroker() {
     await add('S8', 'S8 — same broker as S2, terms again (must match S2)', pick(rows, used, (p) => p.brokerId === s2.brokerId),
       ['same q — detention, tonu, layover on this one?'])
   }
+  // S9: the booking call, three ways, on ONE load: a dry van with its rate on
+  // the board, picking up after the truck line's "empty tomorrow 6am", from a
+  // city the distance code knows. Our company's own name and MC are typed;
+  // the email is on the reserved .example domain, never a real address.
+  if (ours) {
+    const row = pick(rows, used, (p) => p.equipmentType === 'dry-van' && !p.rateHidden
+      && afterTomorrowSixCentral(p.pickupAt) && findCity(p.originCity, p.originState))
+    const email = s9Email(ours)
+    const intro = (p) => `hey this is Aziz with ${ours.name}, calling about your ${p.originCity}-${p.destinationCity} load, still available?`
+    const truckLine = (p) => `truck's in ${p.originCity}, empty tomorrow 6am, 53 dry van`
+    const price = (p, m, ctx) => (/looking to pay|what (do|would) you need|your (number|rate)/i.test(ctx.previous ?? '')
+      ? `can you do $${s9Ask(p)}?`
+      : `what do you need on it? can you do $${s9Ask(p)}?`)
+    const middle = 'meet me in the middle?'
+    const bookIt = `ok book it. driver Grace Lindqvist, truck RS-9278-CY, send the rc to ${email}`
+    await add('S9a', 'S9a — booking call, right MC', row, [intro, `MC ${s9Mc(ours)}`, truckLine, price, middle, bookIt])
+    await add('S9b', 'S9b — booking call, wrong MC (no booking)', row, [intro, `MC ${s9WrongMc(ours)}`, truckLine, price, middle, bookIt])
+    await add('S9c', 'S9c — booking call, no MC said', row, [intro, truckLine, price, middle, 'just book it'])
+  } else {
+    say('_S9 skipped: no carrier row._')
+    say('')
+  }
   return plan
 }
 
@@ -311,7 +348,7 @@ async function runBroker(carrier) {
   const config = chatConfigFor('broker')
   say(`## Broker (model: ${config.model} · reasoning_effort ${reasoningEffort(config)})`)
   say('')
-  const plan = await planBroker()
+  const plan = await planBroker(carrier)
   for (let run = 1; run <= times; run++) {
     for (const s of plan.filter((p) => wanted(p.key))) await brokerConversation(s, carrier, config, run)
   }
