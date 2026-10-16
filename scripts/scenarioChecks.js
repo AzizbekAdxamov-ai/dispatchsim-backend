@@ -133,6 +133,28 @@ export function offeredFigures(reply, theirs = []) {
   return out
 }
 
+// "Correct?" is for reading back what the carrier just pinned down ("So
+// your truck is in Dallas, empty at 6. Correct?"). Tacked on after a rate
+// or a statement with nothing of theirs in it, it is a tic (S4, 2026-10-16:
+// "The posted rate is $5,002, all-in. Correct?").
+export const CORRECT_ASK = /\bcorrect\?/gi
+
+export function correctWithoutReadBack(reply) {
+  const r = asciiPunct(reply)
+  for (const m of r.matchAll(CORRECT_ASK)) {
+    // The sentence the word closes (or, when it starts its own, the one before).
+    const before = r.slice(0, m.index).trim().replace(/[.!?,;:\s-]+$/, '')
+    const sentence = before.slice(Math.max(before.lastIndexOf('.'), before.lastIndexOf('!'), before.lastIndexOf('?')) + 1)
+    if (/\$/.test(sentence) || !/\b(you|your|you're|you'll|truck|driver)\b/i.test(sentence)) return true
+  }
+  return false
+}
+
+// How many times the broker said "correct?" over a whole chat.
+export function correctCount(replies) {
+  return replies.reduce((n, r) => n + (asciiPunct(r).match(CORRECT_ASK)?.length ?? 0), 0)
+}
+
 export function brokerReply(rawReply, rawPrevious) {
   const reply = asciiPunct(rawReply)
   const previousReply = rawPrevious ? asciiPunct(rawPrevious) : rawPrevious
@@ -140,6 +162,7 @@ export function brokerReply(rawReply, rawPrevious) {
   if (CEILING.test(reply)) out.push('names a ceiling or room')
   if (SENDS_BACK.test(reply)) out.push('sends the dispatcher back to check')
   if (lumperPayerWrong(reply)) out.push('lumper payer wrong')
+  if (correctWithoutReadBack(reply)) out.push('correct? without a read-back')
   return out
 }
 

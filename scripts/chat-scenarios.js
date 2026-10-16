@@ -49,7 +49,7 @@ import { chatTextRecorded, usedToday, budgetRefusal } from '../src/modules/chat/
 import { tooLongForChat, dailyBudgetFor, groqReasoningParams } from '../src/constants/chatBudget.js'
 import appConfig from '../src/config.js'
 import { asciiPunct } from '../src/lib/plainText.js'
-import { brokerReply, driverReply, BROKER_EXPECT, DRIVER_EXPECT, summarize } from './scenarioChecks.js'
+import { brokerReply, driverReply, correctCount, BROKER_EXPECT, DRIVER_EXPECT, summarize } from './scenarioChecks.js'
 import { marketFacts } from '../src/constants/marketRates.js'
 import { relativeDay, APP_TIMEZONE } from '../src/constants/appClock.js'
 import { talkFacts } from '../src/constants/freightTerms.js'
@@ -256,6 +256,10 @@ async function brokerConversation({ key, title, posting, lines }, carrier, confi
     sayReply('B', out, bp, findings)
     history.push({ role: 'dispatcher', content: text }, { role: 'broker', content: reply })
     previous = reply
+  }
+  // Marcus's read-back is once per chat at most (062): more is the tic again.
+  if (correctCount(history.filter((h) => h.role === 'broker').map((h) => h.content)) > 1) {
+    results.push({ scenario: key, run, findings: ['correct? more than once'] })
   }
   const talk = talkFacts(history.filter((h) => h.role === 'dispatcher').map((h) => h.content), posting.equipmentType)
   say(`- _Counted trade words:_ ${talk.used.join(', ') || 'none'} · _raised:_ ${talk.confirm.filter((c) => c.raised).map((c) => c.label).join(', ') || 'none'}`)

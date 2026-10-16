@@ -15,7 +15,7 @@ import { FALLBACK_REPLY as DRIVER_FALLBACK } from '../src/modules/driverChat/dri
 import { FALLBACK_REPLY as BROKER_FALLBACK } from '../src/modules/brokerChat/brokerChat.prompt.js'
 import {
   PROMISE, anyReply, brokerReply, driverReply, repeatsQuestion, dollars, summarize, BROKER_EXPECT, DRIVER_EXPECT,
-  agreesWithClaim,
+  agreesWithClaim, correctCount,
 } from '../scripts/scenarioChecks.js'
 
 // Kills: a promise pattern that misses "let me look at the paperwork"
@@ -197,4 +197,18 @@ test('S3: an echo that turns into a yes is flagged on both turns', () => {
     assert.deepEqual(s3[0](r), ['moved on the first push'], r)
     assert.deepEqual(s3[1](r), ['gave the whole ask'], r)
   }
+})
+
+// Kills: a "correct?" after a rate (S4, 2026-10-16) passing as a read-back,
+// or one that really reads the carrier's plan back being flagged.
+test('"correct?" is flagged after a rate, not after a read-back of their truck', () => {
+  assert.deepEqual(brokerReply('The posted rate is $5,002, all-in -- linehaul and fuel included. Correct?', null), ['correct? without a read-back'])
+  assert.deepEqual(brokerReply('So your truck is in Dallas, empty at 6. Correct?', null), [])
+  assert.deepEqual(brokerReply('The rate is firm. Correct?', null), ['correct? without a read-back'])
+})
+
+// Kills: the whole-chat count missing a second "correct?" (more than once).
+test('correctCount counts every "correct?" in the chat', () => {
+  assert.equal(correctCount(['So your truck is in Dallas. Correct?', 'Fine.', 'Your driver is Sam, correct?']), 2)
+  assert.equal(correctCount(['Fine.']), 0)
 })

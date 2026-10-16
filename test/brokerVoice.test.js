@@ -174,3 +174,33 @@ test('061 limits Marcus\'s "correct?" to one read-back, never after a question',
   const others = PERSONAS_052.filter((p) => p.name !== 'Cedar Ridge Transport Services').map((p) => p.persona)
   assert.ok(!others.includes(next))
 })
+
+// Kills: 062 whose FROM text drifts from 061's TO text or 052's original (replace()
+// silently changes nothing and "correct?" survives), either path (061 applied,
+// or 061 never applied) leaving the word, a wrong broker, a guard that
+// re-matches after the fix (not re-runnable), and a fact or forbidden word
+// slipping into the new text.
+test('062 takes "correct?" out of Marcus on both paths and is re-runnable', () => {
+  const sql = migration('062_marcus_no_correct.sql').replace(/\r\n/g, '\n')
+  const swaps = [...sql.matchAll(/replace\(persona, '((?:[^']|'')+)', '((?:[^']|'')+)'\)/g)]
+    .map((m) => ({ from: m[1].replaceAll("''", "'"), to: m[2].replaceAll("''", "'") }))
+  assert.equal(swaps.length, 2)
+  assert.equal([...sql.matchAll(/WHERE name = 'Cedar Ridge Transport Services' AND persona LIKE '%correct\?%'/g)].length, 2)
+  const run = (persona) => swaps.reduce((p, s) => (p.includes('correct?') ? p.replace(s.from, s.to) : p), persona)
+
+  const s061 = migration('061_marcus_correct_once.sql').replace(/\r\n/g, '\n')
+  const m061 = /replace\(persona, '((?:[^']|'')+)', '((?:[^']|'')+)'\)/.exec(s061)
+  const marcus052 = PERSONAS_052.find((p) => p.name === 'Cedar Ridge Transport Services').persona.replace(/\r\n/g, '\n')
+  const after061 = marcus052.replace(m061[1].replaceAll("''", "'"), m061[2].replaceAll("''", "'"))
+
+  for (const start of [after061, marcus052]) {
+    assert.ok(/correct\?/.test(start))
+    const next = run(start)
+    assert.doesNotMatch(next, /correct/i)
+    assert.match(next, /read it back once/)
+    assert.equal(run(next), next, 'running 062 twice changes nothing')
+    assert.doesNotMatch(next, /paperwork|insurance|W-9|MC number|authority/i)
+    assert.doesNotMatch(next, /\$\d|\d+ ?(mi|miles|days|%)\b|\d+-?foot|dry van|reefer|flatbed/i)
+  }
+  assert.equal(run(after061), run(marcus052))
+})
