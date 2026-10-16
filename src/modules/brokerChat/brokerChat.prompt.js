@@ -16,6 +16,7 @@ import { brokerTerms, termsLines } from '../../constants/accessorials.js'
 import { loadingMode, tarpFor, securementFor, isOpenDeck } from '../../constants/freightHandling.js'
 import { marketClaims, ratePushes } from './rateTalk.js'
 import { truckFacts } from './truckTalk.js'
+import { bookingFacts, SOON_PICKUP_HOURS } from './bookingTalk.js'
 import { DRIVING_LIMIT_HOURS, REQUIRED_REST_HOURS } from '../../constants/hosClock.js'
 import { marketFacts, seasonNote, benchmarkAgeDays, STALE_AFTER_DAYS } from '../../constants/marketRates.js'
 
@@ -72,7 +73,9 @@ function spanText(ms) {
 //
 // Pure and exported for the tests. A missing timestamp leaves its line
 // out rather than guessing.
-export const SOON_PICKUP_HOURS = 12
+// Defined in bookingTalk.js (which the caller block reads too); re-exported
+// here because the tests and the prompt have always imported it from here.
+export { SOON_PICKUP_HOURS }
 export const STALE_POSTING_HOURS = 24
 export const FRESH_POSTING_HOURS = 2
 

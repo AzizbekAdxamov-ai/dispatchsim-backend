@@ -64,6 +64,14 @@ const EQUIPMENT_PATTERNS = [
   { key: 'flatbed', re: /\b(?:flatbed|flat(?!\s+rate)|fb)\b/i },
 ]
 
+// The trailer a message names, as an equipment key, or null. Step-deck is
+// looked for first ("step deck" must not read as a plain flatbed);
+// marketClaims keeps the three it has a DAT figure for.
+const STEP_DECK = { key: 'step-deck', re: /\bstep[- ]?deck\b/i }
+export function equipmentIn(text) {
+  return [STEP_DECK, ...EQUIPMENT_PATTERNS].find((e) => e.re.test(String(text ?? '')))?.key ?? null
+}
+
 // A per-mile figure: two digits at most, a decimal point, one or two
 // decimals. "$4278" has no point, so it is a total and never matches.
 // Kept to 0.50-9.99 so a stray "10.5" or "0.25" is not read as a rate.
