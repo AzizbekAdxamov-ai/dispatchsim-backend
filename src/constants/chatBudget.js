@@ -170,12 +170,20 @@ export function chatReasoningCap(baseUrl) {
   return Math.max(0, chatMaxTokens() - CHAT_REPLY_TOKENS)
 }
 
+// How hard a gpt-oss model thinks (CHAT_GROQ_REASONING_EFFORT, checked at
+// start-up in src/config.js). Low unless the .env says medium or high.
+export function groqReasoningEffort() {
+  const raw = String(process.env.CHAT_GROQ_REASONING_EFFORT ?? '').trim().toLowerCase()
+  return raw === 'medium' || raw === 'high' ? raw : 'low'
+}
+
 // Groq's way to keep thinking out of the reply and short
 // (https://console.groq.com/docs/reasoning, checked 2026-10-13). It differs
 // by model family, and a wrong field is a 400, so each family gets its own:
 //   qwen     reasoning_format 'parsed' moves thinking out of content;
 //            reasoning_effort 'none' turns it off, 'low' keeps it brief.
-//   gpt-oss  reasoning_effort low/medium/high only; it rejects both
+//   gpt-oss  reasoning_effort low/medium/high only (low unless
+//            CHAT_GROQ_REASONING_EFFORT says otherwise); it rejects both
 //            reasoning_format and 'none'.
 // Anything else on Groq (llama and the like) does not reason: send nothing.
 export function groqReasoningParams(baseUrl, model) {
@@ -184,7 +192,7 @@ export function groqReasoningParams(baseUrl, model) {
   if (/qwen/i.test(name)) {
     return { reasoning_format: 'parsed', reasoning_effort: chatReasoningMode() === 'off' ? 'none' : 'low' }
   }
-  if (/gpt-oss/i.test(name)) return { reasoning_effort: 'low' }
+  if (/gpt-oss/i.test(name)) return { reasoning_effort: groqReasoningEffort() }
   return {}
 }
 

@@ -664,6 +664,30 @@ test('gpt-oss on Groq gets effort low and never reasoning_format or none', async
   }
 })
 
+async function withEffort(value, fn) {
+  const before = process.env.CHAT_GROQ_REASONING_EFFORT
+  process.env.CHAT_GROQ_REASONING_EFFORT = value ?? ''
+  try { return await fn() } finally {
+    if (before == null) delete process.env.CHAT_GROQ_REASONING_EFFORT
+    else process.env.CHAT_GROQ_REASONING_EFFORT = before
+  }
+}
+
+// Kills: CHAT_GROQ_REASONING_EFFORT ignored (medium/high never reach Groq), or
+// a typo/blank value sent as-is (a 400) instead of falling back to low.
+test('gpt-oss on Groq passes medium and high through; blank or invalid is low', async () => {
+  for (const [env, want] of [['medium', 'medium'], ['HIGH ', 'high'], ['low', 'low'], ['', 'low'], [null, 'low'], ['extreme', 'low']]) {
+    const got = await withEffort(env, () => groqReasoningParams(GROQ, 'openai/gpt-oss-20b'))
+    assert.deepEqual(got, { reasoning_effort: want })
+  }
+})
+
+// Kills: the effort setting leaking into qwen, which takes only none/low.
+test('qwen on Groq ignores CHAT_GROQ_REASONING_EFFORT', async () => {
+  const got = await withEffort('high', () => withReasoning(null, () => groqReasoningParams(GROQ, 'qwen/qwen3-32b')))
+  assert.deepEqual(got, { reasoning_format: 'parsed', reasoning_effort: 'low' })
+})
+
 // Kills: reasoning fields sent to a model that does not take them (a 400),
 // or Groq-style fields sent to OpenRouter.
 test('no Groq reasoning params for llama on Groq or qwen on OpenRouter', async () => {

@@ -5,6 +5,7 @@
 //   npm run chat:scenarios                       # both, ~20 model requests
 //   npm run chat:scenarios -- broker             # broker only (~13)
 //   npm run chat:scenarios -- driver             # Grace only (~7)
+//   npm run chat:scenarios -- --scenario S2,G1   # only those scenarios
 //   npm run chat:scenarios -- broker --times 3   # every scenario 3 times (~39)
 //   npm run chat:scenarios -- broker --gap 20    # wait 20 s between requests (per-minute token limit)
 //
@@ -39,9 +40,9 @@ import { pool, query } from '../src/db/pool.js'
 import { chatConfigFor } from '../src/modules/chat/chatProvider.js'
 import { chatText } from './seed/aiClient.js'
 import { sleep } from './seed/config.js'
-import { parseGap, makePacer } from './evalAttempts.js'
+import { parseGap, parseIdList, makePacer } from './evalAttempts.js'
 import { chatTextRecorded, usedToday, budgetRefusal } from '../src/modules/chat/scriptRequests.js'
-import { tooLongForChat, dailyBudgetFor } from '../src/constants/chatBudget.js'
+import { tooLongForChat, dailyBudgetFor, groqReasoningParams } from '../src/constants/chatBudget.js'
 import appConfig from '../src/config.js'
 import { asciiPunct } from '../src/lib/plainText.js'
 import { brokerReply, driverReply, BROKER_EXPECT, DRIVER_EXPECT, summarize } from './scenarioChecks.js'
@@ -58,7 +59,7 @@ import { getCarrier } from '../src/modules/carrier/carrier.repository.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const args = process.argv.slice(2)
-const only = args.find((a) => a === 'broker' || a === 'driver') ?? 'both'
+const sideArg = args.find((a) => a === 'broker' || a === 'driver') ?? 'both'
 const timesArg = args.find((a) => a.startsWith('--times'))
 const times = timesArg
   ? Number(timesArg.includes('=') ? timesArg.split('=')[1] : args[args.indexOf(timesArg) + 1])
@@ -82,8 +83,36 @@ let requests = 0
 let retries = 0
 const results = []
 
-// Turns per scenario set -- the dispatcher lines below, counted.
-const TURNS = { broker: 13, driver: 7 }
+// Turns per scenario -- the dispatcher lines below, counted. The keys are
+// what --scenario accepts.
+const TURNS = {
+  S1: 3, S2: 3, S3: 2, S4: 1, S5: 1, S6: 1, S7: 1, S8: 1,
+  G1: 2, G2: 2, G3: 3,
+}
+const sideOf = (key) => (key.startsWith('G') ? 'driver' : 'broker')
+
+// --scenario S2,G1: only those. Every key must exist, and sit on the side
+// asked for (`broker` + G1 is a mistake worth naming).
+const scenarioList = parseIdList(args, '--scenario')
+if (scenarioList.error) {
+  console.error(scenarioList.error)
+  process.exit(1)
+}
+const chosen = scenarioList.ids ?? Object.keys(TURNS).filter((k) => sideArg === 'both' || sideOf(k) === sideArg)
+for (const key of chosen) {
+  if (!(key in TURNS)) {
+    console.error(`Unknown scenario: ${key}`)
+    process.exit(1)
+  }
+  if (sideArg !== 'both' && sideOf(key) !== sideArg) {
+    console.error(`Scenario ${key} is not a ${sideArg} scenario`)
+    process.exit(1)
+  }
+}
+// Which sides have anything to run.
+const only = !chosen.some((k) => sideOf(k) === 'broker') ? 'driver' : !chosen.some((k) => sideOf(k) === 'driver') ? 'broker' : 'both'
+const wanted = (key) => chosen.includes(key)
+const reasoningEffort = (config) => groqReasoningParams(config.baseUrl, config.model).reasoning_effort ?? 'n/a'
 
 function flags(text, prompt, findings = []) {
   const f = []
@@ -225,11 +254,11 @@ async function planBroker() {
 
 async function runBroker(carrier) {
   const config = chatConfigFor('broker')
-  say(`## Broker (model: ${config.model})`)
+  say(`## Broker (model: ${config.model} · reasoning_effort ${reasoningEffort(config)})`)
   say('')
   const plan = await planBroker()
   for (let run = 1; run <= times; run++) {
-    for (const s of plan) await brokerConversation(s, carrier, config, run)
+    for (const s of plan.filter((p) => wanted(p.key))) await brokerConversation(s, carrier, config, run)
   }
 }
 
@@ -261,7 +290,7 @@ async function driverConversation({ key, title, load, lines }, base, config, run
 
 async function runDriver(carrier) {
   const config = chatConfigFor('driver')
-  say(`## Grace (model: ${config.model})`)
+  say(`## Grace (model: ${config.model} · reasoning_effort ${reasoningEffort(config)})`)
   say('')
   const name = process.env.TELEGRAM_DRIVER_NAME || 'Grace Lindqvist'
   const id = (await query('SELECT id FROM drivers WHERE name = $1', [name])).rows[0]?.id
@@ -283,13 +312,13 @@ async function runDriver(carrier) {
     { key: 'G3', title: 'G3 — the New York load (once, not again)', load: nyc, lines: ['Grace ur on the NYC load', 'Grace whats ur fuel at', 'Grace got a dallas load next'] },
   ]
   for (let run = 1; run <= times; run++) {
-    for (const s of plan) await driverConversation(s, base, config, run)
+    for (const s of plan.filter((p) => wanted(p.key))) await driverConversation(s, base, config, run)
   }
 }
 
 // -- Run ----------------------------------------------------------------------
 
-const planned = times * ((only !== 'driver' ? TURNS.broker : 0) + (only !== 'broker' ? TURNS.driver : 0))
+const planned = times * chosen.reduce((sum, key) => sum + TURNS[key], 0)
 const budgets = [...new Set([only !== 'driver' && 'broker', only !== 'broker' && 'driver'].filter(Boolean))]
   .map((w) => dailyBudgetFor(chatConfigFor(w).baseUrl, appConfig.chatRequestsPerDay))
 const budget = Math.min(...budgets)

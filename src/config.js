@@ -85,6 +85,14 @@ if (rawReasoning !== '' && rawReasoning !== 'on' && rawReasoning !== 'off') {
   errors.push(`CHAT_REASONING must be 'on' or 'off' (or left blank, which means on) (got: ${process.env.CHAT_REASONING})`)
 }
 
+// CHAT_GROQ_REASONING_EFFORT: how hard a gpt-oss model on Groq thinks
+// (src/constants/chatBudget.js groqReasoningEffort). Blank means low. A typo
+// stops the app rather than quietly sending a value Groq answers with a 400.
+const rawEffort = (process.env.CHAT_GROQ_REASONING_EFFORT ?? '').trim().toLowerCase()
+if (rawEffort !== '' && !['low', 'medium', 'high'].includes(rawEffort)) {
+  errors.push(`CHAT_GROQ_REASONING_EFFORT must be 'low', 'medium' or 'high' (or left blank, which means low) (got: ${process.env.CHAT_GROQ_REASONING_EFFORT})`)
+}
+
 const rawFast = process.env.CHAT_FAST_REPLIES
 const fast = rawFast && rawFast.trim() !== '' ? rawFast.trim().toLowerCase() : 'off'
 if (fast !== 'on' && fast !== 'off') {

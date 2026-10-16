@@ -90,6 +90,22 @@ export function parseGap(args) {
   return { seconds }
 }
 
+// `--case EB04,ED07` or `--case=EB04,ED07` -> { ids: ['EB04', 'ED07'] };
+// no flag -> { ids: null } (everything). A missing value or an empty item
+// ("EB04,,ED07") is an error, never silently "all". `flag` is e.g. '--case'.
+export function parseIdList(args, flag) {
+  const eq = args.find((a) => a.startsWith(`${flag}=`))?.slice(flag.length + 1)
+  const position = args.indexOf(flag)
+  if (eq === undefined && position === -1) return { ids: null }
+  const raw = eq ?? args[position + 1]
+  if (raw === undefined || raw.trim() === '' || raw.startsWith('--')) {
+    return { error: `${flag} needs a value, e.g. ${flag} A,B` }
+  }
+  const ids = raw.split(',').map((s) => s.trim())
+  if (ids.some((s) => s === '')) return { error: `${flag} has an empty item: ${raw}` }
+  return { ids }
+}
+
 // The pause before a case: none before the first, `gapSec` seconds before
 // every later one. `sleep` is injected so a test does not wait.
 export function makePacer({ gapSec, sleep }) {
