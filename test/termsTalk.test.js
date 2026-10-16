@@ -51,3 +51,13 @@ test('the scenario check reports the lumper finding', () => {
   assert.ok(brokerReply('The shipper will cover any lumper fees with a receipt.', null).includes('lumper payer wrong'))
   assert.ok(!brokerReply('We cover any lumper cost with a receipt.', null).includes('lumper payer wrong'))
 })
+
+// Kills: a broker speaking in the first person singular ("I'll cover the
+// lumper") read as someone else paying, so correct replies were regenerated.
+test('"I" and "me" are the broker paying; repaying counts too', () => {
+  assert.equal(lumperPayerWrong("I'll cover the lumper, you handle the receipt."), false)
+  assert.equal(lumperPayerWrong('You will need to pay the lumper first, then I cover it.'), false)
+  assert.equal(lumperPayerWrong('You pay the lumper and I repay it against the receipt.'), false)
+  assert.equal(lumperPayerWrong('You cover the lumper and we pay you back.'), false)
+  assert.equal(lumperPayerWrong('The shipper will cover any lumper fees with a receipt.'), true)
+})

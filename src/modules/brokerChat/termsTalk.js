@@ -11,7 +11,7 @@
 import { asciiPunct } from '../../lib/plainText.js'
 
 const OTHER_PAYS = /\b(shipper|receiver|consignee|you|your driver|carrier)\b[^.!?]{0,30}\b(pay|pays|cover|covers|handles?|is on)\b|\b(paid|covered) by (the )?(shipper|receiver|consignee|you|carrier)\b/i
-const BROKER_PAYS = /\b(we|us|our|broker|reimburs\w*)\b/i
+const BROKER_PAYS = /\b(we|us|our|I|I'll|I'd|me|broker|reimburs\w*|repay\w*|pay you back)\b/i
 
 export function lumperPayerWrong(reply) {
   return asciiPunct(String(reply ?? ''))
