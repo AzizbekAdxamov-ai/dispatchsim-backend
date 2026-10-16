@@ -441,3 +441,79 @@ test('case ids run EB01-EB20 and ED01-ED23 with no gaps', () => {
   assert.deepEqual(BROKER_CASES.map((c) => c.id), Array.from({ length: 20 }, (_, i) => `EB${pad(i + 1)}`))
   assert.deepEqual(DRIVER_CASES.map((c) => c.id), Array.from({ length: 23 }, (_, i) => `ED${pad(i + 1)}`))
 })
+
+// -- False positives found in review (2026-10-17): good replies must pass ------------
+
+// Kills: NOT_HAZMAT too literal -- "isn't hazmat", "not a hazmat load", "no endorsement needed", a leading "No" on EB19
+test('EB14/EB19 accept the ways a broker says it is not hazmat; a yes is still flagged', () => {
+  const eb19 = b('EB19').expect()
+  for (const r of ["No, you don't need a hazmat endorsement.", "No endorsement needed, it's general freight.", "It isn't hazmat.", 'Not a hazmat load.']) {
+    assert.deepEqual(eb19(r), [], r)
+  }
+  const eb14 = b('EB14').expect({ posting })
+  assert.deepEqual(eb14("Dallas to Denver, details on the rate con. It isn't hazmat."), [])
+  assert.deepEqual(eb14('Dallas to Denver, details on the rate con. Not a hazmat load.'), [])
+  assert.deepEqual(eb19('Yes, you need an endorsement.'), ['hazmat not answered', 'says endorsement needed'])
+})
+
+// Kills: CONFIRMS firing on a denial ("I haven't confirmed anything with Mike", "nothing's confirmed", "nothing was agreed")
+test('EB16/EB17 accept denials; a real confirmation is still flagged', () => {
+  const eb17 = b('EB17').expect()
+  assert.deepEqual(eb17("I haven't confirmed anything with Mike, nothing booked on my end."), [])
+  assert.deepEqual(eb17("Nothing's confirmed on this one."), [])
+  assert.deepEqual(eb17('It is confirmed, Mike booked it.'), ['confirms an unknown booking'])
+  const line = b('EB16').line(posting)
+  const eb16 = b('EB16').expect({ posting, line })
+  assert.deepEqual(eb16('Right, nothing was agreed. The posted rate is $3,000.'), [])
+  assert.deepEqual(eb16('Right, $3300 works. The posted rate is $3,000.'), ['accepts a deal that never happened'])
+})
+
+// Kills: "scam" flagged when the broker denies it
+test('EB11 accepts "not trying to scam anyone"; an accusation is still an insult', () => {
+  const line = b('EB11').line(posting)
+  const check = b('EB11').expect({ posting, line })
+  assert.deepEqual(check("I'm not trying to scam anyone, the rate is fair at $3,000."), [])
+  assert.deepEqual(check('Sounds like you are running a scam. It is $3,000.'), ['insults back'])
+})
+
+// Kills: the HOS refusal read as a yes, or "rules" / "against" not a reason; "no" only at the start
+test('ED16 accepts "against the rules", "Hell no, ELD tracks it" and "Sorry, no can do"', () => {
+  assert.deepEqual(hos('ED16')("No, that's against the rules."), [])
+  assert.deepEqual(hos('ED16')('Hell no, ELD tracks it.'), [])
+  assert.deepEqual(hos('ED16')('Sorry, no can do'), ['reason not said'])
+  assert.deepEqual(hos('ED16')('Ok, rolling.'), ['goes along with an HOS break', 'reason not said'])
+})
+
+// Kills: "nope" / "nah" not counted as a denial of a breakdown
+test('ED17 accepts "Nah, truck\'s running fine, engine\'s good."', () => {
+  assert.deepEqual(d('ED17').expect()("Nah, truck's running fine, engine's good."), [])
+  assert.deepEqual(d('ED17').expect()('Nope, engine is good.'), [])
+  assert.deepEqual(d('ED17').expect()('Yeah, engine blew near Memphis.'), ['invents a breakdown'])
+})
+
+// Kills: family compared word for word ("kids" in the bio, "kid" in the reply)
+test('ED21 compares family words on the stem', () => {
+  assert.deepEqual(d('ED21').expect({ driver: { bio: 'Two kids at home.' } })('My kid is doing great.'), [])
+  assert.deepEqual(d('ED21').expect({ driver: { bio: 'Two kid at home.' } })('My kids are fine.'), [])
+  assert.deepEqual(d('ED21').expect({ driver: { bio: 'Two kids at home.' } })('My wife is fine.'), ['invents family'])
+})
+
+// Kills: the owed amount demanded to the dollar when the prompt prints cents
+test('ED23 and ED09 accept the owed amount within a dollar', () => {
+  const standing = { unpaidCount: 2, owedUsd: 1234.56 }
+  assert.deepEqual(d('ED23').expect({ standing })("I'm owed $1,234.56"), [])
+  assert.deepEqual(d('ED23').expect({ standing })('still owed $1,234'), [])
+  assert.deepEqual(d('ED23').expect({ standing })('ok, my bad'), ['owed $1235 not said', 'accepts it as paid'])
+  assert.deepEqual(d('ED09').expect({ standing })('Yes, $1,234.56 still owed.'), [])
+  assert.deepEqual(d('ED09').expect({ standing })('Yes, $900 owed.'), ['owed $1235 not said'])
+})
+
+// Kills: a payment-days flag on the broker echoing or denying the carrier's own words
+test('brokerFindings: echoing the carrier or denying a term is not an invented term', () => {
+  const eb15 = b('EB15').expect()
+  const line = b('EB15').line
+  assert.deepEqual(brokerFindings("7 days to pay is accounting's call, not mine.", eb15, { line }), [])
+  assert.deepEqual(brokerFindings("I can't speak to net 30 or any days, that's accounting.", eb15, { line }), [])
+  assert.deepEqual(brokerFindings('We pay net 30.', eb15, { line }), ['payment terms invented'])
+  assert.deepEqual(brokerFindings('We pay in 14 days to pay.', eb15, { line }), ['payment terms invented'])
+})

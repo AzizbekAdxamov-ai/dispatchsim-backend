@@ -261,7 +261,7 @@ async function brokerConversation({ key, title, posting, lines }, carrier, confi
     const reply = out.reply
     const findings = reply.startsWith('(FAILED')
       ? ['no reply']
-      : [...brokerReply(reply, previous), ...(expect[turn]?.(asciiPunct(reply)) ?? [])]
+      : [...brokerReply(reply, previous, text), ...(expect[turn]?.(asciiPunct(reply)) ?? [])]
     results.push({ scenario: key, run, findings })
     say(`- **D:** \`${text}\``)
     sayReply('B', out, bp, findings)

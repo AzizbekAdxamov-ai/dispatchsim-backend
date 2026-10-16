@@ -320,3 +320,25 @@ test('chat-scenarios knows S9a/S9b/S9c and their turn counts', () => {
   const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'scripts', 'chat-scenarios.js'), 'utf8')
   assert.match(src, /S9a: 6, S9b: 6, S9c: 5/)
 })
+
+// -- False positives found in review (2026-10-17) ----------------------------
+
+import { paymentInvented } from '../scripts/scenarioChecks.js'
+
+// Kills: "correct?" flagged when it reads back the pickup or asks "is that correct?"
+test('correct? after a pickup read-back or "Is that correct?" is not a tic', () => {
+  assert.deepEqual(brokerReply('Pickup is Dallas at 6, correct?', null), [])
+  assert.deepEqual(brokerReply('Is that correct?', null), [])
+  assert.deepEqual(brokerReply('The rate is firm. Correct?', null), ['correct? without a read-back'])
+})
+
+// Kills: payment terms flagged when echoing the carrier's own figure or denying a term
+test('paymentInvented: carrier\'s own words and denials pass; a new term is flagged', () => {
+  const said = 'can u pay in 7 days? net 30?'
+  assert.equal(paymentInvented("7 days to pay is accounting's call, not mine.", said), false)
+  assert.equal(paymentInvented("I can't speak to net 30 or any days, that's accounting.", said), false)
+  assert.equal(paymentInvented('7 days to pay is fine.', said), false)
+  assert.equal(paymentInvented('We pay net 15.', said), true)
+  assert.equal(paymentInvented('We pay net 30.', null), true)
+  assert.deepEqual(brokerReply('We pay net 15.', null, 'when do you pay?'), ['payment terms invented'])
+})

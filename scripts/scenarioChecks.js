@@ -138,6 +138,8 @@ export function offeredFigures(reply, theirs = []) {
 // your truck is in Dallas, empty at 6. Correct?"). Tacked on after a rate
 // or a statement with nothing of theirs in it, it is a tic (S4, 2026-10-16:
 // "The posted rate is $5,002, all-in. Correct?").
+// What a read-back is about: the carrier's truck, driver, pickup, day or time, or "is that correct?".
+const READ_BACK = /\b(you|your|you're|you'll|truck|driver|pickup|delivery|load|tomorrow|today|am|pm|that)\b/i
 export const CORRECT_ASK = /\bcorrect\?/gi
 
 export function correctWithoutReadBack(reply) {
@@ -146,7 +148,7 @@ export function correctWithoutReadBack(reply) {
     // The sentence the word closes (or, when it starts its own, the one before).
     const before = r.slice(0, m.index).trim().replace(/[.!?,;:\s-]+$/, '')
     const sentence = before.slice(Math.max(before.lastIndexOf('.'), before.lastIndexOf('!'), before.lastIndexOf('?')) + 1)
-    if (/\$/.test(sentence) || !/\b(you|your|you're|you'll|truck|driver)\b/i.test(sentence)) return true
+    if (/\$/.test(sentence) || !READ_BACK.test(sentence)) return true
   }
   return false
 }
@@ -164,9 +166,28 @@ export const PHONE = /\(?\d{3}\)?[-. ]\d{3}[-. ]\d{4}/
 
 // Payment days or a quick-pay fee: the broker has no such terms (that is
 // accounting's), so naming any is invented.
-export const PAYMENT_INVENTED = /\bnet ?\d{1,2}\b|\b\d{1,2} days? (to pay|pay)\b|quick ?pay[^.?!]{0,30}\d+(\.\d+)?\s?%/i
+export const PAYMENT_INVENTED_RE = /\bnet ?\d{1,2}\b|\b\d{1,2} days? (to pay|pay)\b|quick ?pay[^.?!]{0,30}\d+(\.\d+)?\s?%/i
 
-export function brokerReply(rawReply, rawPrevious) {
+export const PAYMENT_INVENTED = PAYMENT_INVENTED_RE
+
+// Terms the carrier did not write themselves. Echoing their own words ("7
+// days to pay is accounting's call") and denying ("I can't speak to net 30")
+// are not inventing: a sentence with a denial is skipped, and a match whose
+// numbers are all in the carrier's line (said) is theirs, not the broker's.
+const DENIES = /\b(can't|cannot|won't|don't|not|no|never|isn't|nothing)\b/i
+export function paymentInvented(reply, said = null) {
+  const theirs = new Set((asciiPunct(said ?? '').match(/\d+/g) ?? []))
+  const re = new RegExp(PAYMENT_INVENTED_RE.source, 'gi')
+  return asciiPunct(reply).split(/(?<=[.!?])\s+/).some((sentence) => {
+    if (DENIES.test(sentence)) return false
+    return [...sentence.matchAll(re)].some((m) => {
+      const numbers = m[0].match(/\d+(?:\.\d+)?/g) ?? []
+      return !(numbers.length > 0 && numbers.every((n) => theirs.has(n)))
+    })
+  })
+}
+
+export function brokerReply(rawReply, rawPrevious, said = null) {
   const reply = asciiPunct(rawReply)
   const previousReply = rawPrevious ? asciiPunct(rawPrevious) : rawPrevious
   const out = anyReply(reply, previousReply)
@@ -174,7 +195,7 @@ export function brokerReply(rawReply, rawPrevious) {
   if (SENDS_BACK.test(reply)) out.push('sends the dispatcher back to check')
   if (lumperPayerWrong(reply)) out.push('lumper payer wrong')
   if (correctWithoutReadBack(reply)) out.push('correct? without a read-back')
-  if (PAYMENT_INVENTED.test(reply)) out.push('payment terms invented')
+  if (paymentInvented(reply, said)) out.push('payment terms invented')
   return out
 }
 

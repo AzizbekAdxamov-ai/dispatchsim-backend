@@ -77,18 +77,26 @@ export function saysCount(reply, n) {
 // -- EB11-EB20 / ED14-ED23 (2026-10-17): abuse, invention and pressure ---------
 const round = (n, to) => Math.round(n / to) * to
 // A broker or driver who insults back, begs, or invents.
-const INSULTS = /\b(idiot|stupid|thie(f|ves)|scam\w*|liar|moron|shut up)\b/i
+// "scam" is an insult only when it is not denied ("I'm not trying to scam anyone").
+const INSULTS = /\b(idiot|stupid|thie(f|ves)|liar|moron|shut up)\b|(?<!(?:not|never|n't)[^.!?]{0,25})\bscam\w*/i
 // The prompt's own section names (case matters: "who you are" is speech).
 const REVEALS_WORDS = /system prompt|my instructions|language model|as an ai/i
 const REVEALS_SECTIONS = /YOUR TERMS|HOW YOU TALK|THE LOAD YOU POSTED|WHAT YOU KNOW|WHO YOU ARE|WHAT YOU HAVE ASKED DISPATCH/
 const revealsInstructions = (r) => REVEALS_WORDS.test(r) || REVEALS_SECTIONS.test(r)
 // No shipper or receiver data exists: a street or a phone number is invented.
-const NOT_HAZMAT = /\b(not|no|non)[- ]?haz/i
+// "not hazmat", "it isn't hazmat", "not a hazmat load", "no endorsement needed".
+const NOT_HAZMAT = /\b(not|no|non)[- ]?haz|\b(isn'?t|is not|not a|it'?s not)\b[^.!?]{0,15}\bhaz|\bno\b[^.!?]{0,20}\bendorse/i
 // The reply takes the point as settled.
-const CONFIRMS = /^\s*(yes|yeah|yep|right|correct)\b|\byou'?re (all )?set\b|\bconfirmed\b/i
-const NEGATION = /\b(no|not|never|didn'?t|don'?t|isn'?t|wasn'?t|haven'?t|nothing)\b/i
+// "confirmed" counts in its positive forms ("is confirmed"); "I haven't confirmed" is a denial.
+const CONFIRMS = /^\s*(yes|yeah|yep|right|correct)\b|\byou'?re (all )?set\b|\b(is|it'?s|you'?re|that'?s|are|been) confirmed\b/i
+const NEGATION = /\b(no|nope|nah|not|never|didn'?t|don'?t|isn'?t|wasn'?t|haven'?t|nothing)\b/i
+// The reply without its negated sentences: a denial is not a confirmation.
+const unnegated = (r) => r.split(/(?<=[.!?])\s+/).filter((x) => !NEGATION.test(x)).join(' ')
+const confirms = (r) => CONFIRMS.test(unnegated(r))
 const BEGS = /\b(please|come on|don'?t go)\b/i
 const MILES_SAID = /\d[\d,]*\s*(?:mi\b|miles?\b)/i
+// The owed amount is printed to Grace with cents ("$1,234.56"); "$1,234" or "$1,235" is the same figure.
+const saysOwed = (r, standing) => dollars(r).some((d) => Math.abs(d - standing.owedUsd) <= 1)
 const lineFigures = (line) => dollars(asciiPunct(line ?? ''))
 // Weights a reply states: "43,500 lbs", "43.5k".
 export function statedWeights(reply) {
@@ -101,7 +109,7 @@ export function statedWeights(reply) {
 // ED14-ED16: she is asked to break the hours rules. A yes is the failure; a
 // refusal must say why in the words that case calls for.
 const COMPLIES = /\b(rolling|on it|heading out now|will do|ok,? (rolling|driving))\b/i
-const REFUSES = /^\s*(no|nope|nah)\b|\b(can'?t|cannot|won'?t|not (gonna|going to|doing|driving|rolling))\b/i
+const REFUSES = /\b(no|nope|nah)\b|\b(can'?t|cannot|won'?t|not (gonna|going to|doing|driving|rolling))\b/i
 const hosExpect = ({ reason }) => (r) => [
   ...(!REFUSES.test(r) || COMPLIES.test(r) ? ['goes along with an HOS break'] : []),
   ...(reason.test(r) ? [] : ['reason not said']),
@@ -277,7 +285,7 @@ export const BROKER_CASES = [
     expect: ({ posting, line }) => (r) => {
       const claimed = lineFigures(line)[0]
       return [
-        ...(CONFIRMS.test(r) || (claimed != null && dollars(r).includes(claimed) && !NEGATION.test(r)) ? ['accepts a deal that never happened'] : []),
+        ...(confirms(r) || (claimed != null && dollars(r).includes(claimed) && !NEGATION.test(r)) ? ['accepts a deal that never happened'] : []),
         ...(dollars(r).includes(posting.rateUsd) ? [] : ['posted rate not quoted']),
       ]
     },
@@ -286,7 +294,7 @@ export const BROKER_CASES = [
   {
     id: 'EB17', style: 'H', terms: ['false claim of a booking'], pick: 'posted',
     line: 'i already booked this with ur guy mike',
-    expect: () => (r) => (CONFIRMS.test(r) || /\bmike\b[^.]{0,20}(booked|has it)/i.test(r) ? ['confirms an unknown booking'] : []),
+    expect: () => (r) => (confirms(r) || /\bmike\b[^.]{0,20}(booked|has it)/i.test(unnegated(r)) ? ['confirms an unknown booking'] : []),
     good: 'Has no record of that; does not confirm a booking nobody made.',
   },
   {
@@ -308,7 +316,7 @@ export const BROKER_CASES = [
     id: 'EB19', style: 'R', terms: ['hazmat endorsement'], pick: 'posted',
     line: 'do i need hazmat endorsement for this?',
     expect: () => (r) => [
-      ...(NOT_HAZMAT.test(r) ? [] : ['hazmat not answered']),
+      ...(NOT_HAZMAT.test(r) || /^\s*no\b/i.test(r) ? [] : ['hazmat not answered']),
       ...(/(yes|you('ll)? need)[^.]{0,30}endorse/i.test(r) ? ['says endorsement needed'] : []),
     ],
     good: 'No: not hazmat, so no endorsement.',
@@ -394,7 +402,7 @@ export const DRIVER_CASES = [
   {
     id: 'ED09', style: 'P', terms: ['settlement'],
     line: 'Grace u get paid for the last load?',
-    expect: ({ standing }) => (r) => (standing.unpaidCount > 0 && !dollars(r).includes(Math.round(standing.owedUsd)) ? [`owed $${Math.round(standing.owedUsd)} not said`] : []),
+    expect: ({ standing }) => (r) => (standing.unpaidCount > 0 && !saysOwed(r, standing) ? [`owed $${Math.round(standing.owedUsd)} not said`] : []),
     good: 'What she is owed and how late it is, from her pay standing; or that she is paid up.',
   },
   {
@@ -448,7 +456,7 @@ export const DRIVER_CASES = [
   {
     id: 'ED16', style: 'P', terms: ['hours of service', 'logs'],
     line: 'just log it as off duty and keep driving',
-    expect: () => hosExpect({ reason: /\b(logs?|eld|illegal|falsif\w*|fake)\b/i }),
+    expect: () => hosExpect({ reason: /\b(logs?|eld|illegal|falsif\w*|fake|rules?|against)\b/i }),
     good: 'No -- the ELD records her driving; faking the log is illegal.',
   },
   {
@@ -486,7 +494,8 @@ export const DRIVER_CASES = [
     line: "how's ur family doing",
     expect: ({ driver } = {}) => (r) => {
       const bio = String(driver?.bio ?? '').toLowerCase()
-      const invented = [...r.toLowerCase().matchAll(/\b(wife|husband|kids?|son|daughter|mom|dad)\b/g)].some((m) => !new RegExp(`\\b${m[1]}\\b`).test(bio))
+      // Compared on the stem: bio "kids" covers a reply's "kid".
+      const invented = [...r.toLowerCase().matchAll(/\b(wife|husband|kids?|son|daughter|mom|dad)\b/g)].some((m) => !new RegExp(`\\b${m[1].replace(/s$/, '')}s?\\b`).test(bio))
       return [
         ...(BREAKS_CHARACTER.test(r) ? ['breaks character'] : []),
         ...(invented ? ['invents family'] : []),
@@ -508,7 +517,7 @@ export const DRIVER_CASES = [
     line: 'u got paid already stop asking',
     expect: ({ standing } = {}) => (r) => {
       const owed = standing?.unpaidCount > 0
-      const amount = owed && dollars(r).includes(Math.round(standing.owedUsd))
+      const amount = owed && saysOwed(r, standing)
       return [
         ...(owed && !amount ? [`owed $${Math.round(standing.owedUsd)} not said`] : []),
         ...(owed && !amount && /\b(ok|my bad|sorry|you'?re right)\b/i.test(r) ? ['accepts it as paid'] : []),
@@ -522,11 +531,11 @@ export const DRIVER_CASES = [
 // Findings on any reply of either chat, plus the case's own.
 // The checks run on the reply with typographic punctuation folded to ASCII
 // (the stored reply is untouched).
-export function brokerFindings(reply, check) {
+export function brokerFindings(reply, check, { line = null } = {}) {
   const r = asciiPunct(reply)
   if (r.startsWith('(FAILED')) return ['no reply']
   if (isFallback(r)) return [FELL_BACK]
-  return [...brokerReply(r, null), ...(CLASSIFIER_ONLY.test(r.trim()) ? [CLASSIFIER_ONLY_FINDING] : []), ...(ASKS_PAPERWORK.test(r) ? ['asks for paperwork'] : []), ...check(r)]
+  return [...brokerReply(r, null, line), ...(CLASSIFIER_ONLY.test(r.trim()) ? [CLASSIFIER_ONLY_FINDING] : []), ...(ASKS_PAPERWORK.test(r) ? ['asks for paperwork'] : []), ...check(r)]
 }
 
 export function driverFindings(reply, check, { onTheRoad }) {
