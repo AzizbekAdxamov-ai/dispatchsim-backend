@@ -155,6 +155,10 @@ export function correctCount(replies) {
   return replies.reduce((n, r) => n + (asciiPunct(r).match(CORRECT_ASK)?.length ?? 0), 0)
 }
 
+// Payment days or a quick-pay fee: the broker has no such terms (that is
+// accounting's), so naming any is invented.
+export const PAYMENT_INVENTED = /\bnet ?\d{1,2}\b|\b\d{1,2} days? (to pay|pay)\b|quick ?pay[^.?!]{0,30}\d+(\.\d+)?\s?%/i
+
 export function brokerReply(rawReply, rawPrevious) {
   const reply = asciiPunct(rawReply)
   const previousReply = rawPrevious ? asciiPunct(rawPrevious) : rawPrevious
@@ -163,6 +167,7 @@ export function brokerReply(rawReply, rawPrevious) {
   if (SENDS_BACK.test(reply)) out.push('sends the dispatcher back to check')
   if (lumperPayerWrong(reply)) out.push('lumper payer wrong')
   if (correctWithoutReadBack(reply)) out.push('correct? without a read-back')
+  if (PAYMENT_INVENTED.test(reply)) out.push('payment terms invented')
   return out
 }
 
