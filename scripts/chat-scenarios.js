@@ -6,6 +6,7 @@
 //   npm run chat:scenarios -- broker             # broker only (~13)
 //   npm run chat:scenarios -- driver             # Grace only (~7)
 //   npm run chat:scenarios -- broker --times 3   # every scenario 3 times (~39)
+//   npm run chat:scenarios -- broker --gap 20    # wait 20 s between requests (per-minute token limit)
 //
 // --times runs the same conversations on the same loads again, so a
 // finding can be counted ("S4 agreed in 2 of 3") instead of seen once.
@@ -37,6 +38,8 @@ import { fileURLToPath } from 'node:url'
 import { pool, query } from '../src/db/pool.js'
 import { chatConfigFor } from '../src/modules/chat/chatProvider.js'
 import { chatText } from './seed/aiClient.js'
+import { sleep } from './seed/config.js'
+import { parseGap, makePacer } from './evalAttempts.js'
 import { chatTextRecorded, usedToday, budgetRefusal } from '../src/modules/chat/scriptRequests.js'
 import { tooLongForChat, dailyBudgetFor } from '../src/constants/chatBudget.js'
 import appConfig from '../src/config.js'
@@ -64,6 +67,15 @@ if (!Number.isInteger(times) || times < 1) {
   console.error('--times wants a whole number of runs, 1 or more.')
   process.exit(1)
 }
+// --gap <seconds>: a pause before every request but the first, so the
+// per-minute token limit is not hit by turns sent back to back.
+const gap = parseGap(args)
+if (gap.error) {
+  console.error(gap.error)
+  process.exit(1)
+}
+const gapSec = gap.seconds
+const pauseBeforeRequest = makePacer({ gapSec, sleep })
 const out = []
 const say = (line = '') => { out.push(line); console.log(line) }
 let requests = 0
@@ -87,6 +99,7 @@ function flags(text, prompt, findings = []) {
 // Counted where requests are actually sent (aiClient onRequest), so a
 // second try and a backoff retry are in the number.
 async function ask(config, messages, side) {
+  await pauseBeforeRequest()
   try {
     return (await chatTextRecorded({
       chatText, source: 'scenarios', side, messages,
@@ -291,7 +304,7 @@ if (refusal) {
 const carrier = await getCarrier()
 const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')
 say(`# Chat scenarios — ${new Date().toISOString()}`)
-say(`Planned requests: ~${planned}${times > 1 ? ` (${times} runs)` : ''} of a daily budget of ${budget}. A second try adds one.`)
+say(`Planned requests: ~${planned}${times > 1 ? ` (${times} runs)` : ''} of a daily budget of ${budget}. A second try adds one.${gapSec > 0 ? ` ${gapSec} s between requests.` : ''}`)
 say('')
 try {
   if (only !== 'driver') await runBroker(carrier)
