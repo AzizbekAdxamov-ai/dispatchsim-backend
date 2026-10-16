@@ -7,6 +7,7 @@
 import { chatText } from '../../../scripts/seed/aiClient.js'
 import { brokerReplyProblem, brokerRetryPrompt } from './replyProblem.js'
 import { truckFacts } from './truckTalk.js'
+import { bookingFacts } from './bookingTalk.js'
 import { fileURLToPath } from 'node:url'
 import { promptVersionOf } from '../../lib/promptVersion.js'
 import { turnRow, logTurn } from '../chat/turnLog.js'
@@ -119,7 +120,8 @@ export async function sendMessage({ conversationId, userId, text }) {
   // words to someone else's outage is not acceptable.
   const dispatcherMessage = await repo.addMessage(conversationId, 'dispatcher', text)
 
-  const history = (await repo.listMessages(conversationId)).slice(-HISTORY_TURNS - 1, -1)
+  const thread = await repo.listMessages(conversationId)
+  const history = thread.slice(-HISTORY_TURNS - 1, -1)
   const carrier = await getCarrier()
   // The dispatcher's own words so far, this one included. Read by code for
   // market claims and rate pushes (rateTalk.js). History is capped at
@@ -129,6 +131,9 @@ export async function sendMessage({ conversationId, userId, text }) {
   // reply must be the one the prompt's truck block was written from.
   const now = new Date()
   const truck = truckFacts({ texts: said, posting, now })
+  // Who is calling and what is still missing before a booking, from the WHOLE
+  // thread (not the 20-turn history): an MC told on message 3 stays told.
+  const booking = bookingFacts({ texts: dispatcherTexts(thread), carrier, posting, now })
   const systemPrompt = buildBrokerSystemPrompt({
     carrier,
     broker: { name: posting.name, contactName: posting.contactName, persona: posting.persona },
@@ -136,6 +141,7 @@ export async function sendMessage({ conversationId, userId, text }) {
     now,
     talk: talkFacts(said, posting.equipmentType),
     said,
+    booking,
   })
 
   // Every request this turn sends to the provider, counted where they are

@@ -14,7 +14,8 @@ import { readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { buildBrokerSystemPrompt, loadSituation } from '../src/modules/brokerChat/brokerChat.prompt.js'
+import { buildBrokerSystemPrompt, loadSituation, callerBlock } from '../src/modules/brokerChat/brokerChat.prompt.js'
+import { bookingFacts } from '../src/modules/brokerChat/bookingTalk.js'
 import { CITIES } from '../scripts/seed/cities.js'
 
 const CITY_NAMES = CITIES.map((c) => c.city ?? c.name).filter(Boolean)
@@ -133,19 +134,62 @@ test('no two brokers share a voice', () => {
   assert.equal(seen.size, PERSONAS_052.length)
 })
 
-// Kills: a broker that does not know it is talking to the dispatcher, or
-// that is not told to stop sending the dispatcher back to their own side
-// (live 2026-10-13), with or without a known carrier.
-test('the prompt says the counterpart is the dispatcher and forbids sending them back', () => {
-  const withCarrier = buildBrokerSystemPrompt({ broker: BROKER, posting: posting(), now: NOW, carrier: { name: 'Keystone Line Haul', mcNumber: 'MC-741309' } })
+// Kills: a broker that is told who is calling before they say (so it never
+// asks), or that is not told to stop sending the dispatcher back to their own
+// side (live 2026-10-13), with or without a known carrier.
+test('the prompt says the counterpart is the dispatcher, forbids sending them back, and never prints the carrier before it is told', () => {
+  const carrier = { name: 'Keystone Line Haul', mcNumber: 'MC-741309' }
+  const withCarrier = buildBrokerSystemPrompt({ broker: BROKER, posting: posting(), now: NOW, carrier })
   const without = buildBrokerSystemPrompt({ broker: BROKER, posting: posting(), now: NOW })
-  assert.match(withCarrier, /talking to the dispatcher at Keystone Line Haul/)
-  assert.match(without, /talking to the carrier's dispatcher/)
   for (const p of [withCarrier, without]) {
+    assert.match(p, /talking to a carrier's dispatcher\. You do not know who they are/)
     assert.match(p, /IS the carrier's dispatcher/)
     assert.match(p, /Never send\s+them back to their own side/)
     assert.match(p, /never tell them to go ask the shipper/)
   }
+  assert.doesNotMatch(withCarrier, /Keystone Line Haul|741309/)
+})
+
+// Kills: the old "NEVER ask for their MC number" rule surviving, or the
+// booking-call rules (W-9 never asked, payment days are accounting's, bot
+// answered with a plain no) being dropped from the prompt.
+test('the prompt asks for company and MC once, never for paperwork, and carries the new rules', () => {
+  const p = buildBrokerSystemPrompt({ broker: BROKER, posting: posting(), now: NOW })
+  assert.doesNotMatch(p, /NEVER ask for their MC/)
+  assert.match(p, /you need their company and MC/)
+  assert.match(p, /Never ask for a W-9/)
+  assert.match(p, /that's our accounting/)
+  assert.match(p, /say no plainly/)
+})
+
+const CALLER_CARRIER = { name: 'Keystone Line Haul', mcNumber: 'MC-741309' }
+const callerLines = (texts, carrier = CALLER_CARRIER) =>
+  callerBlock(bookingFacts({ texts, carrier, posting: posting(), now: NOW }), carrier).join(String.fromCharCode(10))
+
+// Kills: a right MC not said to check out, or a wrong MC allowed to pass
+test('callerBlock: matching MC checks out; a wrong one is told plainly and blocks booking', () => {
+  assert.match(callerLines(['MC 741309']), /MC checks out: it comes up as Keystone Line Haul/)
+  const wrong = callerLines(['MC 999999'])
+  assert.match(wrong, /does not come up \/ does not match/)
+  assert.match(wrong, /no booking and no rate con until they give the right one/)
+  assert.doesNotMatch(wrong, /MC checks out: it comes up/)
+  assert.match(callerLines(['hi']), /No MC yet/)
+})
+
+// Kills: a company name that is not the MC's owner passing without a question
+test('callerBlock: a company name that does not fit the MC is to be asked about', () => {
+  const t = callerLines(['this is Mike with Blue Harbor Freight, calling about the load', 'MC 741309'])
+  assert.match(t, /That MC comes up as Keystone Line Haul, not what they said -- ask/)
+})
+
+// Kills: something they already told listed under "Still missing"
+test('callerBlock: told items are never under Still missing', () => {
+  const t = callerLines(['MC 741309', "truck's in Dover, empty tomorrow 6am, 53 dry van"])
+  const missingLine = t.split(String.fromCharCode(10)).find((l) => /Still missing/.test(l))
+  assert.ok(missingLine)
+  assert.doesNotMatch(missingLine, /MC number|where the truck|when it is empty|trailer/)
+  assert.match(missingLine, /company name/)
+  assert.match(t, /They have told you: MC 741309/)
 })
 
 // Kills: 061 whose FROM text drifts from 052 by one character (replace()

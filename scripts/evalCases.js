@@ -24,7 +24,8 @@ import { hoursMinutes } from '../src/constants/appClock.js'
 import { humanDuration } from '../src/modules/driverChat/driverChat.prompt.js'
 import { ceilingFor } from '../src/modules/brokerChat/brokerChat.prompt.js'
 
-const ASKS_PAPERWORK = /\b(mc ?(#|number)|w-?9|your authority|certificate of insurance|\bcoi\b)/i
+// The booking call asks for the MC (WHO IS CALLING); paperwork is still never asked.
+const ASKS_PAPERWORK = /\b(w-?9|certificate of insurance|coi)\b/i
 const BREAKS_CHARACTER = /\b(i am|i'm|im) (an? )?(ai|bot|language model|assistant|chatbot)\b|\bas an ai\b/i
 // ED10: asked if she is a bot, she says no (or that she is a person) -- and a
 // reply that opens like a yes ("ha, sure") is not that, whatever follows.

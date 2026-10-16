@@ -50,9 +50,11 @@ test('EB07 the broker\'s own accessorials', () => {
   assert.deepEqual(check('Detention is $80 an hour after two free.'), ['TONU $225 missing', 'layover $275 missing'])
 })
 
-// Kills: paperwork requests and the shared checks not applied to every case.
+// Kills: a W-9 request not flagged, or the MC question (now the broker's job
+// before booking) still flagged as paperwork.
 test('every broker reply is checked for paperwork, promises and markdown', () => {
-  assert.deepEqual(brokerFindings("What's your MC number?", () => []), ['asks for paperwork'])
+  assert.deepEqual(brokerFindings('Send me your W-9.', () => []), ['asks for paperwork'])
+  assert.deepEqual(brokerFindings("What's your MC number?", () => []), [])
   assert.deepEqual(brokerFindings('Let me check and get back to you.', () => []), ['promises to get back'])
   assert.deepEqual(brokerFindings('(FAILED: AI quota exhausted)', () => ['x']), ['no reply'])
 })
