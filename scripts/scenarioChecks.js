@@ -139,7 +139,7 @@ export function offeredFigures(reply, theirs = []) {
 // or a statement with nothing of theirs in it, it is a tic (S4, 2026-10-16:
 // "The posted rate is $5,002, all-in. Correct?").
 // What a read-back is about: the carrier's truck, driver, pickup, day or time, or "is that correct?".
-const READ_BACK = /\b(you|your|you're|you'll|truck|driver|pickup|delivery|load|tomorrow|today|am|pm|that)\b/i
+const READ_BACK = /\b(you|your|you're|you'll|truck|driver|pickup|delivery|tomorrow|today)\b|\bat \d{1,2}\b|\b\d{1,2}(:\d{2})?\s?(am|pm)\b/i
 export const CORRECT_ASK = /\bcorrect\?/gi
 
 export function correctWithoutReadBack(reply) {
@@ -178,7 +178,8 @@ const DENIES = /\b(can't|cannot|won't|don't|not|no|never|isn't|nothing)\b/i
 export function paymentInvented(reply, said = null) {
   const theirs = new Set((asciiPunct(said ?? '').match(/\d+/g) ?? []))
   const re = new RegExp(PAYMENT_INVENTED_RE.source, 'gi')
-  return asciiPunct(reply).split(/(?<=[.!?])\s+/).some((sentence) => {
+  // Clauses, so a denial of one term does not excuse a new one beside it.
+  return asciiPunct(reply).split(/(?<=[.!?])\s+|[,;]|\bbut\b/i).some((sentence) => {
     if (DENIES.test(sentence)) return false
     return [...sentence.matchAll(re)].some((m) => {
       const numbers = m[0].match(/\d+(?:\.\d+)?/g) ?? []

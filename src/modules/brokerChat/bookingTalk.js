@@ -25,7 +25,10 @@ export const HEAVY_LBS = 40000
 // -- MC -----------------------------------------------------------------
 
 // "MC-741309", "MC 741309", "mc#741309", "mc: 741309", "MC number 741309".
-const MC_RE = /\bmc\s*(?:#|no\.?|number|:)?\s*-?\s*(\d{5,7})\b/gi
+// Also "our MC is 741309", "MC # is 741309", "M.C. 741309".
+const MC_RE = /\bm\.?c\.?\s*(?:#|no\.?|number|:)?\s*(?:is|:)?\s*-?\s*(\d{5,7})\b/gi
+// "741309 is the mc" / "... is my mc" / "... is our mc".
+const MC_AFTER_RE = /\b(\d{5,7})\s+is\s+(?:the|my|our)\s+m\.?c\b/gi
 // A bare number counts only when it is the WHOLE message ("741309"): a rate
 // ("$4,278"), a truck number or a mileage inside a sentence is never an MC.
 const BARE_MC_RE = /^\s*#?(\d{5,7})\s*$/
@@ -37,7 +40,7 @@ function mcIn(text) {
   const bare = BARE_MC_RE.exec(src)
   if (bare) return bare[1]
   let found = null
-  for (const m of src.matchAll(MC_RE)) {
+  for (const m of [...src.matchAll(MC_RE), ...src.matchAll(MC_AFTER_RE)]) {
     if (DOT_BEFORE.test(src.slice(0, m.index))) continue
     found = m[1]
   }
@@ -142,7 +145,8 @@ export function bookingFacts({ texts, carrier = null, posting = null, now = new 
   const mcDigits = newest(said, mcIn)
   const carrierDigits = digitsOf(carrier?.mcNumber)
   let verdict = null
-  if (mcDigits !== null && carrierDigits) verdict = digitsOf(mcDigits) === carrierDigits ? 'match' : 'mismatch'
+  // 'unverifiable': they said an MC but the carrier row has none to compare with.
+  if (mcDigits !== null) verdict = !carrierDigits ? 'unverifiable' : digitsOf(mcDigits) === carrierDigits ? 'match' : 'mismatch'
 
   const company = newest(said, companyIn)
   const truck = posting ? truckFacts({ texts: said, posting, now }) : null
@@ -226,6 +230,12 @@ export function carrierNotVerified({ booking, contactName }) {
     return {
       reason: 'mc-mismatch',
       message: `${who}: "That MC doesn't come up on my end -- I can't send paper until I have the right one."`,
+    }
+  }
+  if (booking?.mc?.verdict === 'unverifiable') {
+    return {
+      reason: 'mc-unverifiable',
+      message: `${who}: "I can't check that MC on my end right now -- I can't send paper until I can."`,
     }
   }
   return { reason: 'mc-missing', message: `${who}: "I still need your MC before I send the rate con."` }

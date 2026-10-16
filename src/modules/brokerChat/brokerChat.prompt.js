@@ -343,6 +343,8 @@ export function callerBlock(facts, carrier = null) {
     }
   } else if (facts.mc.verdict === 'mismatch') {
     lines.push(`  MC ${facts.mc.said} does not come up / does not match -- tell them so plainly; no booking and no rate con until they give the right one. Talking price is fine.`)
+  } else if (facts.mc.verdict === 'unverifiable') {
+    lines.push(`  MC ${facts.mc.said} cannot be checked from here -- never say it checks out; no booking and no rate con yet. Talking price is fine.`)
   } else {
     lines.push('  No MC yet.')
   }

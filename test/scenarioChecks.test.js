@@ -326,9 +326,10 @@ test('chat-scenarios knows S9a/S9b/S9c and their turn counts', () => {
 import { paymentInvented } from '../scripts/scenarioChecks.js'
 
 // Kills: "correct?" flagged when it reads back the pickup or asks "is that correct?"
-test('correct? after a pickup read-back or "Is that correct?" is not a tic', () => {
+test('correct? after a pickup read-back is not a tic; after "that" or "load" alone it is', () => {
   assert.deepEqual(brokerReply('Pickup is Dallas at 6, correct?', null), [])
-  assert.deepEqual(brokerReply('Is that correct?', null), [])
+  assert.deepEqual(brokerReply("That's all-in. Correct?", null), ['correct? without a read-back'])
+  assert.deepEqual(brokerReply('The load is all-in, correct?', null), ['correct? without a read-back'])
   assert.deepEqual(brokerReply('The rate is firm. Correct?', null), ['correct? without a read-back'])
 })
 
@@ -341,4 +342,11 @@ test('paymentInvented: carrier\'s own words and denials pass; a new term is flag
   assert.equal(paymentInvented('We pay net 15.', said), true)
   assert.equal(paymentInvented('We pay net 30.', null), true)
   assert.deepEqual(brokerReply('We pay net 15.', null, 'when do you pay?'), ['payment terms invented'])
+})
+
+// Kills: a denial of one term excusing a NEW invented term in the next clause
+test('paymentInvented: a denial does not cover another clause', () => {
+  const said = 'can u pay net 30?'
+  assert.equal(paymentInvented("I can't speak to net 30, but we pay net 15.", said), true)
+  assert.equal(paymentInvented("I can't speak to net 30 or any days, that's accounting.", said), false)
 })

@@ -243,3 +243,43 @@ test('a reply that books without a verified MC is a problem; with one it is not'
   assert.equal(brokerReplyProblem(reply, { booking: facts(['MC 741309']) }), null)
   assert.equal(brokerReplyProblem("I need your MC before I book anything.", { booking: facts(['hi']) }), null)
 })
+
+// -- Review fixes ---------------------------------------------------------
+
+import { stopsForRow } from '../src/modules/brokerChat/stops.js'
+
+// Kills: natural MC phrasing read as "no MC said"
+test('MC phrasing: "our MC is", "MC # is", "M.C.", "<digits> is the mc"', () => {
+  for (const t of ['our MC is 741309', 'my mc is 741309', 'MC number is 741309', 'MC # is 741309', 'M.C. 741309', '741309 is the mc', '741309 is our MC']) {
+    assert.equal(facts([t]).mc.verdict, 'match', t)
+  }
+})
+
+// Kills: the widened MC phrasing reading a rate, weight, truck number or DOT as an MC
+test('MC phrasing stays safe: rates, weights, truck numbers and DOT are not an MC', () => {
+  for (const t of ['rate is 741309 or i walk', 'weight is 123456 lbs', 'truck number is 741309', 'usdot is 741309', 'dot number 741309 and the load is 123456 is the rate']) {
+    assert.equal(facts([t]).mc.said, null, t)
+  }
+})
+
+// Kills: shipper/receiver following the conversation id instead of the posting id
+test('stopsForRow: one posting, two conversations, the same stops', () => {
+  const row = { postingId: 'posting-1', originCity: 'Dallas', originState: 'TX', destinationCity: 'Chicago', destinationState: 'IL' }
+  assert.deepEqual(stopsForRow({ ...row, id: 'conversation-a' }), stopsForRow({ ...row, id: 'conversation-b' }))
+  assert.notDeepEqual(stopsForRow({ ...row, id: 'c', postingId: 'posting-2' }), stopsForRow({ ...row, id: 'c' }))
+})
+
+// Kills: an MC said against a blank carrier MC reported as "No MC yet" / "I still need your MC"
+test('blank carrier MC: the MC said is unverifiable, not missing', async () => {
+  const { callerBlock } = await import('../src/modules/brokerChat/brokerChat.prompt.js')
+  const noMc = { name: 'Cedar Ridge Transport Services', mcNumber: '' }
+  const f = bookingFacts({ texts: ['MC 741309'], carrier: noMc, posting, now })
+  assert.equal(f.mc.verdict, 'unverifiable')
+  const block = callerBlock(f, noMc).join('\n')
+  assert.match(block, /cannot be checked/)
+  assert.doesNotMatch(block, /No MC yet/)
+  const gate = carrierNotVerified({ booking: f, contactName: 'Devin' })
+  assert.equal(gate.reason, 'mc-unverifiable')
+  assert.doesNotMatch(gate.message, /still need your MC/)
+  assert.equal(carrierNotVerified({ booking: bookingFacts({ texts: ['hi'], carrier: noMc, posting, now }), contactName: 'Devin' }).reason, 'mc-missing')
+})

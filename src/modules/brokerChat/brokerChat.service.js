@@ -8,7 +8,7 @@ import { chatText } from '../../../scripts/seed/aiClient.js'
 import { brokerReplyProblem, brokerRetryPrompt } from './replyProblem.js'
 import { truckFacts } from './truckTalk.js'
 import { bookingFacts, carrierNotVerified } from './bookingTalk.js'
-import { stopsFor } from './stops.js'
+import { stopsForRow } from './stops.js'
 import { fileURLToPath } from 'node:url'
 import { promptVersionOf } from '../../lib/promptVersion.js'
 import { turnRow, logTurn } from '../chat/turnLog.js'
@@ -394,5 +394,5 @@ export async function getRateConfirmation({ conversationId, userId }) {
     carrier: await getCarrier(),
     posting: row,
   })
-  return { ...row, booking, stops: stopsFor({ id: row.postingId, ...row }) }
+  return { ...row, booking, stops: stopsForRow(row) }
 }

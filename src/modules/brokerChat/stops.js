@@ -39,6 +39,12 @@ function stop(posting, side, city, state, attempt = 0) {
   }
 }
 
+// From a rate-con row: the stops follow the POSTING, never the conversation
+// (the row's own id is the conversation's).
+export function stopsForRow(row) {
+  return stopsFor({ ...row, id: row.postingId })
+}
+
 export function stopsFor(posting) {
   const shipper = stop(posting, 'shipper', posting.originCity, posting.originState)
   let receiver = stop(posting, 'receiver', posting.destinationCity, posting.destinationState)
