@@ -24,7 +24,7 @@ export async function serviceReply({ first, again, problemOf, retryPrompt, fallb
   const second = await again(retryPrompt(systemPrompt, problem))
   const remaining = problemOf(second)
   if (remaining?.unusable) {
-    return { raw, reply: fallback, regeneratedBecause: problem.why, fellBack: true, stillFailing: remaining.why }
+    return { raw, reply: remaining.safeReply ?? fallback, regeneratedBecause: problem.why, fellBack: true, stillFailing: remaining.why }
   }
   return { raw, reply: second, regeneratedBecause: problem.why, fellBack: false, stillFailing: remaining?.why ?? null }
 }

@@ -114,3 +114,16 @@ export function makePacer({ gapSec, sleep }) {
     if (asked++ > 0 && gapSec > 0) await sleep(gapSec * 1000)
   }
 }
+
+// Called at the HTTP boundary, including backoff, fallback and regeneration.
+// Measure request start times so a slow response already counts toward gap.
+export function makeRequestPacer({ gapSec, sleep, now = Date.now }) {
+  let last = null
+  return async () => {
+    if (last !== null) {
+      const remaining = last + gapSec * 1000 - now()
+      if (remaining > 0) await sleep(remaining)
+    }
+    last = now()
+  }
+}

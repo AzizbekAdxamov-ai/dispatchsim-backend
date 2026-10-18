@@ -18,7 +18,7 @@ import { STREET, PHONE, dollars, brokerReply, driverReply, isFallback, FELL_BACK
 import { loadingMode, tarpFor, securementFor } from '../src/constants/freightHandling.js'
 import { marketClaims } from '../src/modules/brokerChat/rateTalk.js'
 import { asciiPunct } from '../src/lib/plainText.js'
-import { saysCannotMake } from '../src/lib/cannotMake.js'
+import { saysCannotMake, milesOff } from '../src/lib/cannotMake.js'
 import { TURNS_DOWN, GIVES_REASON, HOS_REASON, refusesWithoutReason } from '../src/lib/refusalReason.js'
 import { hoursMinutes } from '../src/constants/appClock.js'
 import { humanDuration } from '../src/modules/driverChat/driverChat.prompt.js'
@@ -41,16 +41,7 @@ const FUEL_OUT = /fuel('s| is)? (excluded|separate|extra|on top)|plus fuel|\bfsc
 // "I need to get fuel before I roll") ask nothing about the load.
 const ASKS = /\?|(^|[.!]\s*)(need(?! to\b)|send( me)?|gimme|give me|get me|shoot me|text me|tell me|let me know|what'?s|where|which|how)\b|(^|[.!]\s*)(need(?! to\b)|i'?ll need|send me)\b[^.!]{0,60}\b(address|miles|pu|pickup|drop|delivery|rate|appt|appointment|weight|commodity|info|details|bol)\b/i
 
-// Miles a reply states, as numbers: "about 1,980 mi", "2500 miles".
-const STATED_MILES = /(\d[\d,]*)\s*(?:mi\b|miles?\b)/gi
-// Beyond this share, a stated distance is not the computed one.
-const MILES_TOLERANCE = 0.05
-export function milesOff(reply, offer) {
-  if (!offer || offer.miles == null) return false
-  return [...reply.matchAll(STATED_MILES)]
-    .map((m) => Number(m[1].replace(/,/g, '')))
-    .some((n) => Math.abs(n - offer.miles) > offer.miles * MILES_TOLERANCE)
-}
+export { milesOff } from '../src/lib/cannotMake.js'
 
 
 // EB08: drop and hook said of a live load (or live said of a drop). A denial

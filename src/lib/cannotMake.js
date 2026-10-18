@@ -25,3 +25,14 @@ export function saysCannotMake(text, { broker = false } = {}) {
 export function ignoresUnreachable(reply, facts, opts) {
   return facts?.makesIt === false && !saysCannotMake(reply, opts)
 }
+
+// A number beside mi/miles is a claimed road distance. The prompt's offer
+// owns that number; allow ordinary rounding but catch ED11's 1,200 vs 2,517.
+const STATED_MILES = /(\d[\d,]*)\s*(?:mi\b|miles?\b)/gi
+const MILES_TOLERANCE = 0.05
+export function milesOff(reply, offer) {
+  if (!offer || offer.miles == null) return false
+  return [...String(reply ?? '').matchAll(STATED_MILES)]
+    .map((m) => Number(m[1].replace(/,/g, '')))
+    .some((n) => Math.abs(n - offer.miles) > offer.miles * MILES_TOLERANCE)
+}

@@ -12,14 +12,30 @@
 
 import { trippedBannedWord, leaksReasoning } from './driverChat.prompt.js'
 import { tooLongForChat, CHAT_REPLY_MAX_CHARS } from '../../constants/chatBudget.js'
-import { ignoresUnreachable } from '../../lib/cannotMake.js'
+import { ignoresUnreachable, milesOff } from '../../lib/cannotMake.js'
 import { refusesWithoutReason } from '../../lib/refusalReason.js'
+import { hosReplyProblem } from '../../lib/hosPressure.js'
 
 export function driverReplyProblem(reply, { offer, text } = {}) {
   if (trippedBannedWord(reply) !== null) return { why: 'used a forbidden word', hint: '', unusable: true }
   if (leaksReasoning(reply)) return { why: 'showed your own reasoning instead of speaking as the driver', hint: '', unusable: true }
   if (tooLongForChat(reply)) {
     return { why: `ran to ${reply.trim().length} characters when the limit is ${CHAT_REPLY_MAX_CHARS}`, hint: '', unusable: true }
+  }
+  // A driving/log violation needs a plain no. A statement of remaining
+  // hours, or "Copy that", leaves the dangerous request standing.
+  const hos = hosReplyProblem(reply, text)
+  if (hos) return hos
+  // The model may say "can't make it" but change the computed distance.
+  // Correct it on retry; never show the wrong number after a second miss.
+  if (milesOff(reply, offer)) {
+    const miles = offer.miles.toLocaleString('en-US')
+    const safeReply = offer.makesIt === false
+      ? `Can't make that pickup from here; it's about ${miles} miles to ${offer.city}. Is there a later pickup time?`
+      : `That pickup is about ${miles} miles from here. What time is it?`
+    return { why: 'gave the wrong pickup mileage',
+      hint: ` The computed road distance is ${miles} miles. Use that number, not an estimate.`,
+      unusable: true, safeReply }
   }
   // The facts say she cannot make the pickup (computed from her position
   // and the clock) and the reply never says so.

@@ -44,7 +44,7 @@ import { sleep } from './seed/config.js'
 import { chatTextRecorded, usedToday, budgetRefusal } from '../src/modules/chat/scriptRequests.js'
 import { dailyBudgetFor, dailyTokenStatus, groqReasoningParams } from '../src/constants/chatBudget.js'
 import { DAILY_TOKENS_SQL } from '../src/modules/chat/chatBudget.sql.js'
-import { attemptsLine, attemptFields, runTokenSummary, tokenPlanWarning, parseGap, parseIdList, makePacer, DEFAULT_REPLY_TOKENS } from './evalAttempts.js'
+import { attemptsLine, attemptFields, runTokenSummary, tokenPlanWarning, parseGap, parseIdList, makeRequestPacer, DEFAULT_REPLY_TOKENS } from './evalAttempts.js'
 import appConfig from '../src/config.js'
 import { marketFacts } from '../src/constants/marketRates.js'
 import { relativeDay, clockDateTime } from '../src/constants/appClock.js'
@@ -64,6 +64,7 @@ import { serviceReply } from './serviceReply.js'
 import { brokerReplyProblem, brokerRetryPrompt } from '../src/modules/brokerChat/replyProblem.js'
 import { driverReplyProblem, driverRetryPrompt } from '../src/modules/driverChat/replyProblem.js'
 import { truckFacts } from '../src/modules/brokerChat/truckTalk.js'
+import { bookingFacts } from '../src/modules/brokerChat/bookingTalk.js'
 import { stripSpeakerLabel } from '../src/lib/speakerLabel.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -94,7 +95,7 @@ for (const id of caseIds ?? []) {
 }
 const brokerCases = BROKER_CASES.filter((c) => !caseIds || caseIds.includes(c.id))
 const driverCases = DRIVER_CASES.filter((c) => !caseIds || caseIds.includes(c.id))
-// --gap <seconds>: a pause between cases. Each case sends the whole system
+// --gap <seconds>: a pause between provider requests. Each case sends the whole system
 // prompt (~3,000 tokens) and the per-minute token limit is 8,000, so several
 // cases in a row can be refused for tokens although requests are far under.
 const gap = parseGap(args)
@@ -103,7 +104,7 @@ if (gap.error) {
   process.exit(1)
 }
 const gapSec = gap.seconds
-const pauseBeforeCase = makePacer({ gapSec, sleep })
+const pauseBeforeRequest = makeRequestPacer({ gapSec, sleep })
 const outDir = join(here, '..', '..', 'reports', 'eval')
 const startedAt = new Date()
 const runId = nextEvalRunId(outDir, startedAt)
@@ -131,10 +132,10 @@ const promptVersion = (file) => promptVersionOf(join(here, '..', 'src', 'modules
 async function ask(config, messages, side, cause) {
   let answeredModel = config.model
   const attempts = []
-  await pauseBeforeCase()
   try {
     const reply = await chatTextRecorded({
       chatText, source: 'eval', side, messages, config,
+      beforeRequest: pauseBeforeRequest,
       onRequest: () => { requests += 1 },
       onRetry: () => { retries += 1 },
       onModel: (model) => { answeredModel = model },
@@ -256,6 +257,7 @@ async function brokerRun(carrier) {
     // One clock for the prompt and the truck check, as in the live service.
     const now = new Date()
     const truck = truckFacts({ texts: [line], posting, now })
+    const booking = bookingFacts({ texts: [line], carrier, posting, now })
     const systemPrompt = bp.buildBrokerSystemPrompt({
       carrier,
       broker: { name: posting.name, contactName: posting.contactName, persona: posting.persona },
@@ -263,12 +265,13 @@ async function brokerRun(carrier) {
       now,
       talk: talkFacts([line], posting.equipmentType),
       said: [line],
+      booking,
     })
     const { reply, model, attempts, outcome } = await answer({
       config, side: 'broker', systemPrompt,
       messages: (sys) => bp.buildMessages({ systemPrompt: sys, history: [], newMessage: line }),
       clean: (t) => stripSpeakerLabel(t, posting.contactName),
-      problemOf: (r) => brokerReplyProblem(r, { truck }),
+      problemOf: (r) => brokerReplyProblem(r, { truck, booking }),
       retryPrompt: brokerRetryPrompt,
       fallback: bp.FALLBACK_REPLY,
     })

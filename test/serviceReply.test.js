@@ -98,3 +98,12 @@ test('chat-eval and chat-scenarios use the shared reply checks', () => {
     assert.match(src, /serviceReply/, file)
   }
 })
+
+// Kills: chat-eval omitting booking facts from its --service check while the
+// live broker chat and scenarios both reject premature booking promises.
+test('chat-eval passes the same booking verdict to prompt and reply check', () => {
+  const src = readFileSync(new URL('../scripts/chat-eval.js', import.meta.url), 'utf8')
+  assert.match(src, /const booking = bookingFacts\(\{ texts: \[line\], carrier, posting, now \}\)/)
+  assert.match(src, /said: \[line\],\s+booking,/)
+  assert.match(src, /brokerReplyProblem\(r, \{ truck, booking \}\)/)
+})

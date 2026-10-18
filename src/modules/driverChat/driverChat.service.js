@@ -137,6 +137,7 @@ export async function sendMessage({ conversationId, userId, text, images }) {
   // regenerated, and the error if the turn failed.
   let regenerated = null
   let failure = null
+  let usedFallback = false
   let answeredModel = config.model
   const onModel = (model) => { answeredModel = model }
   // What each request came to (060): status, 429 reason, tokens. Numbered
@@ -184,7 +185,10 @@ export async function sendMessage({ conversationId, userId, text, images }) {
         cause: 'regenerate',
       }))
       const remaining = driverReplyProblem(reply, { offer, text })
-      if (remaining?.unusable) reply = FALLBACK_REPLY
+      if (remaining?.unusable) {
+        reply = remaining.safeReply ?? FALLBACK_REPLY
+        usedFallback = true
+      }
       else if (remaining) console.warn(`[driverChat] regenerated reply still ${remaining.why}`)
     }
   } catch (err) {
@@ -224,7 +228,7 @@ export async function sendMessage({ conversationId, userId, text, images }) {
       chat: 'driver', conversationId, dispatcherMessageId: dispatcherMessage.id, userId,
       model: answeredModel, promptVersion: PROMPT_VERSION, systemPrompt, history, text,
       imageCount: Array.isArray(images) ? images.length : 0, reply, regeneratedBecause: regenerated,
-      fellBack: reply === FALLBACK_REPLY, error: failure, providerRequests: spent,
+      fellBack: usedFallback, error: failure, providerRequests: spent,
       attempts, onTheRoad: Boolean(context.driver.onTheRoad),
     })).catch((e) => {
       console.error(`[driverChat] could not write the turn log for message ${dispatcherMessage.id}: ${e.message}`)

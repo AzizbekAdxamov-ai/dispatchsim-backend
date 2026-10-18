@@ -127,7 +127,7 @@ export function completionBody({ model, messages, temperature, maxTokens, reason
 // the parsed 429 reason, the tokens -- for the record only. Nothing here
 // decides anything from it. `firstCause` says why the first request was
 // sent; the ones after it are 'backoff'.
-async function requestCompletion({ system, user, messages, config, temperature = 0.8, maxTokens, reasoningMaxTokens = null, onRequest = null, onAttempt = null, firstCause = 'first', stopOnRateLimit = false, maxAttempts = MAX_ATTEMPTS }) {
+async function requestCompletion({ system, user, messages, config, temperature = 0.8, maxTokens, reasoningMaxTokens = null, onRequest = null, onAttempt = null, beforeRequest = null, firstCause = 'first', stopOnRateLimit = false, maxAttempts = MAX_ATTEMPTS }) {
   const url = `${config.baseUrl}/chat/completions`
   // `messages` wins when given (multi-turn conversation); system/user is the
   // single-shot shape the seed generator uses. One retry/backoff
@@ -150,6 +150,9 @@ async function requestCompletion({ system, user, messages, config, temperature =
     const report = (status, outcome, extra = {}) => onAttempt?.({
       n: attempt, model: config.model, cause, status, outcome, rateLimit: null, usage: null, ...extra,
     })
+    // Script pacing belongs here: one chatText call can send several HTTP
+    // requests through retry, fallback or a larger-token second try.
+    await beforeRequest?.()
     onRequest?.()
     try {
       response = await fetch(url, {
@@ -351,7 +354,7 @@ export async function chatJson({ system, user, config }) {
 // `onAttempt` hears about every request, numbered across the whole call
 // (primary, fallback, second try). `cause` is why the call was made at all:
 // 'first', or 'regenerate' when the caller is asking again for a bad reply.
-export async function chatText({ messages, config, temperature = 0.9, maxTokens = chatMaxTokens(), onRetry = null, onRequest = null, onModel = null, onAttempt = null, cause = 'first' }) {
+export async function chatText({ messages, config, temperature = 0.9, maxTokens = chatMaxTokens(), onRetry = null, onRequest = null, onModel = null, onAttempt = null, beforeRequest = null, cause = 'first' }) {
   const cap = chatReasoningCap(config.baseUrl)
   // Only a caller that explicitly supplied a different model uses this
   // path. A short throttle is specific to the model, so it switches. A
@@ -366,7 +369,7 @@ export async function chatText({ messages, config, temperature = 0.9, maxTokens 
   const complete = async (modelConfig, tokens, reasoningCap, why, stopOnRateLimit = false, maxAttempts = MAX_ATTEMPTS) => {
     const reply = await requestCompletion({
       messages, config: modelConfig, temperature, maxTokens: tokens,
-      reasoningMaxTokens: reasoningCap, onRequest, onAttempt: track, firstCause: why, stopOnRateLimit, maxAttempts,
+      reasoningMaxTokens: reasoningCap, onRequest, onAttempt: track, beforeRequest, firstCause: why, stopOnRateLimit, maxAttempts,
     })
     onModel?.(modelConfig.model)
     return reply

@@ -44,7 +44,8 @@ import { pool, query } from '../src/db/pool.js'
 import { chatConfigFor } from '../src/modules/chat/chatProvider.js'
 import { chatText } from './seed/aiClient.js'
 import { sleep } from './seed/config.js'
-import { parseGap, parseIdList, makePacer } from './evalAttempts.js'
+import { parseGap, parseIdList, makeRequestPacer, attemptsLine } from './evalAttempts.js'
+import { promptVersionOf } from '../src/lib/promptVersion.js'
 import { chatTextRecorded, usedToday, budgetRefusal } from '../src/modules/chat/scriptRequests.js'
 import { tooLongForChat, dailyBudgetFor, groqReasoningParams } from '../src/constants/chatBudget.js'
 import appConfig from '../src/config.js'
@@ -92,7 +93,7 @@ if (gap.error) {
   process.exit(1)
 }
 const gapSec = gap.seconds
-const pauseBeforeRequest = makePacer({ gapSec, sleep })
+const pauseBeforeRequest = makeRequestPacer({ gapSec, sleep })
 const out = []
 const say = (line = '') => { out.push(line); console.log(line) }
 let requests = 0
@@ -130,6 +131,8 @@ for (const key of chosen) {
 const only = !chosen.some((k) => sideOf(k) === 'broker') ? 'driver' : !chosen.some((k) => sideOf(k) === 'driver') ? 'broker' : 'both'
 const wanted = (key) => chosen.includes(key)
 const reasoningEffort = (config) => groqReasoningParams(config.baseUrl, config.model).reasoning_effort ?? 'n/a'
+const brokerPromptVersion = promptVersionOf(fileURLToPath(new URL('../src/modules/brokerChat/brokerChat.prompt.js', import.meta.url)))
+const driverPromptVersion = promptVersionOf(fileURLToPath(new URL('../src/modules/driverChat/driverChat.prompt.js', import.meta.url)))
 
 function flags(text, prompt, findings = []) {
   const f = []
@@ -145,17 +148,26 @@ function flags(text, prompt, findings = []) {
 // Counted where requests are actually sent (aiClient onRequest), so a
 // second try and a backoff retry are in the number.
 async function ask(config, messages, side, cause) {
-  await pauseBeforeRequest()
+  let model = config.model
+  const attempts = []
   try {
-    return (await chatTextRecorded({
+    const reply = await chatTextRecorded({
       chatText, source: 'scenarios', side, messages,
       config,
+      beforeRequest: pauseBeforeRequest,
       ...(cause ? { cause } : {}),
       onRequest: () => { requests += 1 },
       onRetry: () => { retries += 1 },
-    })).trim()
-  } catch (err) {
-    return `(FAILED: ${err.message})`
+      onModel: (answered) => { model = answered },
+      onAttempt: (attempt) => { attempts.push(attempt) },
+    })
+    return { reply: reply.trim(), model, attempts }
+  } catch {
+    // A failed provider call is no broker/driver answer. Stop this run; the
+    // finally block writes completed turns, without a fake reply in history.
+    const error = new Error(`Provider request failed after ${requests} request(s); current scenario stopped. ${attemptsLine(attempts)}`)
+    error.safeForConsole = true
+    throw error
   }
 }
 
@@ -164,26 +176,36 @@ async function ask(config, messages, side, cause) {
 // prompt of the retry is the one the live service would send.
 async function answer({ config, side, messages, systemPrompt, clean, problemOf, retryPrompt, fallback }) {
   if (!service) {
-    const reply = await ask(config, messages(systemPrompt), side)
-    return { reply, raw: reply, regeneratedBecause: null, fellBack: false, stillFailing: null }
+    const first = await ask(config, messages(systemPrompt), side)
+    return { reply: first.reply, raw: first.reply, model: first.model, attempts: first.attempts,
+      regeneratedBecause: null, fellBack: false, stillFailing: null }
   }
-  return serviceReply({
-    first: async () => clean(await ask(config, messages(systemPrompt), side)),
-    again: async (sys) => clean(await ask(config, messages(sys), side, 'regenerate')),
+  const attempts = []
+  let model = config.model
+  const call = async (sys, cause) => {
+    const result = await ask(config, messages(sys), side, cause)
+    attempts.push(...result.attempts)
+    model = result.model
+    return clean(result.reply)
+  }
+  const out = await serviceReply({
+    first: () => call(systemPrompt),
+    again: (sys) => call(sys, 'regenerate'),
     problemOf, retryPrompt, fallback, systemPrompt,
   })
+  return { ...out, model, attempts: attempts.map((a, i) => ({ ...a, n: i + 1 })) }
 }
 
 // The lines of one turn: the model's first reply when the final one differs.
-function sayReply(label, out, prompt, findings) {
+function sayReply(label, out, prompt, findings, config, promptVersion) {
+  say(`- **${label} (raw):** ${out.raw}`)
   if (out.regeneratedBecause) {
-    say(`- **${label} (first):** ${out.raw}`)
     say(`- _regenerated because it ${out.regeneratedBecause}_`)
-    say(`- **${label}:** ${out.reply}${out.fellBack ? ' _(holding line)_' : ''}${flags(out.reply, prompt, findings)}`)
-    if (out.stillFailing) say(`- _still failing after the second try: it ${out.stillFailing}_`)
-  } else {
-    say(`- **${label}:** ${out.reply}${flags(out.reply, prompt, findings)}`)
   }
+  say(`- **${label} (final):** ${out.reply}${out.fellBack ? ' _(holding line)_' : ''}${flags(out.reply, prompt, findings)}`)
+  if (out.stillFailing) say(`- _still failing after the second try: it ${out.stillFailing}_`)
+  say(`- **Answering model:** \`${out.model}\` · **reasoning_effort:** ${reasoningEffort({ ...config, model: out.model })} · **prompt:** ${promptVersion}`)
+  say(`- **Requests:** ${attemptsLine(out.attempts)}`)
 }
 
 // -- Broker -----------------------------------------------------------------
@@ -250,6 +272,7 @@ async function brokerConversation({ key, title, posting, lines }, carrier, confi
       said: dispatcherSoFar,
       booking,
     })
+    say(`- **D:** \`${text}\``)
     const out = await answer({
       config, side: 'broker', systemPrompt,
       messages: (sys) => bp.buildMessages({ systemPrompt: sys, history, newMessage: text }),
@@ -263,8 +286,7 @@ async function brokerConversation({ key, title, posting, lines }, carrier, confi
       ? ['no reply']
       : [...brokerReply(reply, previous, text), ...(expect[turn]?.(asciiPunct(reply)) ?? [])]
     results.push({ scenario: key, run, findings })
-    say(`- **D:** \`${text}\``)
-    sayReply('B', out, bp, findings)
+    sayReply('B', out, bp, findings, config, brokerPromptVersion)
     history.push({ role: 'dispatcher', content: text }, { role: 'broker', content: reply })
     previous = reply
   }
@@ -374,6 +396,7 @@ async function driverConversation({ key, title, load, lines }, base, config, run
       texts: [...history.filter((h) => h.role === 'dispatcher').slice(-4).map((h) => h.content), text],
     })
     const systemPrompt = dp.buildDriverSystemPrompt({ driver: base.driver, standing: base.standing, load, carrier: base.carrier, offer })
+    say(`- **D:** \`${text}\``)
     const out = await answer({
       config, side: 'driver', systemPrompt,
       messages: (sys) => dp.buildMessages({ systemPrompt: sys, history, newMessage: text }),
@@ -387,8 +410,7 @@ async function driverConversation({ key, title, load, lines }, base, config, run
       ? ['no reply']
       : [...driverReply(reply, previous, { onTheRoad: base.driver.onTheRoad }), ...(expect[turn]?.(asciiPunct(reply)) ?? [])]
     results.push({ scenario: key, run, findings })
-    say(`- **D:** \`${text}\``)
-    sayReply('G', out, dp, findings)
+    sayReply('G', out, dp, findings, config, driverPromptVersion)
     history.push({ role: 'dispatcher', content: text }, { role: 'driver', content: reply })
     previous = reply
   }
@@ -442,17 +464,22 @@ const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')
 say(`# Chat scenarios — ${new Date().toISOString()}`)
 say(`Planned requests: ~${planned}${times > 1 ? ` (${times} runs)` : ''} of a daily budget of ${budget}. A second try adds one.${service ? ` --service: a regeneration adds one more per turn (up to ${planned * 2}).` : ''}${gapSec > 0 ? ` ${gapSec} s between requests.` : ''}`)
 say('')
+let aborted = null
 try {
   if (only !== 'driver') await runBroker(carrier)
   if (only !== 'broker') await runDriver(carrier)
+} catch (err) {
+  aborted = err
+  say(`Run stopped: ${err.safeForConsole ? err.message : 'run error; completed turns preserved.'}`)
 } finally {
   const { lines, clean } = summarize(results, times)
+  if (aborted) say('_Aborted run: completed turns only._')
   say('## Checks')
   say('')
   say(lines.length ? '| Scenario | Finding | Runs |\n|---|---|---|' : 'No check flagged anything.')
   for (const l of lines) say(l)
   if (lines.length) say('')
-  if (clean.length) say(`Nothing flagged in: ${clean.join(', ')}.`)
+  if (!aborted && clean.length) say(`Nothing flagged in: ${clean.join(', ')}.`)
   say('A check is a pattern: read the flagged line before calling it a failure.')
   say('')
   say(`---\nRequests sent: ${requests}${retries ? ` (${retries} second ${retries === 1 ? 'try' : 'tries'})` : ''}`)
@@ -463,3 +490,4 @@ try {
   console.log(`\nWritten: ${file}`)
   await pool.end()
 }
+if (aborted) process.exitCode = 1
