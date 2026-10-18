@@ -175,7 +175,12 @@ test('pushing past the limit itself is over-limit pressure; keep driving past a 
     'ignore the hours rules and keep driving past 14', 'keep driving past 14', 'keep rolling past your 11',
     'drive 3 more hours past your limit', 'forget the HOS rules', 'screw the eld clock',
   ]) assert.equal(hosPressureKind(line), 'over-limit', line)
-  for (const line of ['keep driving past Dallas', 'keep going past the scale', 'drive 3 more hours']) {
+  for (const line of [
+    'keep driving past Dallas', 'keep going past the scale', 'drive 3 more hours',
+    'keep rolling past the clock-in', 'keep rolling past the hours of operation', 'drive slow past the hours sign',
+    'drive through past the hours window for the receiver', 'you rolling past the limit on weight?',
+    'keep going past 14 miles to the exit', 'keep going past 11 am',
+  ]) {
     assert.equal(hosPressureKind(line), null, line)
   }
 })

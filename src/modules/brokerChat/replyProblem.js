@@ -14,6 +14,7 @@ import { tooLongForChat, CHAT_REPLY_MAX_CHARS } from '../../constants/chatBudget
 import { ignoresUnreachable } from '../../lib/cannotMake.js'
 import { lumperPayerWrong } from './termsTalk.js'
 import { saysBooked } from './bookingTalk.js'
+import { rateReasons, rateReasonLabels, unsupportedRateReasons } from './rateTalk.js'
 import { personaBreak } from '../../lib/personaBreak.js'
 
 // `posting` names the lane for the in-character line; `now` and `text` (the
@@ -52,6 +53,16 @@ export function brokerReplyProblem(reply, { truck, booking = null, posting = nul
     return {
       why: 'said someone other than you pays the lumper',
       hint: ' YOUR TERMS say: Lumper: paid by the broker against a receipt. Say that.',
+      unusable: false,
+    }
+  }
+  // A reason for a raise that the posting, the clock or the truck does not
+  // support ("pickup window's tight" on a pickup three days out).
+  if (posting && unsupportedRateReasons(reply, { posting, truck, now, text }).length > 0) {
+    const real = rateReasonLabels(rateReasons({ posting, truck, now }), { posting, truck })
+    return {
+      why: 'gave a reason this load does not have',
+      hint: ` The only reasons true of this load: ${real.length > 0 ? real.join('; ') : 'none'}.`,
       unusable: false,
     }
   }

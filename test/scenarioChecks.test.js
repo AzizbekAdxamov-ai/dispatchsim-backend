@@ -217,7 +217,9 @@ test('correctCount counts every "correct?" in the chat', () => {
 
 import { s9Ask, s9Email, s9Mc, s9WrongMc, afterTomorrowSixCentral, bookedBeforeAskingMc, STREET, PHONE } from '../scripts/scenarioChecks.js'
 
-const S9_POSTING = { rateUsd: 2000 }
+// Heavy and picking up within a day: weight and a tight window are both true of it.
+const HOUR = 3600e3
+const S9_POSTING = { rateUsd: 2000, distanceMi: 1000, weightLbs: 45000, pickupAt: new Date(Date.now() + 20 * HOUR).toISOString() }
 const S9_OURS = { name: 'Cedar Ridge Transport Services', mcNumber: 'MC-741309' }
 const EMAIL = s9Email(S9_OURS)
 const s9 = (key) => BROKER_EXPECT[key]({ posting: S9_POSTING, email: EMAIL })
@@ -281,6 +283,14 @@ test('S9a t3/t4: first push held; meet in the middle only with a reason, not the
   assert.deepEqual(s9('S9a')[4]('With the weight and the tight window I can do $2,100.'), [])
   assert.deepEqual(s9('S9a')[4]('I can do $2,100.'), ['moved without a reason'])
   assert.deepEqual(s9('S9a')[4]('With the weight I can do $2,200.'), ['gave the whole ask'])
+})
+
+// Kills: a "tight window" accepted as the reason for a raise on a pickup more than a day out
+test('S9 t4: a reason the posting does not have is its own finding', () => {
+  const far = { ...S9_POSTING, weightLbs: 30000, pickupAt: new Date(Date.now() + 48 * HOUR).toISOString() }
+  const t = BROKER_EXPECT.S9a({ posting: far, email: EMAIL })[4]
+  assert.deepEqual(t("I can do $2,100, pickup window's tight."), ['reason not in the posting'])
+  assert.deepEqual(t('I can do $2,100.'), ['moved without a reason'])
 })
 
 // Kills: driver, truck number or email asked again after S9a line 6
@@ -349,4 +359,11 @@ test('paymentInvented: a denial does not cover another clause', () => {
   const said = 'can u pay net 30?'
   assert.equal(paymentInvented("I can't speak to net 30, but we pay net 15.", said), true)
   assert.equal(paymentInvented("I can't speak to net 30 or any days, that's accounting.", said), false)
+})
+
+// Kills: a truthful deadhead reason flagged by a check that cannot see the dispatcher's truck line
+test('S9 t4: a deadhead reason is not judged by the reply-only check', () => {
+  const far = { ...S9_POSTING, weightLbs: 30000, pickupAt: new Date(Date.now() + 48 * HOUR).toISOString() }
+  const t = BROKER_EXPECT.S9a({ posting: far, email: EMAIL })[4]
+  assert.deepEqual(t('Long deadhead to get there, I can do $2,100.'), ['moved without a reason'])
 })

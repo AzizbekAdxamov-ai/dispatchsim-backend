@@ -18,7 +18,7 @@
 
 import { asciiPunct } from '../../lib/plainText.js'
 import {
-  REGION_STATES, REGIONAL_LINEHAUL, NATIONAL_LINEHAUL, fuelPerMile,
+  REGION_STATES, REGIONAL_LINEHAUL, NATIONAL_LINEHAUL, fuelPerMile, marketFacts,
 } from '../../constants/marketRates.js'
 
 // Dollar amounts as numbers: "$3,750" and "$3750" are the same figure.
@@ -188,4 +188,73 @@ export function ratePushes(saidTexts, posting) {
     return [...text.matchAll(PER_MILE)].some((m) => m[3] && Number(m[2]) > ownRpm + OWN_RPM_WITHIN && Number(m[2]) <= 5)
   })
   return { count: pushed.filter(Boolean).length, current: pushed.length > 0 && pushed[pushed.length - 1] }
+}
+
+// -- Reasons to pay more ----------------------------------------------------
+
+// A broker moves from the second push on only for a reason that is true of
+// THIS load, and the reasons are read from its data: weight on the sheet, the
+// market out of the destination, the truck's empty run, the pickup clock.
+// "Tight window" on a pickup three days away is a made-up reason (S9c,
+// 2026-10-17: "$7,600, pickup window's tight" on a pickup 30+ hours out).
+// Freight heavier than this makes the trailer the first thing to ask, and is
+// a reason to pay more.
+export const HEAVY_LBS = 40000
+// A pickup this close (and not past) is "tight"; further out is not.
+export const TIGHT_WINDOW_HOURS = 24
+// An empty run at least this long is worth money.
+export const DEADHEAD_REASON_MILES = 150
+
+// The reasons that are true of this load now: a subset of
+// 'weight' | 'weak-reload' | 'deadhead' | 'tight-window'. `truck` is
+// truckFacts() (null until the dispatcher said where the truck is).
+export function rateReasons({ posting, truck = null, now = new Date() }) {
+  const out = []
+  if (posting.weightLbs > HEAVY_LBS) out.push('weight')
+  const m = marketFacts(posting)
+  if (m && m.destination.linehaul < m.national) out.push('weak-reload')
+  if (truck && truck.miles >= DEADHEAD_REASON_MILES) out.push('deadhead')
+  const hoursToPickup = (new Date(posting.pickupAt).getTime() - now.getTime()) / 3600000
+  if (hoursToPickup > 0 && hoursToPickup <= TIGHT_WINDOW_HOURS) out.push('tight-window')
+  return out
+}
+
+// The words a reply uses to give each reason.
+export const REASON_WORDS = Object.freeze({
+  weight: /\b(?:heavy|weight|lbs|pounds|\d{2}k)\b/i,
+  'weak-reload': /\b(?:reloads?|market)\b/i,
+  deadhead: /\b(?:dead ?head|empty (?:miles|run)|dh\b)/i,
+  'tight-window': /\b(?:tight|short|narrow)\s+(?:pickup\s+)?(?:window|appointment)|\bwindow(?:'s|\s+is)?\s+(?:tight|short|narrow)|\bshort notice\b|\basap\b|\burgent\b|\bhot load\b/i,
+})
+
+// How each reason is put to the broker (true) or what is not on offer (false).
+export function rateReasonLabels(keys, { posting, truck = null }) {
+  const label = {
+    weight: `heavy freight (${Number(posting.weightLbs).toLocaleString('en-US')} lbs)`,
+    'weak-reload': `a weak reload out of ${posting.destinationCity ?? 'there'}`,
+    deadhead: truck?.miles >= 0 ? `their ${truck.miles.toLocaleString('en-US')}-mile empty run` : 'their empty run',
+    'tight-window': 'a pickup within a day',
+  }
+  return keys.map((k) => label[k])
+}
+
+// Dollar figures a person writes: "$7,600" and "$7.6k" (7600). Local to the
+// reason check; dollars() stays as it was for every other caller.
+const KILO = /\$\s?(\d+(?:\.\d+)?)\s?k\b/gi
+function offeredDollars(text) {
+  const t = asciiPunct(String(text ?? ''))
+  return [...dollars(t), ...[...t.matchAll(KILO)].map((m) => Math.round(Number(m[1]) * 1000))]
+}
+
+// The reasons a reply gives for a raise that this load does not have. [] when
+// the reply names no figure above the posted rate (within the lane ceiling
+// the database allows, and not one the dispatcher typed), or gives only true
+// reasons.
+export function unsupportedRateReasons(reply, { posting, truck = null, now = new Date(), text = null }) {
+  const ceiling = posting.distanceMi * 5
+  const theirs = offeredDollars(Array.isArray(text) ? text.join(' ') : text)
+  if (!offeredDollars(reply).some((d) => d > posting.rateUsd && d <= ceiling && !theirs.includes(d))) return []
+  const real = rateReasons({ posting, truck, now })
+  const said = asciiPunct(reply)
+  return Object.keys(REASON_WORDS).filter((k) => REASON_WORDS[k].test(said) && !real.includes(k))
 }

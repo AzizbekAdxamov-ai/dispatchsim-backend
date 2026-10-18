@@ -14,7 +14,7 @@ import { hash01 } from '../../lib/stableHash.js'
 import { leaksReasoning as sharedLeaksReasoning } from '../../lib/reasoningLeak.js'
 import { brokerTerms, termsLines } from '../../constants/accessorials.js'
 import { loadingMode, tarpFor, securementFor, isOpenDeck } from '../../constants/freightHandling.js'
-import { marketClaims, ratePushes } from './rateTalk.js'
+import { marketClaims, ratePushes, rateReasons, rateReasonLabels } from './rateTalk.js'
 import { truckFacts } from './truckTalk.js'
 import { bookingFacts, SOON_PICKUP_HOURS } from './bookingTalk.js'
 import { DRIVING_LIMIT_HOURS, REQUIRED_REST_HOURS } from '../../constants/hosClock.js'
@@ -361,10 +361,30 @@ export function callerBlock(facts, carrier = null) {
   return lines
 }
 
+// The raise rule, with only the reasons that are true of THIS load (rateTalk.js
+// rateReasons): the old static list named "tight pickup window" and "a long
+// empty run" on every load, and the broker used them on loads that had neither.
+const NOT_A_REASON = Object.freeze({
+  weight: 'the weight', 'weak-reload': 'the reload', deadhead: 'deadhead', 'tight-window': 'a tight window',
+})
+export function rateReasonLines(posting, { truck = null, now = new Date() } = {}) {
+  const keys = rateReasons({ posting, truck, now })
+  if (keys.length === 0) {
+    return ['- This load has no reason to pay more; hold, and never give a reason it does not have.']
+  }
+  const rest = Object.keys(NOT_A_REASON).filter((k) => !keys.includes(k)).map((k) => NOT_A_REASON[k])
+  return [
+    `- From their second push on, move only for a reason true of THIS load: ${rateReasonLabels(keys, { posting, truck }).join('; ')}.`,
+    `  Nothing else earns money, not "too cheap"${rest.length > 0 ? ` and not ${rest.join(', ')}` : ''}.`,
+    '  Come up part of the way, then part of the way again.',
+  ]
+}
+
 export function buildBrokerSystemPrompt({ broker, posting, carrier = null, now = new Date(), talk = null, said = null, booking = null }) {
   const rpm = (posting.rateUsd / posting.distanceMi).toFixed(2)
   const ceiling = ceilingFor(posting)
   const ceilingRpm = (ceiling / posting.distanceMi).toFixed(2)
+  const truck = truckFacts({ texts: said ?? [], posting, now })
 
   return [
     `You are ${broker.contactName}, a freight broker at ${broker.name}.`,
@@ -530,10 +550,7 @@ export function buildBrokerSystemPrompt({ broker, posting, carrier = null, now =
     // read out, which tells the carrier to ask again.
     '- Hold without saying that you are holding: nothing that tells them',
     '  asking again will work.',
-    '- From their second push on, move for a REASON, not for pressure. Heavy freight, a tight pickup',
-    '  window, a lane out of a market nobody wants to be in, a long empty',
-    '  run to get there — those earn money. "It is too cheap" on its own',
-    '  does not. Come up part of the way, then part of the way again.',
+    ...rateReasonLines(posting, { truck, now }),
     `- If they ask for more than $${ceiling}, turn it down plainly. You would`,
     '  rather keep looking than lose money on it.',
     '- If they walk away at a number you could still live with, you may come',

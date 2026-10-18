@@ -14,7 +14,7 @@
 // still the record.
 
 import { asciiPunct } from '../src/lib/plainText.js'
-import { dollars, DOLLAR_RE } from '../src/modules/brokerChat/rateTalk.js'
+import { dollars, DOLLAR_RE, rateReasons, unsupportedRateReasons, REASON_WORDS } from '../src/modules/brokerChat/rateTalk.js'
 import { lumperPayerWrong } from '../src/modules/brokerChat/termsTalk.js'
 import { MC_REJECT, saysBooked, asksMc } from '../src/modules/brokerChat/bookingTalk.js'
 import { FALLBACK_REPLY as DRIVER_FALLBACK } from '../src/modules/driverChat/driverChat.prompt.js'
@@ -305,7 +305,6 @@ export function afterTomorrowSixCentral(pickupAt, now = new Date()) {
 
 const EMAIL_ANY = /[a-z0-9._%+-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}/gi
 const MC_WORD = /\bmc\b|motor carrier|docket/i
-const REASON_WORD = /\b(reload|deadhead|market|weight|window|tight|fuel|lane)\b/i
 const questionsOf = (r) => asciiPunct(r).match(/[^.!?]*\?/g) ?? []
 const ASKS_COMPANY = /\b(what|which)\b[^?]{0,15}\bcompany\b|\bwho (are|do) you\b[^?]{0,15}\bwith\b|\bcompany name\b/i
 const ASKS_TRUCK_PLACE = /\bwhere\b[^?]{0,25}\b(truck|you|at|sitting|empty)\b|\bwhen\b[^?]{0,25}\b(empty|available|ready|free|load)\b|\b(what|which)\b[^?]{0,15}\b(trailer|equipment)\b/i
@@ -327,7 +326,19 @@ function s9Every({ email }) {
 const reAsks = (re) => (r) => (questionsOf(r).some((q) => re.test(q)) ? ['asks what was told'] : [])
 const movedOnFirstPush = (posting) => (r) => (offeredFigures(r, [s9Ask(posting)]).some((d) => d > posting.rateUsd) ? ['moved on the first push'] : [])
 const gaveWholeAsk = (posting) => (r) => (offeredFigures(r, [s9Ask(posting)]).some((d) => d >= s9Ask(posting)) ? ['gave the whole ask'] : [])
-const movedWithoutReason = (posting) => (r) => (offeredFigures(r, [s9Ask(posting)]).some((d) => d > posting.rateUsd) && !REASON_WORD.test(r) ? ['moved without a reason'] : [])
+// A move needs a reason true of the posting (weight, the market out of the
+// destination, a pickup within a day); one that is not is its own finding.
+const movedWithoutReason = (posting) => (r) => {
+  if (!offeredFigures(r, [s9Ask(posting)]).some((d) => d > posting.rateUsd)) return []
+  const now = new Date()
+  const text = `$${s9Ask(posting)}`
+  // 'deadhead' is never judged here: this check sees only the reply, not the
+  // dispatcher's truck line (S9's truck sits in the pickup city, 0 miles, so a
+  // deadhead reason would be false anyway, but a truthful one must not be
+  // flagged on a guess).
+  if (unsupportedRateReasons(r, { posting, now, text }).some((k) => k !== 'deadhead')) return ['reason not in the posting']
+  return rateReasons({ posting, now }).some((k) => REASON_WORDS[k].test(r)) ? [] : ['moved without a reason']
+}
 const all = (...fns) => (r) => fns.flatMap((f) => f(r))
 
 // "Booked" before the MC was asked (or rejected) in that reply or earlier.

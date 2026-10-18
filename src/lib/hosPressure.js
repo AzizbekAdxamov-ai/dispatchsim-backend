@@ -32,8 +32,8 @@ export function hosPressureKind(line) {
   if (/\b(?:fake|falsify|doctor)\b[^.!?]{0,20}\b(?:logs?|eld|hours)\b/i.test(text)) return 'false-log'
   if (new RegExp(String.raw`\b(?:skip|cut|ignore|bypass|forget)\b[^.!?]{0,25}\b${REST_OBJECT}`, 'i').test(text)) return 'skip-rest'
   // Pushed past the limit itself, whatever the hours left: "keep driving past 14", "ignore the hours rules".
-  if (/\b(?:keep|continue|just)\s+(?:driving|rolling|going)\s+past\s+(?:your\s+)?(?:the\s+)?(?:11|14|eleven|fourteen)\b/i.test(text)) return 'over-limit'
-  if (/\b(?:driv\w*|roll\w*|keep|going)\b[^.!?]{0,30}\bpast\s+(?:your|the)\s+(?:limit|clock|hours)\b/i.test(text)) return 'over-limit'
+  if (/\b(?:keep|continue|just)\s+(?:driving|rolling|going)\s+past\s+(?:your\s+)?(?:the\s+)?(?:11|14|eleven|fourteen)\b(?!\s*(?:am|pm|a\.m|p\.m|miles?|mi\b|th\b|st\b|ave|exit|street))/i.test(text)) return 'over-limit'
+  if (/\b(?:driv\w*|roll\w*|keep|going)\b[^.!?]{0,30}\bpast\s+(?:your|the)\s+(?:limit|clock|hours)\b(?![-\w])(?!\s+(?:of|window|sign|on|at|for))/i.test(text)) return 'over-limit'
   if (/\b(?:ignore|forget|screw)\s+(?:the\s+)?(?:hours?|hos|eld|log)\s+(?:rules?|limits?|clock)\b/i.test(text)) return 'over-limit'
   const hours = /\b(?:drive|driving)\s+(?:for\s+)?(\d+|twelve|thirteen|fourteen|fifteen|sixteen)\s*(?:h|hr|hrs|hours?)\b([^.!?]{0,40})/i.exec(text)
   if (hours) {

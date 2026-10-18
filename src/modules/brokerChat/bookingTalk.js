@@ -13,14 +13,15 @@
 // Newest message wins for every field. Pure: texts in, facts out.
 
 import { asciiPunct } from '../../lib/plainText.js'
-import { equipmentIn } from './rateTalk.js'
+import { equipmentIn, HEAVY_LBS } from './rateTalk.js'
 import { truckFacts } from './truckTalk.js'
 
 // A pickup closer than this makes the truck's whereabouts the first thing
 // to ask (also used by the prompt's load situation).
 export const SOON_PICKUP_HOURS = 12
 // Freight heavier than this makes the trailer the first thing to ask.
-export const HEAVY_LBS = 40000
+// Defined in rateTalk.js (a heavy load is also a reason to pay more).
+export { HEAVY_LBS }
 
 // -- MC -----------------------------------------------------------------
 
