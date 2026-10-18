@@ -229,8 +229,8 @@ test('the service checks the carrier in agreeRate and in acceptRateCon', () => {
   const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'modules', 'brokerChat', 'brokerChat.service.js'), 'utf8')
   const agree = src.slice(src.indexOf('export async function agreeRate'), src.indexOf('export async function acceptRateCon'))
   const accept = src.slice(src.indexOf('export async function acceptRateCon'), src.indexOf('export async function listConversations'))
-  assert.match(agree, /await assertCarrierVerified\(conversationId, posting\)/)
-  assert.match(accept, /await assertCarrierVerified\(conversationId, posting\)/)
+  assert.match(agree, /await assertCarrierVerified\(conversationId, posting, deps\)/)
+  assert.match(accept, /await assertCarrierVerified\(conversationId, posting, deps\)/)
   // not on the idempotent already-booked path
   assert.ok(accept.indexOf('alreadyAccepted: true') < accept.indexOf('assertCarrierVerified'))
 })

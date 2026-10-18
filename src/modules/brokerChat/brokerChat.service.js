@@ -48,13 +48,18 @@ function assertPostingOpen(posting) {
   if (!posting.brokerId) throw new AppError('BROKER_UNAVAILABLE')
 }
 
+// What the booking flow reaches outside this file for. The default is the
+// real database; the booking-flow test hands in an in-memory stand-in, so
+// the whole agree -> paper -> accept path runs without a DB or a token.
+const DEFAULT_DEPS = Object.freeze({ repo, getCarrier, bookPosting })
+
 // No agreement and no signed paper until the MC the dispatcher gave checks
 // out (decision 2, 2026-10-17). The broker's own sentence goes to the screen
 // in details.message -- the dispatcher is told why, never just refused.
-async function assertCarrierVerified(conversationId, posting) {
+async function assertCarrierVerified(conversationId, posting, deps = DEFAULT_DEPS) {
   const booking = bookingFacts({
-    texts: dispatcherTexts(await repo.listMessages(conversationId)),
-    carrier: await getCarrier(),
+    texts: dispatcherTexts(await deps.repo.listMessages(conversationId)),
+    carrier: await deps.getCarrier(),
     posting,
   })
   const blocked = carrierNotVerified({ booking, contactName: posting.contactName })
@@ -281,11 +286,11 @@ export async function sendMessage({ conversationId, userId, text }) {
 // The dispatcher records what they settled on. Not parsed from the broker's
 // prose on purpose — pulling a number out of free text is fragile, and a
 // wrong number here quietly changes what the load is worth.
-export async function agreeRate({ conversationId, userId, rateUsd }) {
-  const conversation = await repo.getConversation(conversationId, userId)
+export async function agreeRate({ conversationId, userId, rateUsd }, { deps = DEFAULT_DEPS } = {}) {
+  const conversation = await deps.repo.getConversation(conversationId, userId)
   if (!conversation) throw new AppError('CONVERSATION_NOT_FOUND')
 
-  const posting = await repo.getPostingWithBroker(conversation.postingId)
+  const posting = await deps.repo.getPostingWithBroker(conversation.postingId)
   assertPostingOpen(posting)
 
   // loads_rpm_band (migration 007) requires rate_usd between distance and
@@ -300,25 +305,25 @@ export async function agreeRate({ conversationId, userId, rateUsd }) {
   }
 
   if (conversation.status === 'booked') throw new AppError('ALREADY_BOOKED')
-  await assertCarrierVerified(conversationId, posting)
+  await assertCarrierVerified(conversationId, posting, deps)
 
-  const updated = await repo.setAgreedRate(conversationId, userId, rateUsd)
+  const updated = await deps.repo.setAgreedRate(conversationId, userId, rateUsd)
   if (!updated) throw new AppError('CONVERSATION_NOT_FOUND')
 
   // Settling on a new number withdraws whatever paper was already on its
   // way. Without this a dispatcher could re-negotiate up and then accept
   // the old, lower rate confirmation still sitting in the thread.
-  await repo.clearRateCon(conversationId)
+  await deps.repo.clearRateCon(conversationId)
 
   // The broker draws up the paper. Sometimes the paper does not say what
   // the handshake said -- see replyTiming.rateConAmount. The load is
   // created at whatever this number is, so reading the document before
   // accepting it is the entire point of the step.
   const paperRate = rateConAmount(rateUsd, posting.creditRating, { minRate })
-  const withPaper = await repo.setRateCon(conversationId, paperRate)
+  const withPaper = await deps.repo.setRateCon(conversationId, paperRate)
   if (!withPaper) throw new AppError('CONVERSATION_NOT_FOUND')
 
-  await repo.addMessage(
+  await deps.repo.addMessage(
     conversationId,
     'broker',
     'Rate confirmation attached. Look it over and send it back signed.',
@@ -333,8 +338,8 @@ export async function agreeRate({ conversationId, userId, rateUsd }) {
 // read it, accept it. bookPosting reads the rate con's own number through
 // getAgreedRate, so a document that came back low produces a load worth
 // exactly that much.
-export async function acceptRateCon({ conversationId, userId }) {
-  const conversation = await repo.getConversation(conversationId, userId)
+export async function acceptRateCon({ conversationId, userId }, { deps = DEFAULT_DEPS } = {}) {
+  const conversation = await deps.repo.getConversation(conversationId, userId)
   if (!conversation) throw new AppError('CONVERSATION_NOT_FOUND')
 
   // Idempotent: a second click, or a second tab, gets the same load back
@@ -343,34 +348,34 @@ export async function acceptRateCon({ conversationId, userId }) {
     // bookPosting is idempotent for the same user and hands back the load
     // it already created, so the reply has the same shape either way --
     // a caller should not have to branch on whether it got there first.
-    const again = await bookPosting({ postingId: conversation.postingId, userId, driverId: null })
+    const again = await deps.bookPosting({ postingId: conversation.postingId, userId, driverId: null })
     return { conversation, load: again.load, warnings: again.warnings, alreadyAccepted: true }
   }
 
   if (conversation.status !== 'agreed') throw new AppError('NOT_AGREED_YET')
-  if (!(await repo.rateConDelivered(conversationId))) throw new AppError('RATE_CON_NOT_ARRIVED')
+  if (!(await deps.repo.rateConDelivered(conversationId))) throw new AppError('RATE_CON_NOT_ARRIVED')
 
-  const posting = await repo.getPostingWithBroker(conversation.postingId)
+  const posting = await deps.repo.getPostingWithBroker(conversation.postingId)
   assertPostingOpen(posting)
-  await assertCarrierVerified(conversationId, posting)
+  await assertCarrierVerified(conversationId, posting, deps)
 
   // No driver here on purpose. Accepting the paper commits the company to
   // the freight; deciding who runs it is dispatch's next decision, made
   // against the whole fleet rather than in a chat window.
-  const booked = await bookPosting({ postingId: conversation.postingId, userId, driverId: null })
+  const booked = await deps.bookPosting({ postingId: conversation.postingId, userId, driverId: null })
 
   // The load is already committed at this point. If the status update
   // loses a race with another tab, that is not a reason to report failure
   // and strand the thread on 'agreed' -- the posting is booked, and a
   // second accept would then hit POSTING_TAKEN forever. Report what is
   // true: the load exists.
-  const marked = await repo.markBooked(conversationId, userId)
+  const marked = await deps.repo.markBooked(conversationId, userId)
   if (!marked) {
     console.warn(`[brokerChat] load ${booked.load?.id} created but conversation ${conversationId} was not marked booked`)
   }
 
   return {
-    conversation: marked ?? (await repo.getConversation(conversationId, userId)),
+    conversation: marked ?? (await deps.repo.getConversation(conversationId, userId)),
     load: booked.load,
     warnings: booked.warnings,
     alreadyAccepted: false,
@@ -381,17 +386,17 @@ export async function listConversations({ userId }) {
   return { conversations: await repo.listConversations(userId) }
 }
 
-export async function getRateConfirmation({ conversationId, userId }) {
-  const row = await repo.getConversationForPDF(conversationId, userId)
+export async function getRateConfirmation({ conversationId, userId }, { deps = DEFAULT_DEPS } = {}) {
+  const row = await deps.repo.getConversationForPDF(conversationId, userId)
   if (!row) throw new AppError('CONVERSATION_NOT_FOUND')
   if (row.status !== 'agreed' && row.status !== 'booked') throw new AppError('NOT_AGREED_YET')
   // The document cannot be opened before the broker has sent it.
-  if (!(await repo.rateConDelivered(conversationId))) throw new AppError('RATE_CON_NOT_ARRIVED')
+  if (!(await deps.repo.rateConDelivered(conversationId))) throw new AppError('RATE_CON_NOT_ARRIVED')
   // What the dispatcher told the broker (driver, truck number, email for the
   // paper) and the invented shipper and receiver for this posting.
   const booking = bookingFacts({
-    texts: dispatcherTexts(await repo.listMessages(conversationId)),
-    carrier: await getCarrier(),
+    texts: dispatcherTexts(await deps.repo.listMessages(conversationId)),
+    carrier: await deps.getCarrier(),
     posting: row,
   })
   return { ...row, booking, stops: stopsForRow(row) }

@@ -78,6 +78,20 @@ export function generateRateConfirmation({ conversation, posting, broker, carrie
     // --- Broker / Carrier columns ---
     const leftCol = 50
     const rightCol = 320
+    // Column widths: the left stops short of the right, the right runs to
+    // the margin. Every line is wrapped inside its column and the next line
+    // starts below the HEIGHT it actually took (put), never a fixed step --
+    // a long company name or address used to run into the line under it.
+    const leftW = 255
+    const rightW = doc.page.width - 50 - rightCol
+    // Draw text, return where the next line starts: the usual step, or the
+    // wrapped height when the text took more than one line. Empty text draws
+    // nothing but still takes its step, so the layout does not shift.
+    const put = (text, x, yy, w, step) => {
+      if (!text) return yy + step
+      doc.text(text, x, yy, { width: w })
+      return yy + Math.max(step, doc.heightOfString(text, { width: w }) + 2)
+    }
     let y = 135
 
     doc.fontSize(10).font('Helvetica-Bold').fillColor('#000000')
@@ -85,49 +99,51 @@ export function generateRateConfirmation({ conversation, posting, broker, carrie
     doc.text('CARRIER', rightCol, y)
 
     // Both columns read the same way down: who, then who signs, then
-    // the authority number. The carrier has no MC number anywhere in
-    // this program -- there is no column for one and no seed that issues
-    // one -- so the third line says that in words instead of printing an
-    // em dash that reads as a field somebody forgot to fill in.
+    // the authority number.
     y += 15
     doc.fontSize(10).font('Helvetica')
-    doc.text(broker.name || '—', leftCol, y)
-    doc.text(carrier?.name || '—', rightCol, y)
+    let ly = put(broker.name || '—', leftCol, y, leftW, 15)
+    let ry = put(carrier?.name || '—', rightCol, y, rightW, 15)
 
-    y += 15
-    doc.text(broker.contactName || '—', leftCol, y)
-    doc.text(carrier?.contactName || '—', rightCol, y)
+    ly = put(broker.contactName || '—', leftCol, ly, leftW, 15)
+    ry = put(carrier?.contactName || '—', rightCol, ry, rightW, 15)
 
-    y += 15
     // Not `MC ${mcNumber}` -- the stored value already starts with "MC-",
     // so that printed "MC MC-207863".
-    doc.text(broker.mcNumber || 'MC —', leftCol, y)
+    ly = put(broker.mcNumber || 'MC —', leftCol, ly, leftW, 15)
     // The carrier's own authority (048). This line used to read "MC number
     // not issued in this program", in grey, where every real rate
     // confirmation carries the number a broker checks before they send
     // anyone a load. The company has one now, and this is where a
     // dispatcher learns to look for it.
-    doc.text(carrier?.mcNumber || 'MC —', rightCol, y)
+    ry = put(carrier?.mcNumber || 'MC —', rightCol, ry, rightW, 13)
 
-    y += 13
     doc.fontSize(8).fillColor('#666666')
-    doc.text(carrier?.dotNumber ? `USDOT ${carrier.dotNumber}` : '', rightCol, y)
-    y += 11
-    doc.text(carrier?.addressLine ?? '', rightCol, y)
-    y += 11
-    doc.text(carrier?.phone ?? '', rightCol, y)
+    ry = put(carrier?.dotNumber ? `USDOT ${carrier.dotNumber}` : '', rightCol, ry, rightW, 11)
+    ry = put(carrier?.addressLine ?? '', rightCol, ry, rightW, 11)
+    ry = put(carrier?.phone ?? '', rightCol, ry, rightW, 11)
     // What the dispatcher told the broker. A line appears only when it was
-    // said: no placeholder that reads as a field somebody forgot.
+    // said: no placeholder that reads as a field somebody forgot. When
+    // "LABEL  value" is wider than the column (a long company name makes a
+    // long dispatch email), the label gets its own line and the value the
+    // next, so an address is never split across two lines.
     for (const [label, value] of [
       ['DRIVER', carrier?.driverName],
       ['TRUCK', carrier?.truckNumber],
       ['DISPATCH EMAIL', carrier?.dispatcherEmail],
     ]) {
       if (!value) continue
-      y += 11
-      doc.text(`${label}  ${value}`, rightCol, y)
+      const line = `${label}  ${value}`
+      if (doc.widthOfString(line) <= rightW) {
+        ry = put(line, rightCol, ry, rightW, 11)
+      } else {
+        ry = put(label, rightCol, ry, rightW, 11)
+        ry = put(value, rightCol, ry, rightW, 11)
+      }
     }
     doc.fontSize(10).fillColor('#000000')
+    // Each column's last line sits one step above where its next would go.
+    y = Math.max(ly - 15, ry - 11)
 
     // --- Separator ---
     y += 25
@@ -154,19 +170,19 @@ export function generateRateConfirmation({ conversation, posting, broker, carrie
     // Shipper and receiver side by side, each with its appointment. The names
     // and streets are made up per posting (stops.js).
     y += 18
-    const stopBlock = (title, stop, appt, x) => {
-      let sy = y
-      doc.fontSize(9).font('Helvetica-Bold').fillColor('#000000').text(title, x, sy)
+    const stopBlock = (title, stop, appt, x, w) => {
+      doc.fontSize(9).font('Helvetica-Bold').fillColor('#000000').text(title, x, y)
       doc.font('Helvetica').fillColor('#000000')
+      let sy = y + 12
       for (const line of [stop?.name, stop?.street, stop ? `${stop.city}, ${stop.state}` : null, `Appt  ${formatDateTime(appt)}`]) {
         if (!line) continue
-        sy += 12
-        doc.fontSize(9).text(line, x, sy)
+        doc.fontSize(9)
+        sy = put(line, x, sy, w, 12)
       }
-      return sy
+      return sy - 12
     }
-    const shipperEnd = stopBlock('SHIPPER', posting.shipper, posting.pickupAt, leftCol)
-    const receiverEnd = stopBlock('RECEIVER', posting.receiver, posting.deliveryAt, rightCol)
+    const shipperEnd = stopBlock('SHIPPER', posting.shipper, posting.pickupAt, leftCol, leftW)
+    const receiverEnd = stopBlock('RECEIVER', posting.receiver, posting.deliveryAt, rightCol, rightW)
     y = Math.max(shipperEnd, receiverEnd)
     doc.fontSize(10)
 

@@ -7,8 +7,8 @@ import {
   agreeRateSchema,
 } from './brokerChat.schemas.js'
 import * as service from './brokerChat.service.js'
-import { termsForDaysToPay } from '../../constants/paymentTerms.js'
-import { getCarrier, addressLine as carrierAddressLine } from '../carrier/carrier.repository.js'
+import { rateConInput } from './rateConInput.js'
+import { getCarrier } from '../carrier/carrier.repository.js'
 
 export async function openConversation(req, res) {
   const postingId = postingIdSchema.parse(req.params.postingId)
@@ -54,56 +54,11 @@ export async function rateConfirmation(req, res) {
   const { generateRateConfirmation } = await import('./rateConfirmation.js')
   const data = await service.getRateConfirmation({ conversationId, userId: req.auth.userId })
 
-  // Who we are, on the paper the broker files. One row, read fresh: a
-  // company that renames itself does not have to reissue its documents.
+  // Who we are, on the paper the broker files: one carrier row, read fresh
+  // (a company that renames itself does not have to reissue its documents).
+  // What goes where is explained in rateConInput.js.
   const carrier = await getCarrier()
-
-  const pdf = await generateRateConfirmation({
-    // rate_con_rate_usd first: this document IS the paper, so it prints
-    // what the paper says. When the broker's number came back below the
-    // handshake, the difference is visible only to a dispatcher who opens
-    // the PDF and compares — which is the point of the step.
-    conversation: {
-      id: data.id,
-      agreedRateUsd: data.rateConRateUsd ?? data.agreedRateUsd,
-      updatedAt: data.updatedAt,
-    },
-    posting: {
-      originCity: data.originCity, originState: data.originState,
-      destinationCity: data.destinationCity, destinationState: data.destinationState,
-      distanceMi: data.distanceMi, equipmentType: data.equipmentType,
-      equipmentLengthFt: data.equipmentLengthFt, commodity: data.commodity,
-      weightLbs: data.weightLbs, pickupAt: data.pickupAt, deliveryAt: data.deliveryAt,
-      bookedLoadId: data.bookedLoadId, rateUsd: data.rateUsd,
-      shipper: data.stops.shipper, receiver: data.stops.receiver,
-    },
-    broker: {
-      name: data.brokerName, contactName: data.brokerContactName,
-      mcNumber: data.mcNumber,
-      paymentTerms: termsForDaysToPay(data.daysToPay),
-    },
-    // The CARRIER column was fed `req.auth`, which is only { userId } --
-    // so `user?.name || user?.company` was always undefined and every
-    // rate confirmation this program has produced named the broker in
-    // full and left the carrier as an em dash. The names come out of the
-    // users row the query now joins.
-    // The company itself comes from the carrier row (048), not from the
-    // signing user's free-text `company` field: one fleet has one name
-    // and one authority, whichever person happens to sign the paper.
-    // The CONTACT is still the person -- that part was always right.
-    carrier: {
-      name: carrier?.name ?? data.carrierName,
-      contactName: data.carrierContactName,
-      mcNumber: carrier?.mcNumber ?? null,
-      dotNumber: carrier?.dotNumber ?? null,
-      addressLine: carrier ? carrierAddressLine(carrier) : null,
-      phone: carrier?.phone ?? null,
-      // Only what the dispatcher said in the chat; absent otherwise.
-      driverName: data.booking.driverName,
-      truckNumber: data.booking.truckNumber,
-      dispatcherEmail: data.booking.email,
-    },
-  })
+  const pdf = await generateRateConfirmation(rateConInput(data, carrier))
 
   const docId = conversationId.slice(0, 8)
   res.setHeader('Content-Type', 'application/pdf')
