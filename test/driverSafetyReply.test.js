@@ -3,6 +3,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { milesOff } from '../src/lib/cannotMake.js'
+import { asciiPunct } from '../src/lib/plainText.js'
 import { hosPressureKind, hosReplyProblem } from '../src/lib/hosPressure.js'
 import { driverReplyProblem, driverRetryPrompt } from '../src/modules/driverChat/replyProblem.js'
 import { serviceReply } from '../scripts/serviceReply.js'
@@ -182,5 +183,74 @@ test('pushing past the limit itself is over-limit pressure; keep driving past a 
     'keep going past 14 miles to the exit', 'keep going past 11 am',
   ]) {
     assert.equal(hosPressureKind(line), null, line)
+  }
+})
+
+test('a short refusal that names the rule is accepted; one that then agrees is not', () => {
+  assert.equal(hosReplyProblem('Can’t do that, 11‑hour driving limit.', ed15), null)
+  assert.equal(hosReplyProblem('No. That breaks the log rule.', ed16), null)
+  assert.equal(asciiPunct('11‑hour'), '11-hour')
+  assert.equal(hosReplyProblem('No.', ed16)?.unusable, true)
+  assert.equal(hosReplyProblem('No. That breaks the rule, but I can drive 14 straight.', ed15)?.unusable, true)
+  assert.equal(hosReplyProblem("No. That's against the log rules, but I'll do it.", ed16)?.unusable, true)
+  assert.equal(hosReplyProblem("Can't do that much, rolling now.", ed15)?.unusable, true)
+  assert.equal(hosReplyProblem("Can't, that'd put me over the limit.", ed15)?.unusable, true)
+  assert.equal(hosReplyProblem('No. That breaks the log rule, but logging it off duty works.', ed16)?.unusable, true)
+})
+
+test('a refusal that turns around into agreement is flagged on every path', () => {
+  const flagged = [
+    ["No. That's illegal. Alright, I'm driving", ed15],
+    ['No. Illegal. I’m on my way', ed15],
+    ["No. Illegal. Sure, I'll push on", ed15],
+    ['No. Against the rules. OK send it, I’ll go', ed15],
+    ['No. Against the rules. Whatever, doing it', ed15],
+    ["No. It's illegal. Fine, putting it off duty", ed16],
+    ['No. Against the log rules. Fine, switching to off duty and driving on', ed16],
+    ['Nope, illegal. Ok switching to off duty and driving', ed16],
+    ['Nope, illegal. Fine, fake it then', ed16],
+    ["No can do, that's illegal. Alright, I'm driving", ed15],
+    ['Nope, against the log rules. Fine, fake it then', ed16],
+    ["No can do, that's illegal. Whatever, doing it", ed16],
+  ]
+  for (const [reply, line] of flagged) assert.equal(hosReplyProblem(reply, line)?.unusable, true, reply)
+})
+
+test('refusals that name a legal alternative stay accepted', () => {
+  const ok = [
+    ['Can’t do that, 11‑hour driving limit.', ed15],
+    ['No. That breaks the log rule.', ed16],
+    ["No can do, that's against the 10 hour rest rule.", 'Grace skip your 10 hour rest and keep going'],
+    ["No, I can't drive 14 hours straight. Eleven hours is the limit.", ed15],
+    ["No. That's illegal. I'm going to my 10 now, rolling after.", 'Grace skip your 10 hour rest and keep going'],
+    ["Can't do that, 11-hour limit. I'll roll after my reset.", ed15],
+    ["I can't fake it, that's illegal.", ed16],
+  ]
+  for (const [reply, line] of ok) assert.equal(hosReplyProblem(reply, line), null, reply)
+})
+
+test('nothing after the refusal may turn around (structural rule)', () => {
+  const rest = 'Grace skip your 10 hour rest and keep going'
+  const flagged = [
+    ['Nope, against the rules. Leaving now', ed15], ['No. Illegal. Moving out now', ed15],
+    ['No. Illegal. Okay, rolling', ed15], ["No. Illegal. Alright, let's go", ed15],
+    ['No. Against the rules. On the road now', ed15], ['No. Against the rules. Sure thing', ed15],
+    ['No. Against the rules. You got it, boss', ed15], ['No. Against the rules. Pulling out', ed15],
+    ['No. Against the rules. Whatever. Going.', ed15], ["No. Illegal. I'll get it done", ed15],
+    ['No. Illegal. Consider it done', ed15], ['No. Illegal. Got it, hitting the road', ed15],
+    ['No. Illegal. Fine, whatever you say', ed15], ["Can't do that. Illegal. Ok, leaving now", ed15],
+    ["No. Illegal. Fine, I'm off duty on paper and driving", ed16],
+    ["No. Illegal. Sure, I'll fudge the log", ed16],
+    ['No. Illegal. Okay, rolling', rest], ['No. Illegal. Fine, whatever you say', ed16],
+  ]
+  for (const [reply, line] of flagged) assert.equal(hosReplyProblem(reply, line)?.unusable, true, reply)
+  const ok = [
+    ["No. Illegal. I'm going to my 10 hour rest.", rest],
+    ["No. Against the rules. I'll roll after my 10.", rest],
+  ]
+  for (const [reply, line] of ok) assert.equal(hosReplyProblem(reply, line), null, reply)
+  // The holding lines themselves must pass the check.
+  for (const [line, kind] of [[ed15, 'over-limit'], [ed16, 'false-log'], [rest, 'skip-rest']]) {
+    assert.equal(hosReplyProblem(hosReplyProblem('Copy that.', line).safeReply, line), null, kind)
   }
 })

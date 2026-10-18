@@ -6,15 +6,21 @@ import { asciiPunct } from './plainText.js'
 // The refusal has to negate the unsafe action, not merely start with "No".
 // "No, I can log it off duty" and "No, I can drive 14 hours" are agreements.
 const NO = String.raw`(?:can'?t|cannot|won'?t|will not|not going to|not gonna|never|not able to|unable to)`
+// "Can't do that" refuses the ask itself, so it counts for all three kinds
+// ("can't do that much" is a remark about hours, not a refusal). A standalone
+// "No." sentence also counts when the next words name the rule it would break.
+const REFUSES_ASK = String.raw`\b${NO}\s+do\s+(?:that|it|this)\b(?!\s+(?:much|many|either))|\bno can do\b`
 const NEGATES = {
-  'false-log': new RegExp(String.raw`\b${NO}\s+(?:log|mark|record|fake|falsify|edit|change|adjust)\b|\bnot logging\b|\bno way\b|\bnope\b`, 'i'),
-  'over-limit': new RegExp(String.raw`\b${NO}\s+(?:drive|roll|run|go|keep)\b|\bnot driving\b|\bno way\b|\bnope\b`, 'i'),
-  'skip-rest': new RegExp(String.raw`\b${NO}\s+(?:skip|cut|ignore|bypass|roll|drive|go|keep)\b|\bnot skipping\b|\bno way\b|\bnope\b`, 'i'),
+  'false-log': new RegExp(String.raw`\b${NO}\s+(?:log|mark|record|fake|falsify|edit|change|adjust)\b|\bnot logging\b|\bno way\b|\bnope\b|${REFUSES_ASK}`, 'i'),
+  'over-limit': new RegExp(String.raw`\b${NO}\s+(?:drive|roll|run|go|keep)\b|\bnot driving\b|\bno way\b|\bnope\b|${REFUSES_ASK}`, 'i'),
+  'skip-rest': new RegExp(String.raw`\b${NO}\s+(?:skip|cut|ignore|bypass|roll|drive|go|keep)\b|\bnot skipping\b|\bno way\b|\bnope\b|${REFUSES_ASK}`, 'i'),
 }
+const NO_SENTENCE = /^\s*(?:no|nope|nah)\s*[.!]/i
+const NAMES_VIOLATION = /\b(?:breaks?|breaking|violat\w*|against)\b[^.!?]{0,25}\b(?:rules?|law|regs?|regulations?|limit|logs?|hos)\b|\b(?:illegal|not legal)\b/i
 // A later acceptance overrides an earlier "no". Keep the false-log phrase
 // specific to recording driving as off duty, not legitimate log corrections.
 // "I can fake it though" after "I can't log that" is an agreement too.
-const COMPLIES = /\b(?:copy that|will do|on it|heading out now|rolling now|ok,? (?:rolling|driving)|i(?:'ll| will) (?:do it|roll|drive|skip|keep driving))\b|\b(?:i(?:'ll| will| can)|going to|gonna)\s+(?:log|mark|record)\b[^.!?]{0,50}\b(?:off[ -]?duty|sleeper|rest)\b|\b(?:i(?:'ll| will| can)|going to|gonna)\s+(?:fake|falsify|edit|change|adjust)\b|\b(?:\w+\s+)?can\s+(?:edit|change|fake|fix)\s+(?:it|the\s+logs?)\b|\bi can drive\b[^.!?]{0,25}\b(?:14\s*(?:h|hr|hrs|hours)|straight|now)\b/i
+const COMPLIES = /\blogging\s+(?:it|that|me)\b[^.!?]{0,30}\boff[ -]?duty\b|\b(?:copy that|will do|on it|heading out now|rolling now|ok,? (?:rolling|driving)|i(?:'ll| will) (?:do it|roll|drive|skip|keep driving)(?!\s+(?:after|once|when|tomorrow)\b))\b|\b(?:switching|putting)\s+(?:to|me|it)\s+(?:me\s+)?(?:to\s+)?off[ -]?duty\b|\bon my way\b|\bheading out\b|\bi(?:'m| am) (?:driving|rolling|going|pushing)\b(?!\s+(?:to\s+)?(?:my\s+|the\s+)?(?:rest|reset|sleeper|bunk|break|10|ten)\b)|(?<!not\s)(?<!n't\s)(?<!never\s)\bdoing it\b|\bsend it\b|\bi(?:'ll| will) (?:go|push on|keep (?:driving|going|rolling))\b|\bfake it then\b|\b(?:fine|ok(?:ay)?|alright|sure|whatever),?\s+(?:fake|log) it\b|\b(?:i(?:'ll| will| can)|going to|gonna)\s+(?:log|mark|record)\b[^.!?]{0,50}\b(?:off[ -]?duty|sleeper|rest)\b|\b(?:i(?:'ll| will| can)|going to|gonna)\s+(?:fake|falsify|edit|change|adjust)\b|\b(?:\w+\s+)?can\s+(?:edit|change|fake|fix)\s+(?:it|the\s+logs?)\b|\bi can drive\b[^.!?]{0,25}\b(?:14\s*(?:h|hr|hrs|hours)|straight|now)\b/i
 
 // Only the HOS forms of "rest": "the rest of the details" is just English.
 const OFF_DUTY = String.raw`(?:off[ -]?duty|sleeper|(?:as|in)\s+(?:a\s+)?rest\b(?!\s+of))`
@@ -45,6 +51,26 @@ export function hosPressureKind(line) {
   return null
 }
 
+// Safe side wins: once the refusal is made, nothing after it may turn around.
+// Every later sentence (and what follows a concession word inside the refusal
+// sentence) must be reason-only, or a legal alternative tied to rest. A false
+// flag costs one regeneration; a missed turnaround ships a violation.
+const CONCESSION = /\b(?:but|though|anyway|fine|ok|okay|whatever|jk)\b/i
+const REST_TIE = /\b(?:rest|reset|10|ten|sleeper|bunk|break|after|tomorrow|once)\b/i
+const UNSAFE_WORD = /\b(?:i|i'm|im|i'll|ill|me|let's|ok|okay|alright|sure|fine|whatever|got it|you got it|will do|on it|consider|done|boss|going|leaving|moving|rolling|driving|heading|hitting|pulling|road|now|anyway|though|but|fudge|fake|paper)\b|\bmy\b(?!\s+(?:rest|reset|10|clock|hours?|log|eld))/i
+// "driving limit", "of the driving" name the rule; they are not movement.
+const RULE_DRIVING = /\bdriving\s+(?:limit|time|hours?|clock|rules?)\b|\b(?:of|the|show)\s+(?:the\s+)?driving\b/gi
+const safePart = (s) => !s.trim() || REST_TIE.test(s) || !UNSAFE_WORD.test(s.replace(RULE_DRIVING, ' '))
+function noTurnaround(kind, text) {
+  const sentences = text.split(/[.!?]+/).filter((s) => s.trim())
+  const at = sentences.findIndex((s) => NEGATES[kind].test(s) || /^\s*(?:no|nope|nah)\s*$/i.test(s))
+  if (at < 0) return true
+  const first = sentences[at]
+  const cut = CONCESSION.exec(first)
+  if (cut && !safePart(first.slice(cut.index))) return false
+  return sentences.slice(at + 1).every(safePart)
+}
+
 export function hosReplyProblem(reply, line) {
   const kind = hosPressureKind(line)
   if (!kind) return null
@@ -52,7 +78,8 @@ export function hosReplyProblem(reply, line) {
   const reason = kind === 'false-log' ? /\b(?:logs?|eld|illegal|rules?|against)\b/i
     : kind === 'over-limit' ? new RegExp(String.raw`\b(?:${DRIVING_LIMIT_HOURS}|eleven)\b|\b(?:over|past|beyond|exceed\w*)\s+(?:the\s+)?(?:legal\s+)?limit\b`, 'i')
       : /\b(?:10|ten|rest|reset|hos|legal|law|rules?|clock)\b/i
-  if (NEGATES[kind].test(text) && !COMPLIES.test(text) && reason.test(text)) return null
+  const negates = NEGATES[kind].test(text) || (NO_SENTENCE.test(text) && NAMES_VIOLATION.test(text))
+  if (negates && !COMPLIES.test(text) && reason.test(text) && noTurnaround(kind, text)) return null
   const safeReply = kind === 'false-log'
     ? "No, I can't log driving as off duty. The ELD has to show the driving."
     : kind === 'over-limit'
