@@ -11,7 +11,7 @@
 import PDFDocument from 'pdfkit'
 import { brokerTerms, termsLines } from '../../constants/accessorials.js'
 
-const DISCLAIMER = 'DispatchSim — practice document, not a contract'
+const DISCLAIMER = 'Sample document'
 
 function formatCurrency(amount) {
   return '$' + Number(amount).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })

@@ -91,14 +91,15 @@ test('the document is one page', async () => {
   assert.equal(pages, 1, `the rate confirmation came out ${pages} pages`)
 })
 
-test('the practice disclaimer is on the page', async () => {
+test('the sample-document label is on the page', async () => {
   // Not decoration: this document is designed to look like the real
   // thing, so the sentence that says it is not one has to survive every
   // edit to the layout.
   const text = pdfText(await generateRateConfirmation({
     conversation: CONVERSATION, posting: POSTING, broker: BROKER, carrier: CARRIER,
   }))
-  assert.ok(text.includes('practice document, not a contract'))
+  assert.ok(text.includes('Sample document'))
+  assert.ok(!/practice|DispatchSim/i.test(text))
 })
 
 // Kills: a rate confirmation without the broker's terms, or with terms

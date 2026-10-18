@@ -39,14 +39,14 @@ function pdfText(buffer) {
 
 // startDocument() (pdfShared.js) prints the disclaimer once at the TOP of
 // every document unconditionally, before the generator's own code runs --
-// so a plain `text.includes('practice document')` can never fail: the
+// so a plain `text.includes('Sample document')` can never fail: the
 // header copy survives even if a generator's own helpers.footer() call
 // (the bottom copy) is dropped. Counting occurrences is what actually
 // pins the footer call down; this is what the BOL test's simple
 // `.includes` missed, and what let POD and Invoice ship with no check on
 // their footer call at all.
 function disclaimerCount(text) {
-  return (text.match(/practice document/g) ?? []).length
+  return (text.match(/Sample document/g) ?? []).length
 }
 
 const LOAD = {
@@ -80,13 +80,14 @@ test('BOL: one page, correct title, freight and parties on the page', async () =
   assert.ok(text.includes('Earl Simmons'), 'driver missing')
   assert.ok(text.includes('Adxamov Logistics'), 'carrier missing')
   assert.ok(text.includes('net30'), 'payment terms missing')
-  // The disclaimer rides on every practice document -- once from
+  // The disclaimer rides on every document -- once from
   // startDocument()'s header, once from this generator's own
   // helpers.footer() call. THE MUTATION: `.includes` alone can't tell the
   // footer call apart from just the header, because the header's copy
   // survives on its own; the count is what actually depends on
   // helpers.footer() having run.
   assert.equal(disclaimerCount(text), 2, 'disclaimer missing (expected header + footer)')
+  assert.ok(!/practice document/i.test(text), 'old practice wording is back')
   // A real date, never 'Invalid Date'.
   assert.ok(!text.includes('Invalid Date'), 'an Invalid Date leaked onto the page')
 })
@@ -116,6 +117,7 @@ test('POD: delivered facts and a blank signature line', async () => {
   // nothing checked POD's own footer call at all. Counting catches it:
   // one copy from the header is not the same as header + footer.
   assert.equal(disclaimerCount(text), 2, 'disclaimer missing (expected header + footer)')
+  assert.ok(!/practice document/i.test(text), 'old practice wording is back')
 })
 
 test('Invoice PDF: line items sum to the printed total', async () => {
@@ -149,6 +151,7 @@ test('Invoice PDF: line items sum to the printed total', async () => {
   // checked its footer call and a plain `.includes` can't tell the header
   // copy from header + footer.
   assert.equal(disclaimerCount(text), 2, 'disclaimer missing (expected header + footer)')
+  assert.ok(!/practice document/i.test(text), 'old practice wording is back')
 })
 
 // --- Service guards ---

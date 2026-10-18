@@ -6,12 +6,12 @@
 // (PDFKit's built-in fonts are WinAnsi-encoded -- no arrow glyph, no box
 // drawing -- so plain text separators, not unicode).
 //
-// Every document in this project is practice paper. The disclaimer rides
+// Every document in this project carries a sample-document label. The disclaimer rides
 // on every page of every document, generated from one constant.
 
 import PDFDocument from 'pdfkit'
 
-export const DISCLAIMER = 'DispatchSim — practice document, not a contract'
+export const DISCLAIMER = 'Sample document'
 
 // Colors. Grayscale by design: freight paperwork is printed, faxed and
 // photographed at truck stops. A document that depends on color to be

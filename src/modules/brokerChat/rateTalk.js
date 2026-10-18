@@ -202,7 +202,10 @@ export function ratePushes(saidTexts, posting) {
 export const HEAVY_LBS = 40000
 // A pickup this close (and not past) is "tight"; further out is not.
 export const TIGHT_WINDOW_HOURS = 24
-// An empty run at least this long is worth money.
+// An empty run at least this long is worth money. 150 mi is the load board's
+// own DH-O radius (frontend SearchBar.jsx DEFAULT_RADIUS_MI; sql-check.js:430):
+// a truck past it is outside what the dispatcher searched as "nearby". It is
+// the top of the usual 50-150 mi search radius (DAT DH-O allows up to 450).
 export const DEADHEAD_REASON_MILES = 150
 
 // The reasons that are true of this load now: a subset of
