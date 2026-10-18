@@ -12,10 +12,11 @@ import { readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { saysCannotMake, ignoresUnreachable } from '../src/lib/cannotMake.js'
+import { saysCannotMake, ignoresUnreachable, cannotMakeLine, milesOff } from '../src/lib/cannotMake.js'
 import { brokerReplyProblem, brokerRetryPrompt } from '../src/modules/brokerChat/replyProblem.js'
 import { driverReplyProblem, driverRetryPrompt } from '../src/modules/driverChat/replyProblem.js'
 import { CHAT_REPLY_MAX_CHARS } from '../src/constants/chatBudget.js'
+import { clockDayTime } from '../src/constants/appClock.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const read = (...p) => readFileSync(join(here, '..', ...p), 'utf8').replace(/\r\n/g, '\n')
@@ -77,8 +78,8 @@ test('the services regenerate on an unreachable pickup through the one existing 
 
 // Kills: the shared check dropping one of its four problems, reporting them
 // in a different order (the first found is the one the retry names), or
-// marking the unreachable pickup as unusable (it would then be replaced by
-// the holding line instead of kept when the second try still misses it).
+// marking the unreachable pickup as usable (a second miss would then show the
+// reply that never says she cannot make it, instead of the computed line).
 test('the shared reply checks report banned word, leak, length, then the unreachable pickup', () => {
   const truck = { makesIt: false }
   const offer = { makesIt: false }
@@ -92,7 +93,7 @@ test('the shared reply checks report banned word, leak, length, then the unreach
   assert.match(brokerReplyProblem('We need to respond as the broker and push back.', {}).why, /reasoning/)
   assert.equal(driverReplyProblem('Copy that, send it over.', { offer: { makesIt: true } }), null)
   assert.equal(driverReplyProblem(LIVE60, { offer }).why, 'did not say you cannot make that pickup')
-  assert.equal(driverReplyProblem(LIVE60, { offer }).unusable, false)
+  assert.equal(driverReplyProblem(LIVE60, { offer }).unusable, true)
   assert.equal(driverReplyProblem('x'.repeat(CHAT_REPLY_MAX_CHARS + 1), { offer }).unusable, true)
 })
 
@@ -103,4 +104,34 @@ test('the retry prompts name the problem and keep the system prompt first', () =
   assert.equal(broker, 'SYSTEM\n\nYour last reply used a forbidden word. Reply again as the broker, in character, one to three sentences only.')
   const driver = driverRetryPrompt('SYSTEM', { why: 'x', hint: ' Do y.' })
   assert.equal(driver, 'SYSTEM\n\nYour last reply x. Do y. Reply again as the driver, in character, one to three sentences only.')
+})
+
+const PITTSBURGH = {
+  city: 'Pittsburgh', miles: 2517, makesIt: false,
+  pickupAt: new Date('2026-10-20T13:00:00Z'), earliestAt: new Date('2026-10-23T18:30:00Z'),
+}
+
+// Kills: a line that drops the miles or either time, states a distance the
+// offer does not own, or stops saying "can't make it" (ED07), and a line
+// built for a pickup she can make.
+test('cannotMakeLine states the computed city, times and miles, or is null', () => {
+  const line = cannotMakeLine(PITTSBURGH)
+  assert.equal(saysCannotMake(line), true)
+  assert.equal(milesOff(line, PITTSBURGH), false)
+  assert.ok(line.includes('2,517'))
+  assert.ok(line.includes(clockDayTime(PITTSBURGH.pickupAt)))
+  assert.ok(line.includes(clockDayTime(PITTSBURGH.earliestAt)))
+  assert.ok(line.endsWith('?'))
+  assert.equal(cannotMakeLine({ ...PITTSBURGH, makesIt: true }), null)
+  assert.equal(cannotMakeLine({ ...PITTSBURGH, makesIt: null }), null)
+  assert.equal(cannotMakeLine({ ...PITTSBURGH, pickupAt: null }), null)
+  assert.equal(cannotMakeLine(null), null)
+})
+
+// Kills: the wrong-mileage and ignored-unreachable problems keeping their old
+// safeReply (no times) when the offer has them.
+test('both unreachable-pickup problems carry the computed line as safeReply', () => {
+  const line = cannotMakeLine(PITTSBURGH)
+  assert.equal(driverReplyProblem(LIVE60, { offer: PITTSBURGH }).safeReply, line)
+  assert.equal(driverReplyProblem("Can't make it, about 1,200 miles out.", { offer: PITTSBURGH }).safeReply, line)
 })

@@ -6,13 +6,14 @@
 //   why      what to say went wrong ("Your last reply <why>.")
 //   hint     extra instruction for the regeneration (may be empty)
 //   unusable true when no regeneration can be shown as it stands (banned
-//            word, leaked reasoning, too long): the service falls back to a
-//            holding line. A content problem is kept and only logged.
+//            word, leaked reasoning, too long, an unreachable pickup the
+//            reply still does not own up to): the service shows safeReply,
+//            or a holding line. A content problem is kept and only logged.
 // `text` is the dispatcher's line, for checks that depend on what was asked.
 
 import { trippedBannedWord, leaksReasoning } from './driverChat.prompt.js'
 import { tooLongForChat, CHAT_REPLY_MAX_CHARS } from '../../constants/chatBudget.js'
-import { ignoresUnreachable, milesOff } from '../../lib/cannotMake.js'
+import { ignoresUnreachable, milesOff, cannotMakeLine } from '../../lib/cannotMake.js'
 import { refusesWithoutReason } from '../../lib/refusalReason.js'
 import { hosReplyProblem } from '../../lib/hosPressure.js'
 
@@ -31,7 +32,7 @@ export function driverReplyProblem(reply, { offer, text } = {}) {
   if (milesOff(reply, offer)) {
     const miles = offer.miles.toLocaleString('en-US')
     const safeReply = offer.makesIt === false
-      ? `Can't make that pickup from here; it's about ${miles} miles to ${offer.city}. Is there a later pickup time?`
+      ? (cannotMakeLine(offer) ?? `Can't make that pickup from here; it's about ${miles} miles to ${offer.city}. Is there a later pickup time?`)
       : `That pickup is about ${miles} miles from here. What time is it?`
     return { why: 'gave the wrong pickup mileage',
       hint: ` The computed road distance is ${miles} miles. Use that number, not an estimate.`,
@@ -43,7 +44,9 @@ export function driverReplyProblem(reply, { offer, text } = {}) {
     return {
       why: 'did not say you cannot make that pickup',
       hint: ' The facts above say you cannot make that pickup: say so plainly, with the miles, and ask for a later pickup time.',
-      unusable: false,
+      // Still silent on a second try: show the computed line, not the miss.
+      unusable: true,
+      safeReply: cannotMakeLine(offer) ?? undefined,
     }
   }
   // She was asked to do something and said no without saying why.

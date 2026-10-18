@@ -162,9 +162,11 @@ export async function sendMessage({ conversationId, userId, text, images }) {
     // function the eval scripts use. Banned word, leaked reasoning and a
     // too-long reply are unusable: regenerated once, then replaced with a
     // short in-character line -- someone is waiting for an answer, so they
-    // cannot be dropped silently. A content problem (she cannot make the
-    // pickup and the reply never says so) is regenerated once, with one
-    // more request from the daily budget, and logged if it persists.
+    // cannot be dropped silently. A pickup she cannot make that the reply
+    // never owns up to is regenerated once, then replaced by safeReply (the
+    // computed "can't make it" line). Other content problems are
+    // regenerated once, with one more request from the daily budget, and
+    // logged if they persist.
     const problem = driverReplyProblem(reply, { offer, text })
     const why = problem?.why ?? null
 

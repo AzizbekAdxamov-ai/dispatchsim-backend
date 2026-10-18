@@ -6,6 +6,8 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { serviceReply } from '../scripts/serviceReply.js'
 import { brokerReplyProblem, brokerRetryPrompt } from '../src/modules/brokerChat/replyProblem.js'
+import { driverReplyProblem, driverRetryPrompt } from '../src/modules/driverChat/replyProblem.js'
+import { cannotMakeLine } from '../src/lib/cannotMake.js'
 
 const GOOD = 'Sure, I can do that.'
 const WRONG = 'I need a word.'
@@ -106,4 +108,26 @@ test('chat-eval passes the same booking verdict to prompt and reply check', () =
   assert.match(src, /const booking = bookingFacts\(\{ texts: \[line\], carrier, posting, now \}\)/)
   assert.match(src, /said: \[line\],\s+booking,/)
   assert.match(src, /brokerReplyProblem\(r, \{ truck, booking \}\)/)
+})
+
+// Kills: an unreachable pickup whose reply never says so (or states 1,200
+// miles for 2,517) surviving the retry: the driver must end on the computed line.
+test('serviceReply: an unreachable pickup ends on the computed cannot-make line', async () => {
+  const offer = {
+    city: 'Pittsburgh', miles: 2517, makesIt: false,
+    pickupAt: new Date('2026-10-20T13:00:00Z'), earliestAt: new Date('2026-10-23T18:30:00Z'),
+  }
+  for (const second of ['Copy that. Need the address.', "Can't make it, about 1,200 miles out."]) {
+    const replies = ["Copy that. Need pickup address, miles and drop details.", second]
+    const out = await serviceReply({
+      first: async () => replies.shift(),
+      again: async () => replies.shift(),
+      problemOf: (r) => driverReplyProblem(r, { offer }),
+      retryPrompt: driverRetryPrompt,
+      fallback: 'FALLBACK',
+      systemPrompt: 'SYS',
+    })
+    assert.equal(out.reply, cannotMakeLine(offer))
+    assert.equal(out.fellBack, true)
+  }
 })

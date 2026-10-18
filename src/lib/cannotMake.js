@@ -5,6 +5,7 @@
 // (ED07 / ED11). Two copies drift -- the eval would flag what the service
 // accepts, or the other way round.
 import { asciiPunct } from './plainText.js'
+import { clockDayTime } from '../constants/appClock.js'
 
 // ED07 / ED11: saying the pickup cannot be made. "later" counts as well --
 // asking for a later time. A bare "later" is not it ("talk to you later"):
@@ -24,6 +25,17 @@ export function saysCannotMake(text, { broker = false } = {}) {
 // so. Only an explicit `false` counts: null means "not worked out".
 export function ignoresUnreachable(reply, facts, opts) {
   return facts?.makesIt === false && !saysCannotMake(reply, opts)
+}
+
+// The one line a driver says when the computed facts say the truck cannot
+// make the pickup: the city, the time asked, the miles, the earliest arrival,
+// and a question (a reply that asks nothing about the load gets flagged by
+// ED07). Built from the offer, so no number in it can be the model's.
+// null unless the offer says `makesIt === false` and has every part.
+export function cannotMakeLine(offer) {
+  if (offer?.makesIt !== false || !offer.pickupAt || !offer.earliestAt || offer.miles == null) return null
+  const miles = offer.miles.toLocaleString('en-US')
+  return `Can't make ${offer.city} by ${clockDayTime(offer.pickupAt)} — I'm about ${miles} mi out, earliest ${clockDayTime(offer.earliestAt)}. Any later pickup?`
 }
 
 // A number beside mi/miles is a claimed road distance. The prompt's offer
