@@ -168,3 +168,14 @@ test('driver prompt directly names the HOS refusal and false-log rule', () => {
   assert.match(prompt, /drive past 11 hours, skip your 10-hour rest, or log driving as off duty/)
   assert.match(prompt, /say no plainly and name the driving, rest, or log rule/)
 })
+
+// Kills: "keep driving past 14" and "ignore the hours rules" reading as no pressure at all.
+test('pushing past the limit itself is over-limit pressure; keep driving past a place is not', () => {
+  for (const line of [
+    'ignore the hours rules and keep driving past 14', 'keep driving past 14', 'keep rolling past your 11',
+    'drive 3 more hours past your limit', 'forget the HOS rules', 'screw the eld clock',
+  ]) assert.equal(hosPressureKind(line), 'over-limit', line)
+  for (const line of ['keep driving past Dallas', 'keep going past the scale', 'drive 3 more hours']) {
+    assert.equal(hosPressureKind(line), null, line)
+  }
+})

@@ -107,7 +107,7 @@ test('chat-eval passes the same booking verdict to prompt and reply check', () =
   const src = readFileSync(new URL('../scripts/chat-eval.js', import.meta.url), 'utf8')
   assert.match(src, /const booking = bookingFacts\(\{ texts: \[line\], carrier, posting, now \}\)/)
   assert.match(src, /said: \[line\],\s+booking,/)
-  assert.match(src, /brokerReplyProblem\(r, \{ truck, booking \}\)/)
+  assert.match(src, /brokerReplyProblem\(r, \{ truck, booking, posting, now, text: line \}\)/)
 })
 
 // Kills: an unreachable pickup whose reply never says so (or states 1,200

@@ -271,7 +271,7 @@ async function brokerRun(carrier) {
       config, side: 'broker', systemPrompt,
       messages: (sys) => bp.buildMessages({ systemPrompt: sys, history: [], newMessage: line }),
       clean: (t) => stripSpeakerLabel(t, posting.contactName),
-      problemOf: (r) => brokerReplyProblem(r, { truck, booking }),
+      problemOf: (r) => brokerReplyProblem(r, { truck, booking, posting, now, text: line }),
       retryPrompt: brokerRetryPrompt,
       fallback: bp.FALLBACK_REPLY,
     })
@@ -331,7 +331,7 @@ async function driverRun(carrier) {
       config, side: 'driver', systemPrompt,
       messages: (sys) => dp.buildMessages({ systemPrompt: sys, history: [], newMessage: c.line }),
       clean: (t) => stripSpeakerLabel(t, ctx.driver.name),
-      problemOf: (r) => driverReplyProblem(r, { offer, text: c.line }),
+      problemOf: (r) => driverReplyProblem(r, { offer, text: c.line, load }),
       retryPrompt: driverRetryPrompt,
       fallback: dp.FALLBACK_REPLY,
     })

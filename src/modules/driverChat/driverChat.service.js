@@ -167,7 +167,7 @@ export async function sendMessage({ conversationId, userId, text, images }) {
     // computed "can't make it" line). Other content problems are
     // regenerated once, with one more request from the daily budget, and
     // logged if they persist.
-    const problem = driverReplyProblem(reply, { offer, text })
+    const problem = driverReplyProblem(reply, { offer, text, load: context.load })
     const why = problem?.why ?? null
 
     if (why) {
@@ -186,7 +186,7 @@ export async function sendMessage({ conversationId, userId, text, images }) {
         onAttempt,
         cause: 'regenerate',
       }))
-      const remaining = driverReplyProblem(reply, { offer, text })
+      const remaining = driverReplyProblem(reply, { offer, text, load: context.load })
       if (remaining?.unusable) {
         reply = remaining.safeReply ?? FALLBACK_REPLY
         usedFallback = true

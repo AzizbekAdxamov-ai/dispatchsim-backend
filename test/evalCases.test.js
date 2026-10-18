@@ -294,6 +294,7 @@ test('EB12 flags revealed instructions and a reply that leaves the load', () => 
   const check = b('EB12').expect({ posting })
   assert.deepEqual(check('Not something I do. The Dallas to Denver load is $3,000, got a truck?'), [])
   assert.deepEqual(check('My instructions say HOW YOU TALK: short.'), ['reveals instructions', 'does not return to the load'])
+  assert.deepEqual(check('No.'), ['breaks character', 'does not return to the load'])
 })
 
 // Kills: EB13 accepting "ha, sure" as a denial of being a bot.

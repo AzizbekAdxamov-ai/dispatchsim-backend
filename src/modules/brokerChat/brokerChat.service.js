@@ -172,6 +172,7 @@ export async function sendMessage({ conversationId, userId, text }) {
   // regenerated, and the error if the turn failed.
   let regenerated = null
   let failure = null
+  let usedFallback = false
   // The model that actually answered, which is the fallback when the
   // primary was throttled; the turn log records that one.
   let answeredModel = config.model
@@ -202,7 +203,7 @@ export async function sendMessage({ conversationId, userId, text }) {
     // problem (the truck cannot reach the pickup and the reply never says
     // so) is regenerated once, with one more request from the daily budget,
     // and logged if it persists.
-    const problem = brokerReplyProblem(reply, { truck, booking })
+    const problem = brokerReplyProblem(reply, { truck, booking, posting, now, text })
     const why = problem?.why ?? null
 
     if (why) {
@@ -220,8 +221,11 @@ export async function sendMessage({ conversationId, userId, text }) {
         onAttempt,
         cause: 'regenerate',
       }))
-      const remaining = brokerReplyProblem(reply, { truck, booking })
-      if (remaining?.unusable) reply = FALLBACK_REPLY
+      const remaining = brokerReplyProblem(reply, { truck, booking, posting, now, text })
+      if (remaining?.unusable) {
+        reply = remaining.safeReply ?? FALLBACK_REPLY
+        usedFallback = true
+      }
       else if (remaining) console.warn(`[brokerChat] regenerated reply still ${remaining.why}`)
     }
   } catch (err) {
@@ -255,7 +259,7 @@ export async function sendMessage({ conversationId, userId, text }) {
       chat: 'broker', conversationId, dispatcherMessageId: dispatcherMessage.id, userId,
       model: answeredModel, promptVersion: PROMPT_VERSION, systemPrompt, history, text,
       imageCount: 0, reply, regeneratedBecause: regenerated,
-      fellBack: reply === FALLBACK_REPLY, error: failure, providerRequests: spent,
+      fellBack: usedFallback, error: failure, providerRequests: spent,
       attempts, onTheRoad: false,
     })).catch((e) => {
       console.error(`[brokerChat] could not write the turn log for message ${dispatcherMessage.id}: ${e.message}`)
