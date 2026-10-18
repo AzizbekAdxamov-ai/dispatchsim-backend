@@ -12,9 +12,10 @@ import { readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { saysCannotMake, ignoresUnreachable, cannotMakeLine, milesOff } from '../src/lib/cannotMake.js'
+import { saysCannotMake, ignoresUnreachable, cannotMakeLine, milesOff, cannotMakeWithoutMiles } from '../src/lib/cannotMake.js'
 import { brokerReplyProblem, brokerRetryPrompt } from '../src/modules/brokerChat/replyProblem.js'
 import { driverReplyProblem, driverRetryPrompt } from '../src/modules/driverChat/replyProblem.js'
+import { serviceReply } from '../scripts/serviceReply.js'
 import { CHAT_REPLY_MAX_CHARS } from '../src/constants/chatBudget.js'
 import { clockDayTime } from '../src/constants/appClock.js'
 
@@ -134,4 +135,38 @@ test('both unreachable-pickup problems carry the computed line as safeReply', ()
   const line = cannotMakeLine(PITTSBURGH)
   assert.equal(driverReplyProblem(LIVE60, { offer: PITTSBURGH }).safeReply, line)
   assert.equal(driverReplyProblem("Can't make it, about 1,200 miles out.", { offer: PITTSBURGH }).safeReply, line)
+})
+
+// Kills: "Can't make the 8 am pickup, need a later window." passing with no
+// distance (ED07 / ED11, 2026-10-17), the miles-given and makes-it cases
+// being flagged, or the safe line losing the miles / city.
+test('a cannot-make reply that gives no miles is unusable and falls back to the computed line', () => {
+  const WHY = 'did not give the miles to that pickup'
+  for (const reply of ["Can't make the 8 am pickup, need a later window.", "Can't make that pickup, need a later time."]) {
+    const p = driverReplyProblem(reply, { offer: PITTSBURGH })
+    assert.equal(p.why, WHY, reply)
+    assert.equal(p.unusable, true)
+    assert.match(p.hint, /2,517/)
+    assert.equal(p.safeReply, cannotMakeLine(PITTSBURGH))
+  }
+  assert.equal(driverReplyProblem("Can't make it, I'm about 2,517 mi out. Later pickup?", { offer: PITTSBURGH }), null)
+  assert.equal(driverReplyProblem("Can't make it, about 2,500 miles.", { offer: PITTSBURGH }), null)
+  assert.notEqual(driverReplyProblem("Can't make it.", { offer: { ...PITTSBURGH, makesIt: true } })?.why, WHY)
+  assert.equal(cannotMakeWithoutMiles("Can't make it.", { ...PITTSBURGH, makesIt: true }), false)
+  assert.equal(cannotMakeWithoutMiles("Can't make it.", { ...PITTSBURGH, miles: null }), false)
+  const bare = driverReplyProblem("Can't make that pickup, need a later time.", { offer: { city: 'Pittsburgh', miles: 2517, makesIt: false } })
+  assert.match(bare.safeReply, /2,517 miles to Pittsburgh/)
+})
+
+// Kills: a second miles-less reply showing itself instead of the computed line.
+test('serviceReply shows the computed line after two replies without miles', async () => {
+  const replies = ["Can't make the 8 am pickup, need a later window.", "Can't make that pickup, need a later time."]
+  const out = await serviceReply({
+    first: async () => replies.shift(),
+    again: async () => replies.shift(),
+    problemOf: (r) => driverReplyProblem(r, { offer: PITTSBURGH }),
+    retryPrompt: driverRetryPrompt, fallback: 'FALLBACK', systemPrompt: 'SYS',
+  })
+  assert.equal(out.reply, cannotMakeLine(PITTSBURGH))
+  assert.equal(out.fellBack, true)
 })

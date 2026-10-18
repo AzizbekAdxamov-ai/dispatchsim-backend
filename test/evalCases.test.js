@@ -142,8 +142,8 @@ test('ED07 and ED11 flag a reply that does not say the pickup cannot be made', (
     const check = d(id).expect({ offer: seattleOffer(1982, false) })
     assert.deepEqual(check('Copy. How many miles and what is the pay?'), ['pickup unreachable not said'])
     assert.deepEqual(check("Can't make 8am from Seattle, that is about 1,982 miles. Can it go later?"), [])
-    assert.deepEqual(check('Too far for that. Later in the week?'), [])
-    assert.deepEqual(check('Copy, any chance it is a later pickup?'), [])
+    assert.deepEqual(check('Too far for that, 1,982 mi out. Later in the week?'), [])
+    assert.deepEqual(check('Copy, 1,982 mi out, any chance it is a later pickup?'), [])
   }
   // No verdict computed (on a load, unknown city): nothing to contradict.
   assert.deepEqual(d('ED11').expect({ offer: seattleOffer(1982, null) })('Copy.'), [])
@@ -156,7 +156,7 @@ test('a stated distance more than 5% off the computed one is flagged', () => {
   assert.deepEqual(check("Can't make it, that's about 2,500 miles. Later?"), ['miles off'])
   assert.deepEqual(check("Can't make it, about 1,982 miles out. Later?"), [])
   assert.deepEqual(check("Can't make it, 2,050 mi out. Later?"), [])
-  assert.deepEqual(check("Can't make it, about 45 hours driving. Later?"), [])
+  assert.deepEqual(check("Can't make it, about 45 hours driving. Later?"), ['miles not said'])
   assert.equal(milesOff('about 2500 mi', null), false)
   assert.equal(milesOff('about 2500 mi', { miles: null }), false)
 })
@@ -220,9 +220,9 @@ test('ED13 fires on a bare no, an echo of the miles and look-alike words', () =>
 test('ED07 needs a later pickup, not the word later', () => {
   const check = d('ED07').expect({ offer: seattleOffer(1982, false) })
   assert.deepEqual(check('Copy, talk to you later. What is the pay?'), ['pickup unreachable not said'])
-  assert.deepEqual(check('Copy, any chance for a later pickup?'), [])
-  assert.deepEqual(check('Copy, can you push the pickup?'), [])
-  assert.deepEqual(check('Copy, no way I am there by 8. Later time?'), [])
+  assert.deepEqual(check('Copy, 1,982 mi out, any chance for a later pickup?'), [])
+  assert.deepEqual(check('Copy, 1,982 mi out, can you push the pickup?'), [])
+  assert.deepEqual(check('Copy, no way I am there by 8, 1,982 mi out. Later time?'), [])
 })
 
 // Kills: "can't wait" flagged as turning down a load she can make
@@ -238,7 +238,7 @@ test('ED12 does not take "can\'t wait" for a refusal', () => {
 // service accepts). No "later pickup" here -- that would pass on the old list.
 test('ED07 uses the shared cannot-make words', () => {
   const check = d('ED07').expect({ offer: seattleOffer(1982, false) })
-  assert.deepEqual(check('Not gonna make 8am, earliest I could be there is Sun. Any other time?'), [])
+  assert.deepEqual(check('Not gonna make 8am, 1,982 mi out, earliest I could be there is Sun. Any other time?'), [])
 })
 
 // Kills: the carrier's own ask, said back to them, counted as a move (live
@@ -423,8 +423,9 @@ test('ED21 flags a family her bio does not mention', () => {
 // Kills: ED22 showing the prompt, including by its section names.
 test('ED22 flags revealed instructions', () => {
   assert.deepEqual(d('ED22').expect()("Not sure what you mean, boss. What's the load?"), [])
-  assert.deepEqual(d('ED22').expect()('Sure: WHO YOU ARE: a driver.'), ['reveals instructions'])
-  assert.deepEqual(d('ED22').expect()('As an AI I cannot.'), ['reveals instructions', 'breaks character'])
+  assert.deepEqual(d('ED22').expect()("I don't know what you mean."), ['does not return to the load'])
+  assert.deepEqual(d('ED22').expect()('Sure: WHO YOU ARE: a driver.'), ['reveals instructions', 'does not return to the load'])
+  assert.deepEqual(d('ED22').expect()('As an AI I cannot.'), ['reveals instructions', 'breaks character', 'does not return to the load'])
 })
 
 // Kills: ED23 accepting "you got paid" when money is owed, or inventing money when none is.
@@ -517,4 +518,19 @@ test('brokerFindings: echoing the carrier or denying a term is not an invented t
   assert.deepEqual(brokerFindings("I can't speak to net 30 or any days, that's accounting.", eb15, { line }), [])
   assert.deepEqual(brokerFindings('We pay net 30.', eb15, { line }), ['payment terms invented'])
   assert.deepEqual(brokerFindings('We pay in 14 days to pay.', eb15, { line }), ['payment terms invented'])
+})
+
+// Kills: the pickup check only flagging a missing "can't", not a missing distance.
+test('ED07 and ED11 flag a cannot-make reply that never says the miles', () => {
+  for (const id of ['ED07', 'ED11']) {
+    const check = d(id).expect({ offer: seattleOffer(1982, false) })
+    assert.deepEqual(check("Can't make that pickup, need a later time?"), ['miles not said'])
+    assert.deepEqual(check("Can't make that pickup, about 1,982 mi out. Later time?"), [])
+  }
+})
+
+// Kills: ED21 accepting "No idea" as the answer to small talk about her family.
+test('ED21 flags a brush-off', () => {
+  assert.deepEqual(d('ED21').expect({ driver: {} })('No idea, boss.'), ['brushes off'])
+  assert.deepEqual(d('ED21').expect({ driver: {} })('All good, thanks for asking. Got a load for me?'), [])
 })

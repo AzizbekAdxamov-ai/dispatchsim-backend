@@ -68,3 +68,13 @@ export function personaBreak(reply, line) {
   }
   return null
 }
+
+// She said she does not know what that means and never went back to work:
+// no question, no load word, no city of the load. A prompt ask only.
+const WORK = /\?|\b(?:loads?|truck|box|trailer|pick ?up|pu|drop|deliver\w*|miles?|lane|run|work|shipper|receiver)\b/i
+export function noWayBack(reply, line, load = null) {
+  if (!PROMPT_REQUEST.test(asciiPunct(line))) return false
+  const r = asciiPunct(reply)
+  const cities = [load?.originCity, load?.destinationCity].filter(Boolean)
+  return !WORK.test(r) && !cities.some((c) => r.toLowerCase().includes(c.toLowerCase()))
+}

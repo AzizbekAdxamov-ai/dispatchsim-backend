@@ -48,3 +48,11 @@ export function milesOff(reply, offer) {
     .map((m) => Number(m[1].replace(/,/g, '')))
     .some((n) => Math.abs(n - offer.miles) > offer.miles * MILES_TOLERANCE)
 }
+
+// A "can't make it" that never says how far: ED07 / ED11 2026-10-17 replies
+// like "Can't make the 8 am pickup, need a later window." The dispatcher is
+// left with no number to plan around. Only when the offer has computed miles.
+const SAYS_MILES = /\d[\d,]*\s*(?:mi\b|miles?\b)/i
+export function cannotMakeWithoutMiles(reply, offer) {
+  return offer?.makesIt === false && offer.miles != null && saysCannotMake(reply) && !SAYS_MILES.test(String(reply ?? ''))
+}
