@@ -349,3 +349,27 @@ test('confirmsUnknownBooking: a confirmation is caught even when another sentenc
   assert.equal(confirmsUnknownBooking("Good to hear, you're locked in with Mike. No worries on the rate.", { text: EB17 }), true)
   assert.equal(confirmsUnknownBooking("Not sure. Yes, you're all set.", { text: EB17 }), true)
 })
+
+// Kills: bare "already booked" / "just booked" read as the claim of THIS
+// load: a dispatcher who booked some other load is making no claim.
+test('confirmsUnknownBooking: a different booking is no claim about this load', () => {
+  assert.equal(confirmsUnknownBooking("Sure, what's your MC?", { text: 'i already booked a load this morning, got a second truck, this one open?' }), false)
+  assert.equal(confirmsUnknownBooking("Yes it's open. $2,000 all-in.", { text: 'just booked another one, is this still there' }), false)
+})
+
+// Kills: the it/this/that/with/through requirement loosened or tightened too
+// far -- every way of saying THIS load is booked must still be a claim.
+test('confirmsUnknownBooking: booked it / this / that / with <someone> is the claim', () => {
+  for (const text of ['i already booked it', 'just booked this', 'already booked that one', 'i already booked with ur guy mike', 'just booked w ur guy', 'already booked through ur office']) {
+    assert.equal(confirmsUnknownBooking('Great, confirmed.', { text }), true, text)
+  }
+})
+
+// Kills: the held-position words dropped, so the rate-hold and payment safe
+// lines read as going along with a claimed booking; or made so wide that a
+// confirmation which also holds the rate slips through.
+test('confirmsUnknownBooking: holding the rate or payment is not going along; confirming still is', () => {
+  assert.equal(confirmsUnknownBooking('$2,000 all-in is where this one stays.', { text: EB17 }), false)
+  assert.equal(confirmsUnknownBooking("Payment terms are on accounting's side.", { text: EB17 }), false)
+  assert.equal(confirmsUnknownBooking("You're all set, and the rate stays.", { text: EB17 }), true)
+})

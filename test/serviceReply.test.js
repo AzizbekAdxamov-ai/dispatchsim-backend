@@ -190,6 +190,16 @@ test('every broker safe line passes the full brokerReplyProblem', () => {
   }
 })
 
+// Kills: a safe line that is flagged when the dispatcher's text claims an
+// earlier booking, pushes the weight and names payment days all at once --
+// the retry would judge it by the same facts and throw it away.
+test('every broker safe line passes the full check when the text claims a booking too', () => {
+  const text = 'i already booked this with ur guy mike, can u add 10k lbs more, need $2,600 and net 30'
+  for (const line of [PAYMENT_TERMS_LINE, weightHoldLine(LANE), NO_BOOKING_LINE, holdRateLine(LANE)]) {
+    assert.equal(brokerReplyProblem(line, { posting: LANE, now: WHEN, text, said: [text], booking: null }), null, line)
+  }
+})
+
 // Kills: a service that stops giving brokerReplyProblem the same facts for
 // the first reply and the regenerated one (brokerSaid / bookedHere dropped
 // from one call), so the retry is judged by weaker rules than the first reply.

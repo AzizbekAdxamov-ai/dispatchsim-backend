@@ -356,6 +356,31 @@ test('brokerReplyProblem: earlier broker figures and refused dispatcher figures 
 // fallback would be thrown away on the next turn.
 test('holdRateLine passes the full broker reply check', async () => {
   const { brokerReplyProblem } = await import('../src/modules/brokerChat/replyProblem.js')
-  assert.equal(holdRateLine(FLAT), '$2000 all-in is where this one stays.')
+  assert.equal(holdRateLine(FLAT), '$2,000 all-in is where this one stays.')
   assert.equal(brokerReplyProblem(holdRateLine(FLAT), { posting: FLAT, now: NOW, text: 'need $2,600', booking: null }), null)
+})
+
+// Kills: the refusal test looking at the figure's own clause only: "You said
+// $2,300, I can't do that" and "$2,500 is high" are turn-downs, not offers.
+test('raiseWithoutReason: a refusal in the clause after their figure, or "is high", is not a raise', () => {
+  const o = (theirs) => ({ posting: FLAT, now: NOW, theirs })
+  assert.equal(raiseWithoutReason("You said $2,300, I can't do that, $2,000 is it.", o([2300])), false)
+  assert.equal(raiseWithoutReason("Ok $2,500 is high, I'm at $2,000.", o([2500])), false)
+  // The thousands comma still keeps "$2,600" one figure.
+  assert.equal(raiseWithoutReason("$2,600? Can't do that.", o([2600])), false)
+})
+
+// Kills: the next-clause refusal applied when their figure is accepted
+// ("$2,300 works, no problem" is a yes), or "no problem" counted as a "no".
+test('raiseWithoutReason: accepting their figure is a raise even with "no problem" after it', () => {
+  const o = { posting: FLAT, now: NOW, theirs: [2300] }
+  assert.equal(raiseWithoutReason('Ok $2,300 works, no problem.', o), true)
+  assert.equal(raiseWithoutReason('I can do $2,300, no worries.', o), true)
+  assert.equal(raiseWithoutReason('So $2,300, no problem.', o), true)
+  assert.equal(raiseWithoutReason('$2,300 works, I cannot wait to move it.', o), true)
+})
+
+// Kills: holdRateLine printing thousands bare ("$12500").
+test('holdRateLine groups thousands like the weight line', () => {
+  assert.equal(holdRateLine({ ...FLAT, rateUsd: 12500 }), '$12,500 all-in is where this one stays.')
 })

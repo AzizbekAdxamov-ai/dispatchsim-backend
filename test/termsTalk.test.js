@@ -143,3 +143,25 @@ test('paymentTermsClaimed: business days to pay are flagged', () => {
   assert.equal(paymentTermsClaimed('We get you paid in 3 business days.'), true)
   assert.equal(paymentTermsClaimed('It is 3 business days to pay.'), true)
 })
+
+// Kills: fee / charge / percent / % counted as payment talk on their own
+// ("no fee for the tarp", "100% on time" got the accounting line).
+test('paymentTermsClaimed: a fee, charge or percentage with no payment talk is clean', () => {
+  for (const reply of [
+    'No fee on our side for the tarp.',
+    'Rate is $2,000 all-in, no extra charge.',
+    'Appointment fee? None.',
+    'Pickup is 100% on time needed.',
+    "There's a 5% fuel surcharge built in.",
+  ]) {
+    assert.equal(paymentTermsClaimed(reply), false, reply)
+  }
+})
+
+// Kills: the payment-words gate dropped to nothing (a fee beside payment talk
+// passes), or narrowed so "accounting" / "pay" no longer count.
+test('paymentTermsClaimed: a fee, charge or percentage beside payment talk is flagged', () => {
+  assert.equal(paymentTermsClaimed("They take a fee when you're paid."), true)
+  assert.equal(paymentTermsClaimed("That's accounting's, around 2 percent."), true)
+  assert.equal(paymentTermsClaimed('There is a 3% charge on payments.'), true)
+})

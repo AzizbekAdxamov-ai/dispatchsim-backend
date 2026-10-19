@@ -299,14 +299,21 @@ export function unsupportedRateReasons(reply, { posting, truck = null, now = new
 //   theirs   figures the dispatcher named; one the reply refuses ("I can't
 //            do $5,475") is not an offer
 //   earlier  figures the broker itself already said in this thread
-const REFUSES_FIGURE = /\b(?:can'?t|cannot|won'?t|not|no)\b/i
+const REFUSES_FIGURE = /\b(?:can'?t|cannot|won'?t|not|no|high|steep|too (?:much|high|steep))\b/i
+// "no problem" is a yes, not a refusal.
+const NO_OBJECTION = /\b(?:no (?:problem|worries|issue)|not a problem)\b/gi
 // Not a thousands comma or a decimal point: "$2,600" is one figure.
 const CLAUSES = /[!?;]|[.,](?!\d)|\bbut\b/i
 
+const refuses = (clause) => REFUSES_FIGURE.test(clause.replace(NO_OBJECTION, ' '))
+
+// Their figure is refused when its clause says no, or (unless that clause
+// says yes) the clause after it does: "You said $2,300, I can't do that."
 function refusedFigure(reply, value, theirs) {
   if (!theirs.includes(value)) return false
-  const clauses = asciiPunct(reply).split(CLAUSES).filter((c) => dollars(c).includes(value))
-  return clauses.length > 0 && clauses.every((c) => REFUSES_FIGURE.test(c))
+  const clauses = asciiPunct(reply).split(CLAUSES)
+  const own = clauses.map((c, i) => [c, i]).filter(([c]) => dollars(c).includes(value))
+  return own.length > 0 && own.every(([c, i]) => refuses(c) || (!ACCEPTS.test(c) && refuses(clauses[i + 1] ?? '')))
 }
 
 export function raiseWithoutReason(reply, { posting, truck = null, now = new Date(), theirs = [], earlier = [] }) {
@@ -322,5 +329,5 @@ export function raiseWithoutReason(reply, { posting, truck = null, now = new Dat
 
 // What the broker says when it moved with no reason to: the posted rate stays.
 export function holdRateLine(posting) {
-  return `$${posting.rateUsd} all-in is where this one stays.`
+  return `$${posting.rateUsd.toLocaleString('en-US')} all-in is where this one stays.`
 }

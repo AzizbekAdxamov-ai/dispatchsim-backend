@@ -96,3 +96,52 @@ test('brokerReplyProblem: agreeing to more weight is unusable and falls back to 
   assert.equal(p.safeReply, weightHoldLine(POSTING))
   assert.match(p.hint, /30,000 lbs/)
 })
+
+// -- Routine messages that state a weight or capacity ask for no change -----------
+
+const LOAD = { ...POSTING, weightLbs: 43480 }
+const loadCheck = (reply, text) => weightChangeAgreed(reply, { posting: LOAD, text })
+
+// Kills: a bare figure or capacity in the dispatcher's text read as a request
+// to change the weight (every "45k capacity" greeting got the safe line).
+test('weightChangeAgreed: a capacity or a stated weight is not a change request', () => {
+  assert.equal(loadCheck("Sure, $2,000 all-in. What's your MC?", 'hi dry van 45k capacity, whats the rate'), false)
+  assert.equal(loadCheck("Yes it's still open. 43,480 lbs.", 'still available? can haul 44,000 lbs'), false)
+  assert.equal(loadCheck("Fine, what's your MC?", 'I got a 53ft with 10k lbs of space'), false)
+  assert.equal(loadCheck("Sure, what's your MC?", 'can you do $2,300? i have 44k capacity'), false)
+})
+
+// Kills: "up to" counted as a change word when it says what the truck takes.
+test('weightChangeAgreed: "can take up to 45k lbs" is capacity, not a request', () => {
+  assert.equal(loadCheck('Yes, I can send the rate con after MC.', 'truck can take up to 45k lbs'), false)
+  assert.equal(loadCheck('Yes, go ahead.', 'can you go up to 50k lbs?'), true)
+})
+
+// Kills: the posted-weight exemption removed: a reply that states the posted
+// weight is not going along with a different one.
+test('weightChangeAgreed: a reply that states the posted weight is not agreeing to another', () => {
+  assert.equal(loadCheck('Yes, 43,480 lbs.', 'is it 43,480 lbs?'), false)
+  assert.equal(loadCheck('Yes, 43,480 lbs.', 'can u add 10k lbs more'), false)
+  assert.equal(loadCheck('Yes, no problem.', 'can u add 10k lbs more'), true)
+})
+
+// Kills: the request rule dropped for figures (a changed weight put as a
+// question, "40k ok?", goes unflagged), or the cue/figure sentence pairing lost.
+test('weightChangeAgreed: a different figure put as a request is a change request', () => {
+  assert.equal(loadCheck('Sure, no problem.', 'weight? 40k ok?'), true)
+  assert.equal(loadCheck('Sure, no problem.', 'can you do 50k lbs?'), true)
+})
+
+// Kills: AGREES_WEIGHT matching "sure" inside "not sure" (a hedge read as yes),
+// or the denied-agreement strip removed.
+test('weightChangeAgreed: a negated "sure" is no agreement', () => {
+  assert.equal(loadCheck('Not sure, check the sheet.', 'can u add 10k lbs more'), false)
+  assert.equal(loadCheck("That doesn't work for me.", 'can u add 10k lbs more'), false)
+})
+
+// Kills: question sentences counted as statements (a yes-word inside a
+// question), or their lead-in ("Sure,") ignored so a real yes is missed.
+test('weightChangeAgreed: the yes must be said, not asked', () => {
+  assert.equal(loadCheck('Is that fine? What is your MC?', 'can u add 10k lbs more'), false)
+  assert.equal(loadCheck("Sure, what's your MC?", 'can u add 10k lbs more'), true)
+})

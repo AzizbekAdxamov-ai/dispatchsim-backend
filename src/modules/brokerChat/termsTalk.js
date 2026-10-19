@@ -42,23 +42,31 @@ const PAY_TOPIC = new RegExp([
   String.raw`\bpay(?:s|ing)? (?:out|fast|quick)\b`,
   String.raw`\b(?:pay|paid)\b[^.!?]{0,15}\b(?:in|within|after)\s+\d{1,3}\s*(?:business\s+)?days?\b`,
   String.raw`\b\d{1,3}\s*(?:business\s+)?days?\s+(?:to\s+)?pay\b`,
-  String.raw`\b(?:fee|charge|percent)\b`,
-  '%',
 ].join('|'), 'i')
+// A fee, a charge or a percentage is payment talk only beside payment words:
+// "no fee for the tarp" and "100% on time" are not.
+const FEE_WORDS = /\b(?:fee|charge|percent)\b|%/i
+const PAYING = /\b(?:accounting|quick ?pay|factor(?:ing|ed)?|pay(?:s|ing)?|paid|payments?)\b/i
 const DEFERS = /\baccounting\b|\brate ?con\b|can'?t speak to|not my (?:side|department|call)/i
 // Accessorials have their own terms and their own check (lumperPayerWrong).
 const ACCESSORIAL = /\b(?:lumper|detention|tonu|layover)\b/i
-const PAY_CLAUSES = /(?<=[.!?])\s+|[,;]|\bbut\b/i
+const SENTENCES = /(?<=[.!?])\s+/
+const PAY_CLAUSES = /[,;]|\bbut\b/i
 const PERCENT = /%/
 
 // True when the reply talks about payment terms other than by sending them
 // to accounting: a topic clause must defer, repeat only numbers the
 // dispatcher typed (`said`, a text or a list of texts) and name no percentage.
+// A fee word is a topic only in a sentence that also talks payment.
 export function paymentTermsClaimed(reply, said = []) {
   const theirs = new Set(asciiPunct([said].flat().join(' ')).match(/\d+(?:\.\d+)?/g) ?? [])
-  return asciiPunct(String(reply ?? '')).split(PAY_CLAUSES).some((clause) => {
-    if (ACCESSORIAL.test(clause) || !PAY_TOPIC.test(clause)) return false
-    if (!DEFERS.test(clause) || PERCENT.test(clause)) return true
-    return (clause.match(/\d+(?:\.\d+)?/g) ?? []).some((n) => !theirs.has(n))
+  return asciiPunct(String(reply ?? '')).split(SENTENCES).some((sentence) => {
+    const paying = PAYING.test(sentence)
+    return sentence.split(PAY_CLAUSES).some((clause) => {
+      if (ACCESSORIAL.test(clause)) return false
+      if (!PAY_TOPIC.test(clause) && !(paying && FEE_WORDS.test(clause))) return false
+      if (!DEFERS.test(clause) || PERCENT.test(clause)) return true
+      return (clause.match(/\d+(?:\.\d+)?/g) ?? []).some((n) => !theirs.has(n))
+    })
   })
 }
