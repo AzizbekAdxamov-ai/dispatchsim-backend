@@ -76,6 +76,21 @@ test('paymentTermsClaimed: EB15 "we do quick pay" is flagged even with accountin
   assert.equal(paymentTermsClaimed("We do quick pay, the fee's just our standard accounting charge."), true)
 })
 
+// Kills: a rate-con deferral in the same clause masking an earlier quick-pay commitment.
+test('paymentTermsClaimed: a quick-pay commitment is flagged despite a rate-con deferral', () => {
+  for (const reply of [
+    'We offer quick pay and the details are on the rate con.',
+    'We can get you quick pay and accounting will give the details on the rate con.',
+    'Quick pay is something we do and details are on the rate con.',
+    'Yes, we have a quick pay option and accounting will put details on the rate con.',
+  ]) {
+    assert.equal(paymentTermsClaimed(reply, ['Do you offer quick pay?']), true, reply)
+    assert.equal(brokerReplyProblem(reply, { posting: POSTING, text: 'Do you offer quick pay?' }).safeReply, PAYMENT_TERMS_LINE)
+  }
+  assert.equal(paymentTermsClaimed('Quick pay details are on the rate con.', ['Do you offer quick pay?']), false)
+  assert.equal(paymentTermsClaimed("I can't say whether quick pay is available; accounting has the terms.", ['Do you offer quick pay?']), false)
+})
+
 // Kills: a denial excusing the topic: "we don't do quick pay" is still the
 // broker stating a payment term (the prompt says never to say whether).
 test('paymentTermsClaimed: denying quick pay is still naming a term', () => {

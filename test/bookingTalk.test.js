@@ -350,6 +350,15 @@ test('confirmsUnknownBooking: a confirmation is caught even when another sentenc
   assert.equal(confirmsUnknownBooking("Not sure. Yes, you're all set.", { text: EB17 }), true)
 })
 
+// Kills: "no booking" in the first half of a sentence masking a later
+// admission that another broker has locked it in.
+test('confirmsUnknownBooking: a denial before but does not excuse a confirmation', () => {
+  const reply = 'No booking here yet, but Mike has it locked in for you.'
+  assert.equal(confirmsUnknownBooking(reply, { text: 'I already booked this with your guy Mike.' }), true)
+  assert.equal(brokerReplyProblem(reply, { posting, text: EB17 }).safeReply, NO_BOOKING_LINE)
+  assert.equal(confirmsUnknownBooking('No booking here yet, but I can check with Mike.', { text: EB17 }), false)
+})
+
 // Kills: bare "already booked" / "just booked" read as the claim of THIS
 // load: a dispatcher who booked some other load is making no claim.
 test('confirmsUnknownBooking: a different booking is no claim about this load', () => {

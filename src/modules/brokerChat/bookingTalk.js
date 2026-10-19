@@ -278,7 +278,8 @@ export function carrierNotVerified({ booking, contactName }) {
 // A denial word. (Moved here from scripts/evalCases.js, which imports it.)
 export const NEGATION = /\b(no|nope|nah|not|never|didn'?t|don'?t|isn'?t|wasn'?t|haven'?t|nothing)\b/i
 // The reply without its negated sentences: a denial is not a confirmation.
-export const unnegated = (r) => r.split(/(?<=[.!?])\s+/).filter((x) => !NEGATION.test(x)).join(' ')
+// A denial before "but" does not cancel a later confirmation in that sentence.
+export const unnegated = (r) => r.split(/(?<=[.!?])\s+|\b(?:but|however|though)\b/i).filter((x) => !NEGATION.test(x)).join(' ')
 
 // The dispatcher says the load is already booked, or that someone on the
 // broker's side gave it to them ("i already booked this with ur guy mike",

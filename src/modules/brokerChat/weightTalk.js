@@ -38,6 +38,11 @@ const AGREES_WEIGHT = /\b(?:isn'?t|is not|not|won'?t be|shouldn'?t be)\s+(?:an?\
 const DENIED_AGREEMENT = /\b(?:not|never|n'?t)\s+(?:\w+\s+)?(?:sure|fine|works?)\b|\b(?:doesn'?t|don'?t|won'?t|isn'?t)\s+work\w*/gi
 // The reply holds the weight as posted.
 const HOLDS_WEIGHT = /\b(?:can'?t|cannot|won'?t|not able to)\s+(?:add|go|take|change|bump|do)\b|\b(?:stays?|doesn'?t change|won'?t change|as posted|is what it is)\b/i
+// An accepted extra amount overrides a posted-weight reference elsewhere.
+// Keep the extra amount and approval in one contrastive clause so a denial
+// after "but" cannot borrow a "sure" from the preceding clause.
+const EXTRA_AMOUNT = /\b(?:add(?:ing)?|more|extra|another|put on)\b[^.!?]{0,35}\b\d[\d,]*(?:\.\d+)?\s*(?:k|lbs?|pounds?)\b|\b\d[\d,]*(?:\.\d+)?\s*(?:k|lbs?|pounds?)\b[^.!?]{0,25}\b(?:more|extra)\b/i
+const REFUSES_EXTRA = /\b(?:no|never|not|can'?t|cannot|won'?t|doesn'?t|don'?t|isn'?t)\b/i
 
 const near = (w, posted) => Math.abs(w - posted) <= posted * WEIGHT_NEAR_SHARE
 
@@ -60,6 +65,13 @@ function repliesYes(r) {
   return AGREES_WEIGHT.test(said)
 }
 
+function acceptsExtraAmount(reply) {
+  return reply.split(SENTENCES).flatMap((sentence) => sentence.split(/\bbut\b|;/i)).some((clause) => {
+    const withoutPositiveNo = clause.replace(/\bno (?:problem|issue)\b/gi, ' ')
+    return EXTRA_AMOUNT.test(clause) && !REFUSES_EXTRA.test(withoutPositiveNo) && repliesYes(clause)
+  })
+}
+
 function asksWeightChange(asked, posting) {
   if (CHANGE_ASK.test(asked.replace(CAPACITY_UP_TO, ' '))) return true
   // The cue and the figure must share a sentence: "can you do $2,300? i have 44k capacity".
@@ -76,7 +88,8 @@ export function weightChangeAgreed(reply, { posting, text }) {
   const asked = asciiPunct(String(text ?? ''))
   const stated = statedWeights(r)
   const holdsPosted = stated.some((w) => near(w, posting.weightLbs))
-  if (!holdsPosted && asksWeightChange(asked, posting) && repliesYes(r) && !HOLDS_WEIGHT.test(r)) return true
+  if (asksWeightChange(asked, posting)
+    && (acceptsExtraAmount(r) || (!holdsPosted && repliesYes(r) && !HOLDS_WEIGHT.test(r)))) return true
   const theirs = new Set(statedWeights(asked))
   return stated.some((w) => !near(w, posting.weightLbs) && !theirs.has(w))
 }

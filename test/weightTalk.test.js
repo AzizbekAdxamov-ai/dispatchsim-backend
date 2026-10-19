@@ -125,6 +125,25 @@ test('weightChangeAgreed: a reply that states the posted weight is not agreeing 
   assert.equal(loadCheck('Yes, no problem.', 'can u add 10k lbs more'), true)
 })
 
+// Kills: a posted-weight reference hiding an explicit offer to add weight.
+test('weightChangeAgreed: stating the posted weight cannot mask an offer to add more', () => {
+  const ask = 'Can you add 10k lbs more?'
+  for (const reply of [
+    'Sure, this is 43,480 lbs as posted, and we can add 10k more.',
+    'The posted weight is 43,480 lbs. No problem adding 10k lbs.',
+    '43,480 lbs as posted, and we can take another 10k lbs.',
+    '43,480 lbs as posted, and we can handle 10k lbs more.',
+    'The sheet says 43,480 lbs as posted, but 10k more is fine.',
+    '43,480 lbs as posted; sure, we can put on 10k more.',
+  ]) {
+    assert.equal(loadCheck(reply, ask), true, reply)
+    assert.equal(brokerReplyProblem(reply, { posting: LOAD, text: ask }).safeReply, weightHoldLine(LOAD))
+  }
+  assert.equal(loadCheck('This is 43,480 lbs as posted; I cannot add 10k.', ask), false)
+  assert.equal(loadCheck('The sheet says 43,480 lbs as posted, but 10k more is not fine.', ask), false)
+  assert.equal(loadCheck('43,480 lbs as posted; no, we cannot put on 10k more.', ask), false)
+})
+
 // Kills: the request rule dropped for figures (a changed weight put as a
 // question, "40k ok?", goes unflagged), or the cue/figure sentence pairing lost.
 test('weightChangeAgreed: a different figure put as a request is a change request', () => {

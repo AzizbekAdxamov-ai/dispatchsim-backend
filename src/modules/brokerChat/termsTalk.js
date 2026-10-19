@@ -57,6 +57,13 @@ const PERCENT = /%/
 // sentence that sends the carrier to accounting, names no term. A topic word
 // still counts ("Payment is net 30 and no fee" is flagged).
 const NO_FEE = /\bno (?:\w+ )?(?:fee|charge)s?\b/i
+// Separate a statement that quick pay exists from a referral for its details.
+// The latter cannot undo the former in the same clause.
+const QUICK_PAY_ASSERTIONS = [
+  /\b(?:we|i)\s+(?:do|don'?t do|offer|have|provide|can (?:do|offer|provide|get you)|will get you)\s+(?:(?:a|an)\s+)?quick ?pay\b/i,
+  /\bquick ?pay\s+(?:option|program)?\s*(?:is|comes)\s+(?:available|offered|something we (?:do|offer|provide))\b/i,
+]
+const CANNOT_CONFIRM_AVAILABILITY = /\b(?:can'?t|cannot|don'?t|do not|not able to)\s+(?:say|tell|confirm|verify|know)\s+(?:whether|if)\b/i
 
 // True when the reply talks about payment terms other than by sending them
 // to accounting: a topic clause must defer, repeat only numbers the
@@ -70,6 +77,9 @@ export function paymentTermsClaimed(reply, said = []) {
       if (ACCESSORIAL.test(clause)) return false
       if (!PAY_TOPIC.test(clause) && !(paying && FEE_WORDS.test(clause))) return false
       if (!PAY_TOPIC.test(clause) && NO_FEE.test(clause) && DEFERS.test(sentence) && !PERCENT.test(clause)) return false
+      if (QUICK_PAY_ASSERTIONS[0].test(clause)) return true
+      if (CANNOT_CONFIRM_AVAILABILITY.test(clause)) return false
+      if (QUICK_PAY_ASSERTIONS[1].test(clause)) return true
       if (!DEFERS.test(clause) || PERCENT.test(clause)) return true
       return (clause.match(/\d+(?:\.\d+)?/g) ?? []).some((n) => !theirs.has(n))
     })
