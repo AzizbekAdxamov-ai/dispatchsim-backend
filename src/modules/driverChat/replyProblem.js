@@ -18,6 +18,7 @@ import { ignoresUnreachable, milesOff, cannotMakeLine, cannotMakeWithoutMiles } 
 import { refusesWithoutReason } from '../../lib/refusalReason.js'
 import { hosReplyProblem, hosPressureKind } from '../../lib/hosPressure.js'
 import { personaBreak, noWayBack } from '../../lib/personaBreak.js'
+import { willAcceptWork } from '../../constants/driverPay.js'
 
 // What she says when asked for "the prompt": a person who does not know what
 // that means, back on the lane when there is one.
@@ -32,7 +33,34 @@ function notFollowingLine(load) {
 const unreachableLine = (offer, miles) => cannotMakeLine(offer)
   ?? `Can't make that pickup from here; it's about ${miles} miles to ${offer.city}. Is there a later pickup time?`
 
-export function driverReplyProblem(reply, { offer, text, load = null } = {}) {
+// A resting driver's remaining HOS is not the end of her current ten. The
+// model has twice supplied a clock time anyway (including the live Great
+// Falls exchange), then built a false legal verdict on that invented time.
+// Limit this guard to a direct rest/arrival question and a reply that gives
+// a clock or a definite pickup verdict; ordinary chat is unaffected.
+function inventedRestEta(reply, text, offer, driver) {
+  if (!offer?.restEndUnknown && driver?.dutyStatus !== 'resting') return false
+  const asked = /\b(?:rest\s+(?:end|finish)|(?:end|finish)\s+(?:my|your|the)?\s*rest|eta|arrival|arrive|reach|make\s+(?:it|the\s+pickup)|roll\s+into|(?:be|get)\s+there)\b/i.test(text ?? '')
+  if (!asked) return false
+  return /\b\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)\b|\b\d{1,2}:\d{2}\b|\b(?:noon|midnight)\b|\b(?:can|cannot|can't|will|won't|could|would|should)\s+(?:\w+\s+){0,2}(?:make\s+(?:it|the\s+pickup)|reach\b|get\s+to\b|be\s+there\b|get\s+there\b)|\b(?:before|after)\s+(?:the\s+)?pickup\b|\b(?:expect|likely|probably|should|will|can|could|would)\b.{0,30}\b(?:tomorrow|tonight|morning|afternoon|evening|dawn|dusk|lunch)\b|\b(?:by|before|after|around)\s+(?:tomorrow\s+)?(?:morning|afternoon|evening|dawn|dusk|lunch)\b|^\s*(?:yes|yeah|yep|sure|I can)\b/i.test(reply)
+}
+
+// The offer block is intentionally hidden from a driver who refuses work
+// or has left. A model can still use the dispatcher's words to negotiate
+// an ETA; keep the payroll decision authoritative on that path too.
+function ignoresWorkStance(reply, text, standing) {
+  if (!standing?.stage || willAcceptWork(standing.stage)) return false
+  // "What load am I on?" and "What time is the pickup?" ask for facts,
+  // not a commitment. Only a prospective assignment or arrival ask needs
+  // the payroll refusal in this reply.
+  const asksAboutWork = /\b(?:can|could|will|would|should)\s+you(?:\s+\w+){0,2}\s+(?:take|accept|book|run|haul|reach|make|be|get|cover)\b|\bavailable\s+for\b.{0,80}\b(?:run|haul|freight|load|pickup)\b|\b(?:what\s+time|when|earliest|eta|arrival)\b.{0,80}\b(?:arriv\w*|be\s+there|get\s+there|reach|roll\s+into)\b|\b(?:sending|assigning|dispatching)\s+you\b|\b(?:new|next|another)\s+load\b/i.test(text ?? '')
+  if (!asksAboutWork) return false
+  const refuses = /\b(?:not\s+taking|won't\s+take|cannot\s+take|can't\s+take|do\s+not\s+run|don't\s+run|no\s+longer\s+(?:tak(?:e|ing)|run(?:ning)?|driv(?:e|ing)|work(?:ing)?)|left\s+(?:the\s+company|your\s+roster)|quit|moved\s+on)\b/i.test(reply)
+  const stillGivesEta = /\b\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)\b|\b\d{1,2}:\d{2}\b|\b(?:noon|midnight)\b|\b(?:can|will|could|would|should)\s+(?:\w+\s+){0,2}(?:take\b|accept\b|make\b|reach\b|get\b|be\b|arrive\b|cover\b)|\b(?:expect|likely|probably)\b.{0,30}\b(?:tomorrow|tonight|morning|afternoon|evening|dawn|dusk)\b|^\s*(?:yes|yeah|yep|sure|I can)\b/i.test(reply)
+  return !refuses || stillGivesEta
+}
+
+export function driverReplyProblem(reply, { offer, text, load = null, driver = null, standing = null } = {}) {
   // HOS is a safety rule and wins when both fire. A correct HOS refusal
   // makes hosReplyProblem return null, so persona is skipped whenever the ask
   // itself is an HOS ask (hosPressureKind), not only when the reply is wrong.
@@ -64,6 +92,27 @@ export function driverReplyProblem(reply, { offer, text, load = null } = {}) {
   // A driving/log violation needs a plain no. A statement of remaining
   // hours, or "Copy that", leaves the dangerous request standing.
   if (hos) return hos
+  if (ignoresWorkStance(reply, text, standing)) {
+    const safeReply = standing.stage === 'quits'
+      ? "I'm no longer running loads for your company."
+      : "I'm not taking another load until the overdue settlement is paid."
+    return {
+      why: 'discussed a new load without your work refusal',
+      hint: ' You are not taking new work. Say so plainly; do not give an ETA, rest-end time, or promise to reach the pickup.',
+      unusable: true,
+      safeReply,
+    }
+  }
+  if (inventedRestEta(reply, text, offer, driver)) {
+    const place = offer?.state ? `${offer.city}, ${offer.state}` : offer?.city
+    const miles = offer?.miles == null ? '' : `I'm about ${offer.miles.toLocaleString('en-US')} road miles from ${place}, but `
+    return {
+      why: 'gave an unverified rest end or arrival time',
+      hint: ' Your current rest end time is not recorded. Do not give a clock time, legal ETA, or pickup verdict; correct any earlier guess.',
+      unusable: true,
+      safeReply: `${miles}I don't have a confirmed end time for this rest, so I can't give you a reliable arrival time yet.`,
+    }
+  }
   // The model may say "can't make it" but change the computed distance.
   // Correct it on retry; never show the wrong number after a second miss.
   if (milesOff(reply, offer)) {

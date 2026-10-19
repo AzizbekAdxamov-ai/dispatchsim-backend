@@ -162,6 +162,9 @@ export function situationLines({ driver, load, now = new Date() }) {
   if (left) {
     lines.push(`  Driving time left today: ${left}.`)
   }
+  if (driver.dutyStatus === 'resting') {
+    lines.push('  Your current rest end time is not recorded. Driving hours left do not say when you can roll again.')
+  }
 
   const pct = fuelPercent(driver)
   if (pct != null) {
@@ -214,7 +217,14 @@ export function offerLines(offer) {
   }
   // No arrival time without her driving time left: miles only.
   if (!offer.earliestAt) {
-    return [...head, `  Pickup in ${place} is about ${miles} road miles from where you are.`, '  You cannot say yet whether you would make a pickup time, so do not say you can or cannot.']
+    const lines = [...head, `  Pickup in ${place} is about ${miles} road miles from where you are.`]
+    if (offer.pickupAt) lines.push(`  The pickup they said is ${clockDateTime(offer.pickupAt.toISOString())} (Central time).`)
+    if (offer.restEndUnknown) {
+      lines.push('  Your current rest end time is not verified. Do not calculate an arrival time or say whether you can legally make this pickup. Even if you gave a time earlier in this chat, correct it as unverified.')
+    } else {
+      lines.push('  You cannot say yet whether you would make a pickup time, so do not say you can or cannot.')
+    }
+    return lines
   }
   const lines = [
     ...head,

@@ -306,7 +306,8 @@ function pickupTimeFor({ list, placeOf, chosen, now }) {
 //   miles       road miles from where she is (roadMiles, the number every
 //               load is priced with); null = the place is not on the list
 //               and no figure is given.
-//   earliestAt  now + legalTransitHours(miles, her driving time left).
+//   earliestAt  now + legalTransitHours(miles, her driving time left), only
+//               when she is free to start driving now.
 //   makesIt     earliestAt <= pickupAt; null without a pickup time.
 //   onLoad      she is on a load: miles are from where it delivers, and
 //               there is no earliestAt / makesIt. A load's eta_at is kept
@@ -344,12 +345,18 @@ export function offerFacts({ driver, load = null, texts, now = new Date() }) {
   const from = findCity(driver?.currentCity, driver?.currentState)
   if (!from) return { ...base, miles: null, fromCity: null, onLoad: false, earliestAt: null, pickupAt: null, makesIt: null }
   const miles = roadMiles(from, place)
+  const pickupAt = pickupTimeFor({ list, placeOf, chosen, now })
+  // While she is resting, HOS remaining does not tell us when her ten ends.
+  // Starting the trip at `now` would invent both a legal ETA and a verdict.
+  if (driver.dutyStatus === 'resting') {
+    return { ...base, miles, fromCity: `${from.city}, ${from.state}`, onLoad: false,
+      earliestAt: null, pickupAt, makesIt: null, restEndUnknown: true }
+  }
   // Her driving time left is unknown: the miles are still true, an arrival
   // time would be a guess (legalTransitHours would assume a full day).
   if (driver.hosRemainingMin == null) {
-    return { ...base, miles, fromCity: `${from.city}, ${from.state}`, onLoad: false, earliestAt: null, pickupAt: null, makesIt: null }
+    return { ...base, miles, fromCity: `${from.city}, ${from.state}`, onLoad: false, earliestAt: null, pickupAt, makesIt: null }
   }
   const earliestAt = new Date(now.getTime() + legalTransitHours(miles, driver.hosRemainingMin) * 3600e3)
-  const pickupAt = pickupTimeFor({ list, placeOf, chosen, now })
   return { ...base, miles, fromCity: `${from.city}, ${from.state}`, onLoad: false, earliestAt, pickupAt, makesIt: pickupAt ? earliestAt.getTime() <= pickupAt.getTime() : null }
 }
