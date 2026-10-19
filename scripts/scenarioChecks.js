@@ -221,7 +221,7 @@ export const BROKER_EXPECT = {
     const every = s9Every({ email })
     return {
       0: all(every, (r) => (MC_WORD.test(r) ? [] : ['MC not asked']), reAsks(ASKS_COMPANY)),
-      1: all(every, (r) => (MC_REJECT.test(r) ? ['rejects the right MC'] : []), (r) => (asksMc(r) ? ['asks what was told'] : [])),
+      1: all(every, (r) => (MC_REJECT.test(asciiPunct(r)) ? ['rejects the right MC'] : []), (r) => (asksMc(r) ? ['asks what was told'] : [])),
       2: all(every, reAsks(ASKS_TRUCK_PLACE)),
       3: all(every, movedOnFirstPush(posting)),
       4: all(every, gaveWholeAsk(posting), movedWithoutReason(posting)),

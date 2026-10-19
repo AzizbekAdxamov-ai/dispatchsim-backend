@@ -206,8 +206,13 @@ test('every broker safe line passes the full check when the text claims a bookin
 test('the live service passes one checkFacts to both brokerReplyProblem calls', () => {
   const src = readFileSync(new URL('../src/modules/brokerChat/brokerChat.service.js', import.meta.url), 'utf8')
   assert.equal(src.match(/brokerReplyProblem\(reply, checkFacts\)/g).length, 2)
-  assert.match(src, /const checkFacts = \{[^}]*brokerSaid: brokerTexts\(thread\)[^}]*bookedHere: BOOKED_STATUSES\.includes\(conversation\.status\)/)
+  assert.match(src, /const brokerSaid = brokerTexts\(thread\)/)
+  assert.match(src, /const checkFacts = \{[^}]*\bbrokerSaid,[^}]*bookedHere: BOOKED_STATUSES\.includes\(conversation\.status\)/)
   assert.match(src, /BOOKED_STATUSES = Object\.freeze\(\['agreed', 'booked'\]\)/)
   const scenarios = readFileSync(new URL('../scripts/chat-scenarios.js', import.meta.url), 'utf8')
-  assert.match(scenarios, /said: dispatcherSoFar, brokerSaid: history\.filter/)
+  assert.match(scenarios, /const brokerSaid = history\.filter/)
+  assert.match(scenarios, /said: dispatcherSoFar, brokerSaid,/)
+  // The prompt gets it too: the MC question depends on what the broker already asked.
+  assert.match(src, /booking,\s+brokerSaid,\s+\}\)/)
+  assert.match(scenarios, /booking,\s+brokerSaid,\s+\}\)/)
 })

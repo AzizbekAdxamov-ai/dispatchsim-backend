@@ -170,11 +170,25 @@ export function chatReasoningCap(baseUrl) {
   return Math.max(0, chatMaxTokens() - CHAT_REPLY_TOKENS)
 }
 
-// How hard a gpt-oss model thinks (CHAT_GROQ_REASONING_EFFORT, checked at
-// start-up in src/config.js). Low unless the .env says medium or high.
-export function groqReasoningEffort() {
-  const raw = String(process.env.CHAT_GROQ_REASONING_EFFORT ?? '').trim().toLowerCase()
-  return raw === 'medium' || raw === 'high' ? raw : 'low'
+// How hard a gpt-oss model thinks. The broker: CHAT_GROQ_REASONING_EFFORT,
+// low unless the .env says medium or high. The driver (`chat` 'driver'): its
+// own CHAT_DRIVER_REASONING_EFFORT, else CHAT_GROQ_REASONING_EFFORT, else
+// medium -- a driver weighs hours of service and the clock, and low missed
+// them. A value that is none of low/medium/high is the default. Checked at
+// start-up in src/config.js.
+export const REASONING_EFFORTS = Object.freeze(['low', 'medium', 'high'])
+export const DEFAULT_REASONING_EFFORT = Object.freeze({ broker: 'low', driver: 'medium' })
+
+const effortFrom = (name) => {
+  const raw = String(process.env[name] ?? '').trim().toLowerCase()
+  return REASONING_EFFORTS.includes(raw) ? raw : null
+}
+
+export function groqReasoningEffort(chat = null) {
+  if (chat === 'driver') {
+    return effortFrom('CHAT_DRIVER_REASONING_EFFORT') ?? effortFrom('CHAT_GROQ_REASONING_EFFORT') ?? DEFAULT_REASONING_EFFORT.driver
+  }
+  return effortFrom('CHAT_GROQ_REASONING_EFFORT') ?? DEFAULT_REASONING_EFFORT.broker
 }
 
 // Groq's way to keep thinking out of the reply and short
@@ -184,15 +198,16 @@ export function groqReasoningEffort() {
 //            reasoning_effort 'none' turns it off, 'low' keeps it brief.
 //   gpt-oss  reasoning_effort low/medium/high only (low unless
 //            CHAT_GROQ_REASONING_EFFORT says otherwise); it rejects both
-//            reasoning_format and 'none'.
+//            reasoning_format and 'none'. `chat` ('broker' or 'driver') picks
+//            which chat's effort applies; null (the seed generator) is the broker's.
 // Anything else on Groq (llama and the like) does not reason: send nothing.
-export function groqReasoningParams(baseUrl, model) {
+export function groqReasoningParams(baseUrl, model, chat = null) {
   if (!isGroq(baseUrl)) return {}
   const name = String(model ?? '')
   if (/qwen/i.test(name)) {
     return { reasoning_format: 'parsed', reasoning_effort: chatReasoningMode() === 'off' ? 'none' : 'low' }
   }
-  if (/gpt-oss/i.test(name)) return { reasoning_effort: groqReasoningEffort() }
+  if (/gpt-oss/i.test(name)) return { reasoning_effort: groqReasoningEffort(chat) }
   return {}
 }
 

@@ -16,7 +16,7 @@ import { brokerTerms, termsLines } from '../../constants/accessorials.js'
 import { loadingMode, tarpFor, securementFor, isOpenDeck } from '../../constants/freightHandling.js'
 import { marketClaims, ratePushes, rateReasons, rateReasonLabels } from './rateTalk.js'
 import { truckFacts } from './truckTalk.js'
-import { bookingFacts, SOON_PICKUP_HOURS } from './bookingTalk.js'
+import { bookingFacts, mcQuestion, MOVES_TO_BOOK, SOON_PICKUP_HOURS } from './bookingTalk.js'
 import { DRIVING_LIMIT_HOURS, REQUIRED_REST_HOURS } from '../../constants/hosClock.js'
 import { marketFacts, seasonNote, benchmarkAgeDays, STALE_AFTER_DAYS } from '../../constants/marketRates.js'
 
@@ -313,6 +313,7 @@ export function openDeckLines(posting) {
 // twice, no booking and no paper on a missing or wrong MC (price talk is fine).
 const MISSING_LABEL = Object.freeze({
   mc: 'their MC number',
+  'mc-ok': 'an MC that checks out',
   company: 'their company name',
   location: 'where the truck is now',
   emptyAt: 'when it is empty',
@@ -322,7 +323,9 @@ const MISSING_LABEL = Object.freeze({
   email: 'the email to send the rate confirmation to',
 })
 
-export function callerBlock(facts, carrier = null) {
+// `mcAsked`: the broker already asked for the MC. `towardBooking`: the
+// dispatcher's last message moves to book. The MC is asked for again only then.
+export function callerBlock(facts, carrier = null, { mcAsked = false, towardBooking = false } = {}) {
   if (!facts) return []
   const told = []
   if (facts.company) told.push(`company: ${facts.company}`)
@@ -341,15 +344,25 @@ export function callerBlock(facts, carrier = null) {
     if (facts.company && facts.companyMatches === false) {
       lines.push(`  That MC comes up as ${carrier?.name ?? 'a different company'}, not what they said -- ask.`)
     }
+    lines.push('  Their MC is done -- never ask for it again.')
   } else if (facts.mc.verdict === 'mismatch') {
     lines.push(`  MC ${facts.mc.said} does not come up / does not match -- tell them so plainly; no booking and no rate con until they give the right one. Talking price is fine.`)
   } else if (facts.mc.verdict === 'unverifiable') {
     lines.push(`  MC ${facts.mc.said} cannot be checked from here -- never say it checks out; no booking and no rate con yet. Talking price is fine.`)
   } else {
     lines.push('  No MC yet.')
+    if (mcAsked && !towardBooking) {
+      lines.push('  You already asked for their MC. Answer what they asked; ask for the MC again only when they move to book.')
+    }
   }
-  const missing = facts.missing.map((k) => MISSING_LABEL[k]).filter(Boolean)
+  // A wrong or unverifiable MC blocks everything: the broker asks for the
+  // MC alone, not the driver, the truck number or the email.
+  const mcBlocked = ['mismatch', 'unverifiable'].includes(facts.mc.verdict)
+  const missing = (mcBlocked ? ['mc-ok'] : facts.missing).map((k) => MISSING_LABEL[k]).filter(Boolean)
   if (missing.length) lines.push(`  Still missing before you can book: ${missing.join(', ')}.`)
+  if (mcBlocked) {
+    lines.push('  Until an MC checks out, ask for nothing else on the booking list -- not the driver, the truck number or the email.')
+  }
   lines.push(
     '  - Ask ONE missing thing at a time, and only when it fits what they just said.',
     '  - Never ask again for anything under "They have told you".',
@@ -380,7 +393,7 @@ export function rateReasonLines(posting, { truck = null, now = new Date() } = {}
   ]
 }
 
-export function buildBrokerSystemPrompt({ broker, posting, carrier = null, now = new Date(), talk = null, said = null, booking = null }) {
+export function buildBrokerSystemPrompt({ broker, posting, carrier = null, now = new Date(), talk = null, said = null, booking = null, brokerSaid = [] }) {
   const rpm = (posting.rateUsd / posting.distanceMi).toFixed(2)
   const ceiling = ceilingFor(posting)
   const ceilingRpm = (ceiling / posting.distanceMi).toFixed(2)
@@ -441,7 +454,10 @@ export function buildBrokerSystemPrompt({ broker, posting, carrier = null, now =
     ...marketBlock(posting, now),
     ...rateTalkBlock({ posting, said }),
     ...truckBlock({ posting, said, now }),
-    ...callerBlock(booking ?? bookingFacts({ texts: said ?? [], carrier, posting, now }), carrier),
+    ...callerBlock(booking ?? bookingFacts({ texts: said ?? [], carrier, posting, now }), carrier, {
+      mcAsked: brokerSaid.some(mcQuestion),
+      towardBooking: MOVES_TO_BOOK.test(said?.at(-1) ?? ''),
+    }),
     ...talkBlock(talk),
     'HOW YOU TALK:',
     '- One to three sentences. Never a list, never a wall of text. This is a',
@@ -495,7 +511,7 @@ export function buildBrokerSystemPrompt({ broker, posting, carrier = null, now =
     // Replaces "NEVER ask for their MC number...": the booking call starts
     // with who they are (WHO IS CALLING above).
     '- Before you book you need their company and MC (see WHO IS CALLING).',
-    '  Ask once, and early. Never ask for a W-9, a certificate of insurance or',
+    '  Ask once, early; after that only when they move to book. Never ask for a W-9, a certificate of insurance or',
     '  any other paperwork.',
     '- Before booking you give the city and the appointment, nothing more. The',
     '  shipper and receiver names and the street addresses are on the rate',

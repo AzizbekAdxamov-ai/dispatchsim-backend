@@ -26,6 +26,7 @@ import {
   budgetMessage,
   dailyCapScope,
   groqReasoningParams,
+  DEFAULT_REASONING_EFFORT,
 } from '../src/constants/chatBudget.js'
 
 const OPENROUTER = 'https://openrouter.ai/api/v1'
@@ -890,4 +891,62 @@ test('the daily token status warns at 80% and says nothing it does not know', as
   assert.equal(unknown.pct, null)
   assert.equal(unknown.warn, false)
   assert.equal(dailyTokenStatus(OPENROUTER, 'x', 5).limit, null)
+})
+
+// -- The driver's own reasoning effort --------------------------------------
+
+// Sets the two effort variables (null deletes) for the length of fn.
+async function withEfforts({ groq = null, driver = null }, fn) {
+  const names = { CHAT_GROQ_REASONING_EFFORT: groq, CHAT_DRIVER_REASONING_EFFORT: driver }
+  const before = Object.fromEntries(Object.keys(names).map((k) => [k, process.env[k]]))
+  for (const [k, v] of Object.entries(names)) {
+    if (v == null) delete process.env[k]
+    else process.env[k] = v
+  }
+  try { return await fn() } finally {
+    for (const [k, v] of Object.entries(before)) {
+      if (v == null) delete process.env[k]
+      else process.env[k] = v
+    }
+  }
+}
+const effortFor = (env, chat) => withEfforts(env, () => groqReasoningParams(GROQ, 'openai/gpt-oss-20b', chat).reasoning_effort)
+
+// Kills: the driver sharing the broker's low default (it missed hours-of-service
+// and the clock at low), or the default not being medium.
+test('the driver thinks at medium when nothing is set', async () => {
+  assert.equal(await effortFor({}, 'driver'), 'medium')
+  assert.equal(DEFAULT_REASONING_EFFORT.driver, 'medium')
+})
+
+// Kills: CHAT_DRIVER_REASONING_EFFORT ignored, or beaten by the Groq-wide one.
+test('CHAT_DRIVER_REASONING_EFFORT sets the driver and wins over the shared setting', async () => {
+  assert.equal(await effortFor({ driver: 'high' }, 'driver'), 'high')
+  assert.equal(await effortFor({ driver: ' LOW ', groq: 'high' }, 'driver'), 'low')
+})
+
+// Kills: a blank driver variable read as "set" (the driver stuck at the default
+// instead of following CHAT_GROQ_REASONING_EFFORT), or a typo sent to Groq.
+test('a blank driver variable follows CHAT_GROQ_REASONING_EFFORT; a typo is the default', async () => {
+  assert.equal(await effortFor({ driver: '', groq: 'low' }, 'driver'), 'low')
+  assert.equal(await effortFor({ driver: '  ', groq: 'high' }, 'driver'), 'high')
+  assert.equal(await effortFor({ driver: 'extreme' }, 'driver'), 'medium')
+})
+
+// Kills: the driver variable leaking into the broker, or the seed generator
+// (chat null) and the broker changing their low default.
+test('the broker and the seed generator ignore the driver variable', async () => {
+  for (const chat of ['broker', null]) {
+    assert.equal(await effortFor({ driver: 'high' }, chat), 'low', String(chat))
+    assert.equal(await effortFor({ driver: 'high', groq: 'medium' }, chat), 'medium', String(chat))
+  }
+  assert.equal(DEFAULT_REASONING_EFFORT.broker, 'low')
+})
+
+// Kills: config.js not validating CHAT_DRIVER_REASONING_EFFORT (a typo would
+// only show up as a silent default).
+test('config.js stops on a bad CHAT_DRIVER_REASONING_EFFORT like the shared one', () => {
+  const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'config.js'), 'utf8')
+  assert.match(src, /CHAT_DRIVER_REASONING_EFFORT must be 'low', 'medium' or 'high'/)
+  assert.match(src, /\['low', 'medium', 'high'\]\.includes\(rawDriverEffort\)/)
 })

@@ -130,7 +130,7 @@ for (const key of chosen) {
 // Which sides have anything to run.
 const only = !chosen.some((k) => sideOf(k) === 'broker') ? 'driver' : !chosen.some((k) => sideOf(k) === 'driver') ? 'broker' : 'both'
 const wanted = (key) => chosen.includes(key)
-const reasoningEffort = (config) => groqReasoningParams(config.baseUrl, config.model).reasoning_effort ?? 'n/a'
+const reasoningEffort = (config) => groqReasoningParams(config.baseUrl, config.model, config.chat).reasoning_effort ?? 'n/a'
 const brokerPromptVersion = promptVersionOf(fileURLToPath(new URL('../src/modules/brokerChat/brokerChat.prompt.js', import.meta.url)))
 const driverPromptVersion = promptVersionOf(fileURLToPath(new URL('../src/modules/driverChat/driverChat.prompt.js', import.meta.url)))
 
@@ -263,6 +263,7 @@ async function brokerConversation({ key, title, posting, lines }, carrier, confi
     const truck = truckFacts({ texts: dispatcherSoFar, posting, now })
     // Who is calling and what is missing, as the live service computes it.
     const booking = bookingFacts({ texts: dispatcherSoFar, carrier, posting, now })
+    const brokerSaid = history.filter((h) => h.role === 'broker').map((h) => h.content)
     const systemPrompt = bp.buildBrokerSystemPrompt({
       carrier,
       broker: { name: posting.name, contactName: posting.contactName, persona: posting.persona },
@@ -271,6 +272,7 @@ async function brokerConversation({ key, title, posting, lines }, carrier, confi
       talk: talkFacts(dispatcherSoFar, posting.equipmentType),
       said: dispatcherSoFar,
       booking,
+      brokerSaid,
     })
     say(`- **D:** \`${text}\``)
     const out = await answer({
@@ -278,7 +280,7 @@ async function brokerConversation({ key, title, posting, lines }, carrier, confi
       messages: (sys) => bp.buildMessages({ systemPrompt: sys, history, newMessage: text }),
       clean: (t) => stripSpeakerLabel(t, posting.contactName),
       problemOf: (r) => brokerReplyProblem(r, {
-        truck, booking, posting, now, text, said: dispatcherSoFar, brokerSaid: history.filter((h) => h.role === 'broker').map((h) => h.content),
+        truck, booking, posting, now, text, said: dispatcherSoFar, brokerSaid,
       }),
       retryPrompt: brokerRetryPrompt,
       fallback: bp.FALLBACK_REPLY,

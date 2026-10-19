@@ -163,6 +163,9 @@ export async function sendMessage({ conversationId, userId, text }) {
   // Who is calling and what is still missing before a booking, from the WHOLE
   // thread (not the 20-turn history): an MC told on message 3 stays told.
   const booking = bookingFacts({ texts: dispatcherTexts(thread), carrier, posting, now })
+  // What the broker already said: read by the prompt (has the MC been asked
+  // for?) and by the reply checks (a figure it gave before is not a raise).
+  const brokerSaid = brokerTexts(thread)
   const systemPrompt = buildBrokerSystemPrompt({
     carrier,
     broker: { name: posting.name, contactName: posting.contactName, persona: posting.persona },
@@ -171,6 +174,7 @@ export async function sendMessage({ conversationId, userId, text }) {
     talk: talkFacts(said, posting.equipmentType),
     said,
     booking,
+    brokerSaid,
   })
 
   // Every request this turn sends to the provider, counted where they are
@@ -195,7 +199,7 @@ export async function sendMessage({ conversationId, userId, text }) {
   // Everything brokerReplyProblem needs to judge the reply, for the first
   // reply and the regenerated one alike.
   const checkFacts = {
-    truck, booking, posting, now, text, said, brokerSaid: brokerTexts(thread), bookedHere: BOOKED_STATUSES.includes(conversation.status),
+    truck, booking, posting, now, text, said, brokerSaid, bookedHere: BOOKED_STATUSES.includes(conversation.status),
   }
 
   let reply

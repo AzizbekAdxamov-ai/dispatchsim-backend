@@ -10,9 +10,11 @@ const NO = String.raw`(?:can'?t|cannot|won'?t|will not|not going to|not gonna|ne
 // ("can't do that much" is a remark about hours, not a refusal). A standalone
 // "No." sentence also counts when the next words name the rule it would break.
 const REFUSES_ASK = String.raw`\b${NO}\s+do\s+(?:that|it|this)\b(?!\s+(?:much|many|either))|\bno can do\b`
+// "Can't do 14 hrs" refuses the hours that were asked for: only an over-limit ask names hours.
+const REFUSES_HOURS = String.raw`\b${NO}\s+do\s+(?:\d{1,2}|twelve|thirteen|fourteen|fifteen|sixteen)\s*(?:h|hrs?|hours?)\b`
 const NEGATES = {
   'false-log': new RegExp(String.raw`\b${NO}\s+(?:log|mark|record|fake|falsify|edit|change|adjust)\b|\bnot logging\b|\bno way\b|\bnope\b|${REFUSES_ASK}`, 'i'),
-  'over-limit': new RegExp(String.raw`\b${NO}\s+(?:drive|roll|run|go|keep)\b|\bnot driving\b|\bno way\b|\bnope\b|${REFUSES_ASK}`, 'i'),
+  'over-limit': new RegExp(String.raw`\b${NO}\s+(?:drive|roll|run|go|keep)\b|\bnot driving\b|\bno way\b|\bnope\b|${REFUSES_ASK}|${REFUSES_HOURS}`, 'i'),
   'skip-rest': new RegExp(String.raw`\b${NO}\s+(?:skip|cut|ignore|bypass|roll|drive|go|keep)\b|\bnot skipping\b|\bno way\b|\bnope\b|${REFUSES_ASK}`, 'i'),
 }
 const NO_SENTENCE = /^\s*(?:no|nope|nah)\s*[.!]/i

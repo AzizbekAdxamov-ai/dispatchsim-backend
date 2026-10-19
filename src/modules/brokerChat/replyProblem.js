@@ -13,7 +13,7 @@ import { trippedBannedWord, leaksReasoning } from './brokerChat.prompt.js'
 import { tooLongForChat, CHAT_REPLY_MAX_CHARS } from '../../constants/chatBudget.js'
 import { ignoresUnreachable } from '../../lib/cannotMake.js'
 import { lumperPayerWrong, paymentTermsClaimed, PAYMENT_TERMS_LINE } from './termsTalk.js'
-import { saysBooked, confirmsUnknownBooking, NO_BOOKING_LINE } from './bookingTalk.js'
+import { saysBooked, confirmsUnknownBooking, mcQuestion, asksPaperDetails, NO_BOOKING_LINE } from './bookingTalk.js'
 import {
   dollars, rateReasons, rateReasonLabels, unsupportedRateReasons, raiseWithoutReason, holdRateLine,
 } from './rateTalk.js'
@@ -119,6 +119,22 @@ export function brokerReplyProblem(reply, {
       hint: ' You have no record of that booking or that person: say so, and do not confirm it.',
       unusable: true,
       safeReply: NO_BOOKING_LINE,
+    }
+  }
+  // The MC is already verified: asking for it again is a broker who did not listen.
+  if (booking?.mc.verdict === 'match' && mcQuestion(reply)) {
+    return {
+      why: 'asked again for the MC they already gave',
+      hint: ' Their MC checks out (see WHO IS CALLING): do not ask for it again; answer what they said.',
+      unusable: false,
+    }
+  }
+  // A wrong or unverifiable MC comes first: no driver, truck number or email yet.
+  if (['mismatch', 'unverifiable'].includes(booking?.mc.verdict) && asksPaperDetails(reply)) {
+    return {
+      why: 'asked for booking details before a correct MC',
+      hint: ' Their MC does not check out (see WHO IS CALLING): ask for the right MC first, nothing else on the booking list.',
+      unusable: false,
     }
   }
   return null

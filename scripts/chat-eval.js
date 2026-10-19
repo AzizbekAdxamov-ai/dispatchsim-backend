@@ -187,7 +187,7 @@ function modelHeader(config) {
 
 // What the request asks for, 'n/a' where the model takes no such field.
 function reasoningEffortOf(config) {
-  return groqReasoningParams(config.baseUrl, config.model).reasoning_effort ?? 'n/a'
+  return groqReasoningParams(config.baseUrl, config.model, config.chat).reasoning_effort ?? 'n/a'
 }
 
 function record(fields) {

@@ -139,7 +139,7 @@ async function requestCompletion({ system, user, messages, config, temperature =
   const body = JSON.stringify(completionBody({
     model: config.model, messages: payloadMessages, temperature, maxTokens, reasoningMaxTokens,
     // Per model config, so a fallback from another family gets its own params.
-    providerParams: groqReasoningParams(config.baseUrl, config.model),
+    providerParams: groqReasoningParams(config.baseUrl, config.model, config.chat),
   }))
 
   let lastNetworkError = null

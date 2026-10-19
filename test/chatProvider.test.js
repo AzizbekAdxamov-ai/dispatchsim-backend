@@ -250,3 +250,15 @@ test('describeChat shows enough of the key to compare, and not enough to use', (
   assert.equal(JSON.stringify(d).includes(process.env.CHAT_API_KEY), false,
     'kalit describeChat natijasida bor')
 })
+
+// Kills: chatConfigFor not saying whose config it is -- the request builder
+// then gives the driver the broker's reasoning effort.
+test('chatConfigFor names the chat it is for, and the fallback config keeps it', () => {
+  process.env.CHAT_API_KEY = 'key-one'
+  process.env.CHAT_MODEL = 'some/model'
+  assert.equal(chatConfigFor('driver').chat, 'driver')
+  assert.equal(chatConfigFor('broker').chat, 'broker')
+  appConfig.chatDriverFallbackModel = FALLBACK
+  assert.equal(chatConfigFor('driver').fallbackModel, FALLBACK)
+  assert.equal(chatConfigFor('driver').chat, 'driver')
+})

@@ -204,12 +204,24 @@ function missingFor(f, posting, now) {
 
 // The reply tells the carrier it is booked / the paper is coming.
 export const SAYS_BOOKED = /\b(?:booked|you'?re (?:all )?set|it'?s yours|load is yours|sending (?:over )?(?:the )?(?:rate ?con|rc|confirmation)|rate ?con (?:is )?(?:on (?:its|the) way|coming))\b/i
+// A condition before the word ("if you share your MC, we can get it booked")
+// makes it a promise of what happens later, not a statement that it is booked.
+const BOOK_CONDITION = /\b(?:if|once|as soon as|when|after|until|unless|provided)\b/i
+// "send me your MC and we'll get it booked": the MC is asked for, booking follows it.
+const BOOK_AFTER_ASK = /\b(?:get|have)\s+(?:it|you|this|that)\s+(?:all\s+)?$/i
+const SAYS_BOOKED_EACH = new RegExp(SAYS_BOOKED.source, 'gi')
 export function saysBooked(reply) {
-  return SAYS_BOOKED.test(asciiPunct(reply))
+  return asciiPunct(reply).split(SENTENCE_SPLIT).some((sentence) => {
+    const asks = mcQuestion(sentence)
+    return [...sentence.matchAll(SAYS_BOOKED_EACH)].some((m) => {
+      const before = sentence.slice(0, m.index)
+      return !BOOK_CONDITION.test(before) && !(asks && BOOK_AFTER_ASK.test(before))
+    })
+  })
 }
 
-// The broker says the MC does not come up.
-export const MC_REJECT = /doesn'?t (?:come up|match|show)|not (?:coming up|showing|matching)|can'?t find|wrong mc/i
+// The broker says the MC does not come up. Tested on asciiPunct text.
+export const MC_REJECT = /(?:doesn'?t|does not|didn'?t|did not) (?:come up|match|show(?: up)?|pull up)|(?:isn'?t|is not|not) (?:coming up|showing(?: up)?|matching|pulling up)|not finding|(?:can'?t|cannot|couldn'?t) find|no record|wrong mc/i
 
 // The reply asks for the MC (it names it AND asks or requests it).
 const MC_WORD = /\bmc\b|motor carrier|docket/i
@@ -218,6 +230,25 @@ export function asksMc(reply) {
   const text = asciiPunct(reply)
   return MC_WORD.test(text) && ASKING.test(text)
 }
+
+const SENTENCE_SPLIT = /(?<=[.!?])\s+/
+// Some sentence of the reply both names the MC and asks for it: "Your MC
+// checks out. Where's the truck?" asks for nothing about the MC, which
+// asksMc (whole reply) would say it does.
+export function mcQuestion(reply) {
+  return asciiPunct(String(reply ?? '')).split(SENTENCE_SPLIT).some((s) => MC_WORD.test(s) && ASKING.test(s))
+}
+
+// A question about the paperwork details (driver, truck number, email) --
+// what the broker asks for only once the MC checks out.
+const PAPER_ASK = /\b(?:driver|truck (?:number|#)|unit (?:number|#)|e-?mail)\b/i
+export function asksPaperDetails(reply) {
+  return asciiPunct(String(reply ?? '')).split(SENTENCE_SPLIT).some((s) => s.includes('?') && PAPER_ASK.test(s))
+}
+
+// The dispatcher is moving to book: "book it", "I'll take it", the driver, the
+// truck number or the email for the rate con. The MC is asked for again only then.
+export const MOVES_TO_BOOK = /\b(?:book (?:it|me|this)|i'?ll take it|we'?ll take it|lock (?:it|this) in|send (?:me )?(?:the )?(?:rc|rate ?con|confirmation)|let'?s do it|deal|works for me)\b|\bdriver(?:'s| is)?\s+[a-z]|\btruck\s*(?:#|number|no)|@/i
 
 // -- The booking gate -------------------------------------------------------
 

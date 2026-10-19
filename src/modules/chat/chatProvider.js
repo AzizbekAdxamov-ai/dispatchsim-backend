@@ -53,7 +53,9 @@ function withFallback(which, config) {
 export function chatConfigFor(which) {
   const { config, errors } = read(which)
   if (!config) throw new AppError(FAILURE[which], errors.join('; '))
-  return withFallback(which, config)
+  // `chat` names whose config this is: the request builder picks the
+  // reasoning effort per chat (chatBudget.js groqReasoningEffort).
+  return { ...withFallback(which, config), chat: which }
 }
 
 // Do the two chats spend from one allowance or two?
