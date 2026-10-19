@@ -305,6 +305,10 @@ const NO_OBJECTION = /\b(?:no (?:problem|worries|issue)|not a problem)\b/gi
 // Not a thousands comma or a decimal point: "$2,600" is one figure.
 const CLAUSES = /[!?;]|[.,](?!\d)|\bbut\b/i
 
+// "high" / "steep" alone is a grumble, not a no: "$2,500 is a bit high but ok" accepts.
+const HARD_NO = /\b(?:can'?t|cannot|won'?t|not|no)\b/i
+const grumbleThenYes = (clause, next) => !HARD_NO.test(clause.replace(NO_OBJECTION, ' ')) && ACCEPTS.test(next) && dollars(next).length === 0
+
 const refuses = (clause) => REFUSES_FIGURE.test(clause.replace(NO_OBJECTION, ' '))
 
 // Their figure is refused when its clause says no, or (unless that clause
@@ -313,7 +317,7 @@ function refusedFigure(reply, value, theirs) {
   if (!theirs.includes(value)) return false
   const clauses = asciiPunct(reply).split(CLAUSES)
   const own = clauses.map((c, i) => [c, i]).filter(([c]) => dollars(c).includes(value))
-  return own.length > 0 && own.every(([c, i]) => refuses(c) || (!ACCEPTS.test(c) && refuses(clauses[i + 1] ?? '')))
+  return own.length > 0 && own.every(([c, i]) => (refuses(c) && !grumbleThenYes(c, clauses[i + 1] ?? '')) || (!ACCEPTS.test(c) && refuses(clauses[i + 1] ?? '')))
 }
 
 export function raiseWithoutReason(reply, { posting, truck = null, now = new Date(), theirs = [], earlier = [] }) {

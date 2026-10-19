@@ -165,3 +165,13 @@ test('paymentTermsClaimed: a fee, charge or percentage beside payment talk is fl
   assert.equal(paymentTermsClaimed("That's accounting's, around 2 percent."), true)
   assert.equal(paymentTermsClaimed('There is a 3% charge on payments.'), true)
 })
+
+// Kills: the NO_FEE exemption dropped (a denied fee beside a deferral gets the
+// accounting line), or widened past topic words ("net 30 and no fee" passes).
+test('paymentTermsClaimed: a denied fee beside a deferral is clean; a topic word still flags', () => {
+  assert.equal(paymentTermsClaimed('No fee on our side, ask accounting.'), false)
+  assert.equal(paymentTermsClaimed('Accounting handles that, no fee from me.'), false)
+  assert.equal(paymentTermsClaimed('Payment is net 30 and no fee.'), true)
+  assert.equal(paymentTermsClaimed('Quick pay fee is 3%.'), true)
+  assert.equal(paymentTermsClaimed('Payment is net 30 with no fee, ask accounting.'), true)
+})

@@ -145,3 +145,31 @@ test('weightChangeAgreed: the yes must be said, not asked', () => {
   assert.equal(loadCheck('Is that fine? What is your MC?', 'can u add 10k lbs more'), false)
   assert.equal(loadCheck("Sure, what's your MC?", 'can u add 10k lbs more'), true)
 })
+
+// Kills: CHANGE_ASK / REQUEST_CUE missing the casual wordings (no cue for
+// "how about", "make it", "actually", "now", bump*, and no "<figure> more").
+test('weightChangeAgreed: casual change requests are flagged', () => {
+  for (const text of [
+    'how about 10k lbs more', 'what about 10k lbs more?', 'how about 48k lbs', 'its actually 48k lbs',
+    'make it 48k', 'bumping to 48k', 'load is 48k lbs now', 'i have 10k lbs more to add',
+  ]) {
+    assert.equal(loadCheck('Sure, no problem.', text), true, text)
+  }
+})
+
+// Kills: the new cues made too wide -- a capacity or a question about the
+// posted weight read as a change request.
+test('weightChangeAgreed: capacity and posted-weight talk is still no change request', () => {
+  for (const text of [
+    'can you do $2,300? i have 44k capacity', 'truck can take up to 45k lbs', 'I got a 53ft with 10k lbs of space',
+    'hi dry van 45k capacity, whats the rate', 'still available? can haul 44,000 lbs', 'is it 43,480 lbs?',
+  ]) {
+    assert.equal(loadCheck('Sure, no problem.', text), false, text)
+  }
+})
+
+// Kills: leadIn taking "Is that fine" from a question as a yes.
+test('weightChangeAgreed: a question with a comma is not a yes', () => {
+  assert.equal(loadCheck('Is that fine, or do you need more?', 'can u add 10k lbs'), false)
+  assert.equal(loadCheck("Sure, what's your MC?", 'can u add 10k lbs'), true)
+})

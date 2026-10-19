@@ -384,3 +384,13 @@ test('raiseWithoutReason: accepting their figure is a raise even with "no proble
 test('holdRateLine groups thousands like the weight line', () => {
   assert.equal(holdRateLine({ ...FLAT, rateUsd: 12500 }), '$12,500 all-in is where this one stays.')
 })
+
+// Kills: grumbleThenYes removed -- "$2,500 is a bit high but ok" read as a
+// refusal, so a raise the broker accepted goes unflagged. The hard refusals
+// must stay refusals.
+test('raiseWithoutReason: a grumble followed by yes accepts their figure; a real no does not', () => {
+  const opts = { posting: FLAT, now: NOW, theirs: [2500] }
+  assert.equal(raiseWithoutReason('Sure, $2,500 is a bit high but ok.', opts), true)
+  assert.equal(raiseWithoutReason("Ok $2,500 is high, I'm at $2,000.", opts), false)
+  assert.equal(raiseWithoutReason("I can't do $2,500, ok?", opts), false)
+})

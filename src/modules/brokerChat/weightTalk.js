@@ -28,10 +28,10 @@ export function statedWeights(reply) {
 // change word next to a weight word or figure, or a figure that is not the
 // posted weight put as a request ("can you do 50k lbs?"). A capacity or a
 // weight they state ("45k capacity", "can haul 44,000 lbs") asks for nothing.
-const CHANGE_ASK = /\b(?:add|more|extra|heavier|over|bump|up to)\b[^.!?]{0,25}\b(?:lbs?|pounds|weight|\d+(?:\.\d+)?\s?k)\b/i
+const CHANGE_ASK = /\b(?:add|more|extra|heavier|over|bump|up to)\b[^.!?]{0,25}\b(?:lbs?|pounds|weight|\d+(?:\.\d+)?\s?k)\b|\b(?:\d[\d,]*\s*(?:lbs?|pounds)|\d+(?:\.\d+)?\s?k(?:\s?lbs?)?)\s+(?:more|extra)\b/i
 // "can take up to 45k lbs" says what the truck holds, not what to put on it.
 const CAPACITY_UP_TO = /\b(?:take|haul|carry|handle|hold|run|pull)\w*\s+up to\b/gi
-const REQUEST_CUE = /\b(?:can|could|would|will)\s+(?:you|u|ya|we|they|it)\b|\b(?:ok|okay)\b|\b(?:please|pls)\b/i
+const REQUEST_CUE = /\b(?:can|could|would|will)\s+(?:you|u|ya|we|they|it)\b|\b(?:ok|okay)\b|\b(?:please|pls)\b|\b(?:how|what) about\b|\bmake it\b|\bbump\w*\b|\bactually\b|\bnow\b/i
 // The reply goes along with it, or the weight is no object.
 const AGREES_WEIGHT = /\b(?:isn'?t|is not|not|won'?t be|shouldn'?t be)\s+(?:an?\s+)?(?:issue|problem)\b|\bno (?:problem|issue)\b|\bcan (?:add|take|do|handle|go)\b|\b(?:sure|yes|yep|yeah|fine|works)\b/i
 // "not sure", "doesn't work": the agreement word, denied.
@@ -47,7 +47,10 @@ const SENTENCES = /(?<=[.!?])\s+/
 // (only their lead-in, "Sure, what's your MC?", can be a yes), and a denied
 // "sure" ("Not sure, check the sheet.") is no yes.
 // "Sure, what's your MC?" -> "Sure"; a question with no lead-in says nothing.
-const leadIn = (question) => (question.includes(',') ? question.split(',')[0] : '')
+// "Is that fine, or do you need more?" is a question all the way through: its
+// "fine" is asked, not said.
+const QUESTION_FORM = /^\s*(?:is|are|do|does|did|can|could|will|would|should|what|which|how|who|where|when|why)\b/i
+const leadIn = (question) => (question.includes(',') && !QUESTION_FORM.test(question) ? question.split(',')[0] : '')
 
 function repliesYes(r) {
   const said = r.split(SENTENCES)

@@ -373,3 +373,18 @@ test('confirmsUnknownBooking: holding the rate or payment is not going along; co
   assert.equal(confirmsUnknownBooking("Payment terms are on accounting's side.", { text: EB17 }), false)
   assert.equal(confirmsUnknownBooking("You're all set, and the rate stays.", { text: EB17 }), true)
 })
+
+// Kills: HOLDS_POSITION back to a bare `stays` -- a phantom booking
+// confirmed with "stays" in it ("it stays with Mike") passes as a held position.
+test('confirmsUnknownBooking: a confirmation that merely says "stays" is still flagged', () => {
+  for (const reply of ['Sure, it stays with Mike.', 'Ok, he stays on it.', 'Booked, stays as is.', 'Mike has it, the rate stays $2,000.']) {
+    assert.equal(confirmsUnknownBooking(reply, { text: EB17 }), true, reply)
+  }
+})
+
+// Kills: HOLDS_POSITION dropped or its safe-line wording changed -- the hold-rate
+// and payment lines would be thrown away as going along with the claim.
+test('confirmsUnknownBooking: the hold-rate and payment safe lines still pass', () => {
+  assert.equal(confirmsUnknownBooking('$2,000 all-in is where this one stays.', { text: EB17 }), false)
+  assert.equal(confirmsUnknownBooking("Payment terms are on accounting's side — they'll be on the rate con.", { text: EB17 }), false)
+})

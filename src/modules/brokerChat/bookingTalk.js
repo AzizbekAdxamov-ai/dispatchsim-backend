@@ -257,9 +257,10 @@ const CLAIMS_EARLIER_BOOKING = /\b(?:already|just)\s+(?:booked\s+(?:it|this|that
 const CONFIRMS_BOOKING = /\b(?:good|glad|great) to hear\b|\blocked in\b|\byou'?re (?:all )?set\b|\ball set\b|\bconfirmed\b|^\s*(?:yes|yeah|yep|right|correct|perfect)\b/i
 // Other ways to say "I have no record" that NEGATION does not carry.
 const NO_RECORD = /\b(?:can'?t|cannot|couldn'?t|doesn'?t|does not|unaware)\b/i
-// A reply that holds a position on something else (the rate stays, payment is
-// accounting's) goes along with nothing; those are the other safe lines.
-const HOLDS_POSITION = /\bstays\b|\baccounting'?s side\b/i
+// A reply that is one of the other safe lines (holdRateLine, PAYMENT_TERMS_LINE)
+// goes along with nothing. Only their exact wording counts: a bare "stays"
+// is also how a phantom booking is confirmed ("Ok, he stays on it.").
+const HOLDS_POSITION = /\ball-in is where this one stays\b|\baccounting'?s side\b/i
 
 // What the broker says when a booking it has no record of is claimed.
 export const NO_BOOKING_LINE = "I don't have that on my end — no booking here yet."

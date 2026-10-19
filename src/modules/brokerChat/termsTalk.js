@@ -53,6 +53,10 @@ const ACCESSORIAL = /\b(?:lumper|detention|tonu|layover)\b/i
 const SENTENCES = /(?<=[.!?])\s+/
 const PAY_CLAUSES = /[,;]|\bbut\b/i
 const PERCENT = /%/
+// "No fee on our side, ask accounting": a fee word that only denies one, in a
+// sentence that sends the carrier to accounting, names no term. A topic word
+// still counts ("Payment is net 30 and no fee" is flagged).
+const NO_FEE = /\bno (?:\w+ )?(?:fee|charge)s?\b/i
 
 // True when the reply talks about payment terms other than by sending them
 // to accounting: a topic clause must defer, repeat only numbers the
@@ -65,6 +69,7 @@ export function paymentTermsClaimed(reply, said = []) {
     return sentence.split(PAY_CLAUSES).some((clause) => {
       if (ACCESSORIAL.test(clause)) return false
       if (!PAY_TOPIC.test(clause) && !(paying && FEE_WORDS.test(clause))) return false
+      if (!PAY_TOPIC.test(clause) && NO_FEE.test(clause) && DEFERS.test(sentence) && !PERCENT.test(clause)) return false
       if (!DEFERS.test(clause) || PERCENT.test(clause)) return true
       return (clause.match(/\d+(?:\.\d+)?/g) ?? []).some((n) => !theirs.has(n))
     })
