@@ -166,6 +166,8 @@ export async function sendMessage({ conversationId, userId, text }) {
   // What the broker already said: read by the prompt (has the MC been asked
   // for?) and by the reply checks (a figure it gave before is not a raise).
   const brokerSaid = brokerTexts(thread)
+  // An agreed status is not proof the delayed document has arrived.
+  const paper = { status: conversation.status, delivered: await repo.rateConDelivered(conversationId) }
   const systemPrompt = buildBrokerSystemPrompt({
     carrier,
     broker: { name: posting.name, contactName: posting.contactName, persona: posting.persona },
@@ -173,6 +175,7 @@ export async function sendMessage({ conversationId, userId, text }) {
     now,
     talk: talkFacts(said, posting.equipmentType),
     said,
+    paper,
     booking,
     brokerSaid,
   })
@@ -199,7 +202,7 @@ export async function sendMessage({ conversationId, userId, text }) {
   // Everything brokerReplyProblem needs to judge the reply, for the first
   // reply and the regenerated one alike.
   const checkFacts = {
-    truck, booking, posting, now, text, said, brokerSaid, bookedHere: BOOKED_STATUSES.includes(conversation.status),
+    truck, booking, posting, now, text, said, brokerSaid, paper, bookedHere: BOOKED_STATUSES.includes(conversation.status),
   }
 
   let reply

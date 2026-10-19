@@ -19,6 +19,7 @@ import {
 } from './rateTalk.js'
 import { weightChangeAgreed, weightHoldLine } from './weightTalk.js'
 import { personaBreak } from '../../lib/personaBreak.js'
+import { paperClaimProblem, paperNextLine } from './paperTalk.js'
 
 // `posting` names the lane for the in-character line; `now` and `text` (the
 // dispatcher's line) are for checks that depend on the clock or on what was asked.
@@ -26,7 +27,7 @@ import { personaBreak } from '../../lib/personaBreak.js'
 // broker already said (a figure it gave before is not a new raise), and
 // `bookedHere` is true when this conversation really has an agreed or booked load.
 export function brokerReplyProblem(reply, {
-  truck, booking = null, posting = null, now = new Date(), text = null, said = null, brokerSaid = [], bookedHere = false,
+  truck, booking = null, posting = null, now = new Date(), text = null, said = null, brokerSaid = [], bookedHere = false, paper = null,
 } = {}) {
   // Help-desk talk, or a canned refusal / bare "No." to a request for the
   // prompt: a person who does not follow, back to the load. No safeReply
@@ -43,6 +44,15 @@ export function brokerReplyProblem(reply, {
   }
   if (trippedBannedWord(reply) !== null) return { why: 'used a forbidden word', hint: '', unusable: true }
   if (leaksReasoning(reply)) return { why: 'showed your own reasoning instead of speaking as the broker', hint: '', unusable: true }
+  const paperProblem = paperClaimProblem(reply, paper)
+  if (paperProblem) {
+    return {
+      why: paperProblem,
+      hint: ' Follow ACTUAL RATE CONFIRMATION STATUS. Paper only appears in this thread after Agree; external email is never sent.',
+      unusable: true,
+      safeReply: paperNextLine(paper),
+    }
+  }
   if (tooLongForChat(reply)) {
     return { why: `ran to ${reply.trim().length} characters when the limit is ${CHAT_REPLY_MAX_CHARS}`, hint: '', unusable: true }
   }

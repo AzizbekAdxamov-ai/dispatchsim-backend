@@ -16,6 +16,7 @@ import { brokerTerms, termsLines } from '../../constants/accessorials.js'
 import { loadingMode, tarpFor, securementFor, isOpenDeck } from '../../constants/freightHandling.js'
 import { marketClaims, ratePushes, rateReasons, rateReasonLabels } from './rateTalk.js'
 import { truckFacts } from './truckTalk.js'
+import { paperLines } from './paperTalk.js'
 import { bookingFacts, mcQuestion, MOVES_TO_BOOK, SOON_PICKUP_HOURS } from './bookingTalk.js'
 import { DRIVING_LIMIT_HOURS, REQUIRED_REST_HOURS } from '../../constants/hosClock.js'
 import { marketFacts, seasonNote, benchmarkAgeDays, STALE_AFTER_DAYS } from '../../constants/marketRates.js'
@@ -358,7 +359,8 @@ export function callerBlock(facts, carrier = null, { mcAsked = false, towardBook
   // A wrong or unverifiable MC blocks everything: the broker asks for the
   // MC alone, not the driver, the truck number or the email.
   const mcBlocked = ['mismatch', 'unverifiable'].includes(facts.mc.verdict)
-  const missing = (mcBlocked ? ['mc-ok'] : facts.missing).map((k) => MISSING_LABEL[k]).filter(Boolean)
+  // Email can be a contact detail, but paper is delivered in this thread.
+  const missing = (mcBlocked ? ['mc-ok'] : facts.missing.filter((k) => k !== 'email')).map((k) => MISSING_LABEL[k]).filter(Boolean)
   if (missing.length) lines.push(`  Still missing before you can book: ${missing.join(', ')}.`)
   if (mcBlocked) {
     lines.push('  Until an MC checks out, ask for nothing else on the booking list -- not the driver, the truck number or the email.')
@@ -393,7 +395,7 @@ export function rateReasonLines(posting, { truck = null, now = new Date() } = {}
   ]
 }
 
-export function buildBrokerSystemPrompt({ broker, posting, carrier = null, now = new Date(), talk = null, said = null, booking = null, brokerSaid = [] }) {
+export function buildBrokerSystemPrompt({ broker, posting, carrier = null, now = new Date(), talk = null, said = null, booking = null, brokerSaid = [], paper = null }) {
   const rpm = (posting.rateUsd / posting.distanceMi).toFixed(2)
   const ceiling = ceilingFor(posting)
   const ceilingRpm = (ceiling / posting.distanceMi).toFixed(2)
@@ -459,6 +461,7 @@ export function buildBrokerSystemPrompt({ broker, posting, carrier = null, now =
       towardBooking: MOVES_TO_BOOK.test(said?.at(-1) ?? ''),
     }),
     ...talkBlock(talk),
+    ...paperLines(paper),
     'HOW YOU TALK:',
     '- One to three sentences. Never a list, never a wall of text. This is a',
     '  phone-style back-and-forth, not an email.',

@@ -32,6 +32,10 @@ function anchoredTells(roleWord) {
 }
 
 const MID_REPLY_TELLS = [
+  // Live broker output narrated whether it should ask for email, then
+  // appended an instruction to itself to stop responding.
+  /\b(?:we need|i need|we should|i should) to ask for (?:an? )?e-?mail now\b/i,
+  /\[\s*no further response needed\s*\]/i,
   /\bwhat (they'?re|they are|the (carrier|dispatcher|driver|user)( is)?) asking\b/i,
   /\bi'?d say something like\b/i,
   /\bi'?ll keep it (brief|short)\b/i,
