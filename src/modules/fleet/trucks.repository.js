@@ -22,7 +22,7 @@ const TRUCK_COLUMNS = `
   t.fuel_capacity_gal AS "fuelCapacityGal",
   t.last_fueled_at AS "lastFueledAt", t.last_fueled_location AS "lastFueledLocation",
   t.tire_front_pct AS "tireFrontPct", t.tire_rear_pct AS "tireRearPct",
-  t.trailer_type AS "trailerType",
+  t.trailer_type AS "trailerType", t.trailer_length_ft AS "trailerLengthFt",
   -- Spec sheet, carried over from the listing at purchase (migration 020).
   -- This is the page you check before putting 44,000 lbs behind it.
   t.vin, t.engine_make AS "engineMake", t.engine_model AS "engineModel",
