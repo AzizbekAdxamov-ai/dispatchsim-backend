@@ -8,7 +8,10 @@
 //   npm run chat:eval -- driver    # Grace only (~10)
 //   npm run chat:eval -- broker --case EB01  # one broker case
 //   npm run chat:eval -- driver --case ED01  # one Grace case
+//   npm run chat:eval -- --case EB04,ED07    # several cases, either side
 //   npm run chat:eval -- --gap 20            # wait 20 s between cases (per-minute token limit)
+//   npm run chat:eval -- --service           # what the live app would show: the same reply
+//                                            # check and ONE regeneration (up to 2x requests)
 //
 // Azizbek, 2026-10-09: from today the AIs are checked on a fixed set of
 // trade phrases, and every answer is kept -- what it said, what data it
@@ -26,7 +29,7 @@
 //                     the prompt version, and `human` (null until graded).
 //
 // Nothing is written to the database. Each case is one request; a second
-// try (aiClient) adds one. A plan larger than the provider's daily budget
+// try (aiClient) adds one, and so does a --service regeneration. A plan larger than the provider's daily budget
 // is refused before the first request.
 
 import 'dotenv/config'
@@ -39,9 +42,9 @@ import { chatConfigFor } from '../src/modules/chat/chatProvider.js'
 import { chatText } from './seed/aiClient.js'
 import { sleep } from './seed/config.js'
 import { chatTextRecorded, usedToday, budgetRefusal } from '../src/modules/chat/scriptRequests.js'
-import { dailyBudgetFor, dailyTokenStatus } from '../src/constants/chatBudget.js'
+import { dailyBudgetFor, dailyTokenStatus, groqReasoningParams } from '../src/constants/chatBudget.js'
 import { DAILY_TOKENS_SQL } from '../src/modules/chat/chatBudget.sql.js'
-import { attemptsLine, attemptFields, runTokenSummary, tokenPlanWarning, parseGap, makePacer, DEFAULT_REPLY_TOKENS } from './evalAttempts.js'
+import { attemptsLine, attemptFields, runTokenSummary, tokenPlanWarning, parseGap, parseIdList, makeRequestPacer, DEFAULT_REPLY_TOKENS } from './evalAttempts.js'
 import appConfig from '../src/config.js'
 import { marketFacts } from '../src/constants/marketRates.js'
 import { relativeDay, clockDateTime } from '../src/constants/appClock.js'
@@ -57,23 +60,42 @@ import { getCarrier } from '../src/modules/carrier/carrier.repository.js'
 import { BROKER_CASES, DRIVER_CASES, brokerFindings, driverFindings, CLASSIFIER_ONLY_FINDING } from './evalCases.js'
 import { nycFixtureLoad, FIXTURE_LOAD_CASES } from './evalFixtures.js'
 import { nextEvalRunId, writeEvalReport } from './evalReport.js'
+import { serviceReply } from './serviceReply.js'
+import { brokerReplyProblem, brokerRetryPrompt } from '../src/modules/brokerChat/replyProblem.js'
+import { driverReplyProblem, driverRetryPrompt } from '../src/modules/driverChat/replyProblem.js'
+import { truckFacts } from '../src/modules/brokerChat/truckTalk.js'
+import { bookingFacts } from '../src/modules/brokerChat/bookingTalk.js'
+import { stripSpeakerLabel } from '../src/lib/speakerLabel.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const args = process.argv.slice(2)
+// --service: answer the way the live service does (reply check, one
+// regeneration, holding line) instead of showing the model's first reply.
+const service = args.includes('--service')
 const only = args.find((a) => a === 'broker' || a === 'driver') ?? 'both'
-const caseFlag = args.find((a) => a.startsWith('--case='))?.slice('--case='.length)
-const casePosition = args.indexOf('--case')
-const caseId = caseFlag ?? (casePosition === -1 ? null : args[casePosition + 1])
-const brokerCases = BROKER_CASES.filter((c) => !caseId || c.id === caseId)
-const driverCases = DRIVER_CASES.filter((c) => !caseId || c.id === caseId)
-if ((casePosition !== -1 && !caseId) || (caseFlag === '' && !caseId)
-  || (caseId && ((only === 'broker' && !brokerCases.length)
-  || (only === 'driver' && !driverCases.length)
-  || (only === 'both' && brokerCases.length + driverCases.length !== 1)))) {
-  console.error(`Unknown or mismatched case ID: ${caseId ?? '(missing)'}`)
+const caseList = parseIdList(args, '--case')
+if (caseList.error) {
+  console.error(caseList.error)
   process.exit(1)
 }
-// --gap <seconds>: a pause between cases. Each case sends the whole system
+const caseIds = caseList.ids
+// Every id must exist, and on a chosen side (`broker` + ED07 is a mistake
+// worth naming, not a case to skip quietly).
+for (const id of caseIds ?? []) {
+  const onBroker = BROKER_CASES.some((c) => c.id === id)
+  const onDriver = DRIVER_CASES.some((c) => c.id === id)
+  if (!onBroker && !onDriver) {
+    console.error(`Unknown case ID: ${id}`)
+    process.exit(1)
+  }
+  if ((only === 'broker' && !onBroker) || (only === 'driver' && !onDriver)) {
+    console.error(`Case ${id} is not a ${only} case`)
+    process.exit(1)
+  }
+}
+const brokerCases = BROKER_CASES.filter((c) => !caseIds || caseIds.includes(c.id))
+const driverCases = DRIVER_CASES.filter((c) => !caseIds || caseIds.includes(c.id))
+// --gap <seconds>: a pause between provider requests. Each case sends the whole system
 // prompt (~3,000 tokens) and the per-minute token limit is 8,000, so several
 // cases in a row can be refused for tokens although requests are far under.
 const gap = parseGap(args)
@@ -82,7 +104,7 @@ if (gap.error) {
   process.exit(1)
 }
 const gapSec = gap.seconds
-const pauseBeforeCase = makePacer({ gapSec, sleep })
+const pauseBeforeRequest = makeRequestPacer({ gapSec, sleep })
 const outDir = join(here, '..', '..', 'reports', 'eval')
 const startedAt = new Date()
 const runId = nextEvalRunId(outDir, startedAt)
@@ -107,17 +129,18 @@ function safeEvalError(message) {
 // The same hash the live services write into chat_turn_log (056).
 const promptVersion = (file) => promptVersionOf(join(here, '..', 'src', 'modules', file))
 
-async function ask(config, messages, side) {
+async function ask(config, messages, side, cause) {
   let answeredModel = config.model
   const attempts = []
-  await pauseBeforeCase()
   try {
     const reply = await chatTextRecorded({
       chatText, source: 'eval', side, messages, config,
+      beforeRequest: pauseBeforeRequest,
       onRequest: () => { requests += 1 },
       onRetry: () => { retries += 1 },
       onModel: (model) => { answeredModel = model },
       onAttempt: (a) => { attempts.push(a) },
+      ...(cause ? { cause } : {}),
     })
     return { reply: reply.trim(), model: answeredModel, attempts }
   } catch (err) {
@@ -129,9 +152,42 @@ async function ask(config, messages, side) {
   }
 }
 
+// One case's answer. Raw: the model's first reply, as before. Service: the
+// live service's path (serviceReply.js) with the shared checks; the requests
+// of both tries are merged into one attempts list.
+async function answer({ config, side, messages, systemPrompt, clean, problemOf, retryPrompt, fallback }) {
+  if (!service) {
+    const r = await ask(config, messages(systemPrompt), side)
+    return { ...r, outcome: { mode: 'raw', rawReply: r.reply, regeneratedBecause: null, fellBack: false, stillFailing: null } }
+  }
+  const attempts = []
+  let model
+  const call = (sys, cause) => async () => {
+    const r = await ask(config, messages(sys), side, cause)
+    attempts.push(...r.attempts)
+    model = r.model
+    return clean(r.reply)
+  }
+  const out = await serviceReply({
+    first: call(systemPrompt),
+    again: (sys) => call(sys, 'regenerate')(),
+    problemOf, retryPrompt, fallback, systemPrompt,
+  })
+  return {
+    reply: out.reply, model, attempts: attempts.map((a, i) => ({ ...a, n: i + 1 })),
+    outcome: { mode: 'service', rawReply: out.raw, regeneratedBecause: out.regeneratedBecause, fellBack: out.fellBack, stillFailing: out.stillFailing },
+  }
+}
+
 // Run header: the primary, and the fallback too when one is configured.
 function modelHeader(config) {
-  return config.fallbackModel ? `primary ${config.model} · fallback ${config.fallbackModel}` : `primary ${config.model}`
+  const models = config.fallbackModel ? `primary ${config.model} · fallback ${config.fallbackModel}` : `primary ${config.model}`
+  return `${models} · reasoning_effort ${reasoningEffortOf(config)} · mode ${service ? 'service' : 'raw'}`
+}
+
+// What the request asks for, 'n/a' where the model takes no such field.
+function reasoningEffortOf(config) {
+  return groqReasoningParams(config.baseUrl, config.model).reasoning_effort ?? 'n/a'
 }
 
 function record(fields) {
@@ -142,7 +198,15 @@ function record(fields) {
   say(`**Data the model had:** ${row.dataSummary}`)
   say('')
   say(`- **Dispatcher:** \`${row.line}\``)
-  say(`- **${row.chat === 'broker' ? 'Broker' : 'Grace'}:** ${row.reply}`)
+  const who = row.chat === 'broker' ? 'Broker' : 'Grace'
+  if (row.regeneratedBecause) {
+    say(`- **First reply:** ${row.rawReply}`)
+    say(`- **Regenerated because:** it ${row.regeneratedBecause}`)
+    say(`- **Final reply (${who}):** ${row.reply}${row.fellBack ? ' _(holding line)_' : ''}`)
+    if (row.stillFailing) say(`- **Still failing after the second try:** it ${row.stillFailing}`)
+  } else {
+    say(`- **${who}:** ${row.reply}`)
+  }
   say(`- **Answering model:** \`${row.model}\``)
   say(`- **Requests:** ${attemptsLine(row.attempts)}`)
   say(`- **Automatic findings:** ${row.findings.length ? row.findings.join(' · ') : 'none'}`)
@@ -181,7 +245,7 @@ async function brokerRun(carrier) {
     // does not colour the whole run; reuse one only when none is left.
     const hit = open.find((p) => !used.has(p.id) && PICK[c.pick](p)) ?? open.find((p) => PICK[c.pick](p))
     if (!hit) {
-      if (caseId) throw safeEvalError(`No open posting fits ${c.id}`)
+      if (caseIds) throw safeEvalError(`No open posting fits ${c.id}`)
       say(`_${c.id} skipped: no open posting fits "${c.pick}"._\n`)
       continue
     }
@@ -190,19 +254,33 @@ async function brokerRun(carrier) {
     const market = marketFacts(posting)
     const terms = brokerTerms(posting.name, posting.equipmentType)
     const line = typeof c.line === 'function' ? c.line(posting, market) : c.line
+    // One clock for the prompt and the truck check, as in the live service.
+    const now = new Date()
+    const truck = truckFacts({ texts: [line], posting, now })
+    const booking = bookingFacts({ texts: [line], carrier, posting, now })
     const systemPrompt = bp.buildBrokerSystemPrompt({
       carrier,
       broker: { name: posting.name, contactName: posting.contactName, persona: posting.persona },
       posting,
+      now,
       talk: talkFacts([line], posting.equipmentType),
       said: [line],
+      booking,
     })
-    const { reply, model, attempts } = await ask(config, bp.buildMessages({ systemPrompt, history: [], newMessage: line }), 'broker')
+    const { reply, model, attempts, outcome } = await answer({
+      config, side: 'broker', systemPrompt,
+      messages: (sys) => bp.buildMessages({ systemPrompt: sys, history: [], newMessage: line }),
+      clean: (t) => stripSpeakerLabel(t, posting.contactName),
+      problemOf: (r) => brokerReplyProblem(r, { truck, booking, posting, now, text: line }),
+      retryPrompt: brokerRetryPrompt,
+      fallback: bp.FALLBACK_REPLY,
+    })
+    const expected = c.expect({ posting, market, terms, line })
     const rpm = (posting.rateUsd / posting.distanceMi).toFixed(2)
     const side = (s) => (s.source === 'regional' ? `${s.region} $${s.linehaul}` : `${s.region ?? '?'} (no regional figure)`)
     record({
       runId, at: new Date().toISOString(), chat: 'broker', caseId: c.id, style: c.style, terms: c.terms, line, good: c.good,
-      model, promptVersion: promptVersion('brokerChat/brokerChat.prompt.js'),
+      model, promptVersion: promptVersion('brokerChat/brokerChat.prompt.js'), reasoningEffort: reasoningEffortOf(config),
       data: {
         postingId: posting.id, broker: posting.name, contact: posting.contactName,
         lane: `${posting.originCity}, ${posting.originState} -> ${posting.destinationCity}, ${posting.destinationState}`,
@@ -217,7 +295,9 @@ async function brokerRun(carrier) {
         + ` · terms: ${termsLines(terms).slice(0, 3).join(' ')}`,
       systemPrompt,
       reply,
-      findings: brokerFindings(reply, c.expect({ posting, market, terms, line })),
+      findings: brokerFindings(reply, expected, { line }),
+      rawFindings: brokerFindings(outcome.rawReply, expected, { line }),
+      ...outcome,
       ...attemptFields(attempts),
       human: null,
     })
@@ -247,11 +327,19 @@ async function driverRun(carrier) {
     // chat does (driverChat.service.js).
     const offer = offerFacts({ driver: ctx.driver, load, texts: [c.line] })
     const systemPrompt = dp.buildDriverSystemPrompt({ driver: ctx.driver, standing, load, carrier, offer })
-    const { reply, model, attempts } = await ask(config, dp.buildMessages({ systemPrompt, history: [], newMessage: c.line }), 'driver')
+    const { reply, model, attempts, outcome } = await answer({
+      config, side: 'driver', systemPrompt,
+      messages: (sys) => dp.buildMessages({ systemPrompt: sys, history: [], newMessage: c.line }),
+      clean: (t) => stripSpeakerLabel(t, ctx.driver.name),
+      problemOf: (r) => driverReplyProblem(r, { offer, text: c.line, load }),
+      retryPrompt: driverRetryPrompt,
+      fallback: dp.FALLBACK_REPLY,
+    })
+    const expected = c.expect({ line: c.line, driver: ctx.driver, load, standing, fuelPct: dp.fuelPercent(ctx.driver), offer })
     const situation = [...dp.situationLines({ driver: ctx.driver, load }), ...dp.offerLines(offer)].map((l) => l.trim()).filter(Boolean)
     record({
       runId, at: new Date().toISOString(), chat: 'driver', caseId: c.id, style: c.style, terms: c.terms, line: c.line, good: c.good,
-      model, promptVersion: promptVersion('driverChat/driverChat.prompt.js'),
+      model, promptVersion: promptVersion('driverChat/driverChat.prompt.js'), reasoningEffort: reasoningEffortOf(config),
       data: {
         driver: ctx.driver.name, load: load ? `${load.originCity}, ${load.originState} -> ${load.destinationCity}, ${load.destinationState}${fixture ? ' (not in the database)' : ''}` : null,
         situation, requests: dp.requestLines(ctx.driver, load).map((l) => l.trim()).filter(Boolean),
@@ -261,8 +349,10 @@ async function driverRun(carrier) {
         + ` · pay: ${standing.unpaidCount > 0 ? `owed $${Math.round(standing.owedUsd)} (${standing.unpaidCount})` : 'nothing owed'}`,
       systemPrompt,
       reply,
+      ...outcome,
       ...attemptFields(attempts),
-      findings: driverFindings(reply, c.expect({ driver: ctx.driver, load, standing, fuelPct: dp.fuelPercent(ctx.driver), offer }), { onTheRoad: ctx.driver.onTheRoad }),
+      findings: driverFindings(reply, expected, { onTheRoad: ctx.driver.onTheRoad }),
+      rawFindings: driverFindings(outcome.rawReply, expected, { onTheRoad: ctx.driver.onTheRoad }),
       human: null,
     })
   }
@@ -305,7 +395,7 @@ let aborted = null
 try {
   const carrier = await getCarrier()
   say(`# Chat evaluation — ${startedAt.toISOString()}`)
-  say(`Cases: ${planned} · planned requests ~${planned} of a daily budget of ${budget} (a second try adds one).`)
+  say(`Cases: ${planned} · planned requests ~${planned}${service ? ` (up to ${planned * 2}: a regeneration adds one)` : ''} of a daily budget of ${budget} (a second try adds one).`)
   say('')
   if (runBroker) await brokerRun(carrier)
   if (runDriver) await driverRun(carrier)

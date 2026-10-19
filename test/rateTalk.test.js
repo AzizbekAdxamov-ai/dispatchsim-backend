@@ -6,8 +6,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { marketClaims, ratePushes, dollars } from '../src/modules/brokerChat/rateTalk.js'
-import { buildBrokerSystemPrompt, rateTalkBlock } from '../src/modules/brokerChat/brokerChat.prompt.js'
+import { marketClaims, ratePushes, dollars, rateReasons, unsupportedRateReasons, HEAVY_LBS, DEADHEAD_REASON_MILES } from '../src/modules/brokerChat/rateTalk.js'
+import { HEAVY_LBS as BOOKING_HEAVY_LBS } from '../src/modules/brokerChat/bookingTalk.js'
+import { buildBrokerSystemPrompt, rateTalkBlock, rateReasonLines } from '../src/modules/brokerChat/brokerChat.prompt.js'
 import { REGIONAL_LINEHAUL, fuelPerMile } from '../src/constants/marketRates.js'
 
 const flatbed = { equipmentType: 'flatbed', rateUsd: 3820, distanceMi: 1000, originState: 'NC', destinationState: 'TX', id: 'p1' }
@@ -179,4 +180,97 @@ test('a region name is market context: "carolinas flatbed is 4.75 this week" is 
   assert.equal(wrong.verdict, 'wrong')
   const [right] = marketClaims(['south central at 1.98 reload is dead'], dryVan)
   assert.equal(right.verdict, 'right')
+})
+
+// -- Reasons to pay more: only from the data ----------------------------------
+
+const NOW = new Date('2026-10-18T12:00:00Z')
+const inHours = (h) => new Date(NOW.getTime() + h * 3600e3).toISOString()
+// dry-van OR -> OR: the destination's market equals the national figure's side
+// is not asserted here; the weak-reload case below picks its own states.
+const lane = { ...dryVan, originState: 'TX', destinationState: 'TX', weightLbs: 30000, distanceMi: 1000, rateUsd: 2000, pickupAt: inHours(30) }
+
+// Kills: HEAVY_LBS defined twice, or a heavy load not counted as a reason
+test('rateReasons: weight over HEAVY_LBS', () => {
+  assert.equal(HEAVY_LBS, 40000)
+  assert.equal(BOOKING_HEAVY_LBS, HEAVY_LBS)
+  assert.ok(rateReasons({ posting: { ...lane, weightLbs: 45000 }, now: NOW }).includes('weight'))
+  assert.ok(!rateReasons({ posting: lane, now: NOW }).includes('weight'))
+})
+
+// Kills: "tight window" allowed on a pickup more than a day out, or after it has passed
+test('rateReasons: tight window only within 24 hours before pickup', () => {
+  const has = (h) => rateReasons({ posting: { ...lane, pickupAt: inHours(h) }, now: NOW }).includes('tight-window')
+  assert.equal(has(30), false)
+  assert.equal(has(24), true)
+  assert.equal(has(20), true)
+  assert.equal(has(-2), false)
+})
+
+// Kills: deadhead allowed on a short empty run
+test('rateReasons: deadhead from DEADHEAD_REASON_MILES, truck known', () => {
+  assert.equal(DEADHEAD_REASON_MILES, 150)
+  const has = (truck) => rateReasons({ posting: lane, truck, now: NOW }).includes('deadhead')
+  assert.equal(has({ miles: 300 }), true)
+  assert.equal(has({ miles: 50 }), false)
+  assert.equal(has(null), false)
+})
+
+// Kills: weak-reload decided by anything but the destination market against national
+test('rateReasons: weak reload when the destination pays below national', () => {
+  const weakIn = (st) => rateReasons({ posting: { ...lane, destinationState: st }, now: NOW }).includes('weak-reload')
+  assert.equal(weakIn('FL'), true) // Florida-So Georgia 1.43 < national 2.17
+  assert.equal(weakIn('IL'), false) // 2.66
+  assert.equal(weakIn('WA'), false) // equal to national is not weak
+})
+
+// Kills: S9c "$7,600, pickup window's tight" passing when the pickup is 30h out
+test('unsupportedRateReasons: tight window on a far pickup is flagged', () => {
+  const far = { ...lane, rateUsd: 7000, distanceMi: 2000, pickupAt: inHours(30) }
+  const near = { ...far, pickupAt: inHours(20) }
+  const reply = "I can do $7,600, pickup window's tight."
+  assert.deepEqual(unsupportedRateReasons(reply, { posting: far, now: NOW, text: 'need $8000' }), ['tight-window'])
+  assert.deepEqual(unsupportedRateReasons(reply, { posting: near, now: NOW, text: 'need $8000' }), [])
+  assert.deepEqual(unsupportedRateReasons("It's $7,000, pickup window's tight.", { posting: far, now: NOW }), [])
+  assert.deepEqual(unsupportedRateReasons("OK $7,600 it is, pickup window's tight.", { posting: far, now: NOW, text: 'can you do $7,600' }), [])
+})
+
+// Kills: the prompt listing "a pickup within a day" on a load that is two days out
+test('rateReasonLines: only reasons true of the load, or hold', () => {
+  const text = (p, o = {}) => rateReasonLines(p, { now: NOW, ...o }).join(' ')
+  assert.doesNotMatch(text({ ...lane, pickupAt: inHours(48) }), /a pickup within a day/)
+  assert.match(text({ ...lane, pickupAt: inHours(10) }), /a pickup within a day/)
+  assert.match(text({ ...lane, weightLbs: 45000 }), /heavy freight \(45,000 lbs\)/)
+  assert.match(text(lane, { truck: { miles: 300 } }), /their 300-mile empty run/)
+  // A destination that pays at least national, a light load, a far pickup: nothing to pay more for.
+  const holdState = ['FL', 'TX', 'IL', 'CA', 'NY', 'GA', 'OH', 'WA'].find((st) => rateReasons({ posting: { ...lane, destinationState: st }, now: NOW }).length === 0)
+  assert.ok(holdState, 'some destination has no reason')
+  assert.match(text({ ...lane, destinationState: holdState }), /no reason to pay more; hold/)
+  const prompt = buildBrokerSystemPrompt({ broker: { name: 'B', contactName: 'Dee', persona: 'p' }, posting: { ...lane, pickupAt: inHours(48), id: 'p9' }, now: NOW })
+  assert.doesNotMatch(prompt, /a pickup within a day/)
+})
+
+// Kills: S9c's made-up "tight window" reaching the carrier unchallenged (one regeneration, not a fallback)
+test('brokerReplyProblem: a reason the load does not have is a content problem', async () => {
+  const { brokerReplyProblem } = await import('../src/modules/brokerChat/replyProblem.js')
+  const far = { ...lane, rateUsd: 7000, distanceMi: 2000, pickupAt: inHours(30) }
+  const p = brokerReplyProblem("I can do $7,600, pickup window's tight.", { posting: far, now: NOW, text: 'need $8000' })
+  assert.equal(p.why, 'gave a reason this load does not have')
+  assert.equal(p.unusable, false)
+  assert.match(p.hint, /true of this load: none|true of this load: /)
+  assert.equal(brokerReplyProblem("I can do $7,600, pickup window's tight.", { posting: { ...far, pickupAt: inHours(20) }, now: NOW, text: 'need $8000' }), null)
+})
+
+// Kills: bare "window" (a delivery or appointment window) read as a tight pickup; "$7.6k" slipping past
+test('tight-window words need a tight window; $7.6k is read as 7600; a missing truck has no "undefined"', () => {
+  const far = { ...lane, rateUsd: 2000, distanceMi: 1000, weightLbs: 45000, pickupAt: inHours(48) }
+  const un = (reply) => unsupportedRateReasons(reply, { posting: far, now: NOW, text: 'need $2,600' })
+  assert.deepEqual(un('$2,400 with the weight, delivery window is 8-12'), [])
+  assert.deepEqual(un('Appointment window is 8 to 12'), [])
+  assert.deepEqual(un("$2,400, window's 8-12 at delivery"), [])
+  assert.deepEqual(un("$2,400, pickup window's tight"), ['tight-window'])
+  assert.deepEqual(un('$2,400, the window is tight'), ['tight-window'])
+  assert.deepEqual(un('$2.4k, short notice'), ['tight-window'])
+  assert.deepEqual(unsupportedRateReasons('ok $2.6k, short notice', { posting: far, now: NOW, text: '$2,600?' }), [])
+  assert.doesNotMatch(rateReasonLines(far, { now: NOW, truck: {} }).join(' '), /undefined/)
 })

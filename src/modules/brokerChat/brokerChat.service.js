@@ -5,13 +5,14 @@
 // 22 requests a day, chat is per-message and open-ended — so they get
 // separate budgets, keys and models.
 import { chatText } from '../../../scripts/seed/aiClient.js'
-import { ignoresUnreachable } from '../../lib/cannotMake.js'
+import { brokerReplyProblem, brokerRetryPrompt } from './replyProblem.js'
 import { truckFacts } from './truckTalk.js'
+import { bookingFacts, carrierNotVerified } from './bookingTalk.js'
+import { stopsForRow } from './stops.js'
 import { fileURLToPath } from 'node:url'
 import { promptVersionOf } from '../../lib/promptVersion.js'
 import { turnRow, logTurn } from '../chat/turnLog.js'
 import { assertCanSend } from '../chat/chatBudget.service.js'
-import { tooLongForChat, CHAT_REPLY_MAX_CHARS } from '../../constants/chatBudget.js'
 import { chatConfigFor } from '../chat/chatProvider.js'
 import { AppError } from '../../lib/errors.js'
 import { stripSpeakerLabel } from '../../lib/speakerLabel.js'
@@ -23,8 +24,6 @@ import { bookPosting } from '../loadBoard/loadBoard.service.js'
 import {
   buildBrokerSystemPrompt,
   buildMessages,
-  trippedBannedWord,
-  leaksReasoning,
   FALLBACK_REPLY,
 } from './brokerChat.prompt.js'
 
@@ -47,6 +46,24 @@ function assertPostingOpen(posting) {
   if (posting.status !== 'open') throw new AppError('POSTING_TAKEN')
   if (new Date(posting.expiresAt) <= new Date()) throw new AppError('POSTING_EXPIRED')
   if (!posting.brokerId) throw new AppError('BROKER_UNAVAILABLE')
+}
+
+// What the booking flow reaches outside this file for. The default is the
+// real database; the booking-flow test hands in an in-memory stand-in, so
+// the whole agree -> paper -> accept path runs without a DB or a token.
+const DEFAULT_DEPS = Object.freeze({ repo, getCarrier, bookPosting })
+
+// No agreement and no signed paper until the MC the dispatcher gave checks
+// out (decision 2, 2026-10-17). The broker's own sentence goes to the screen
+// in details.message -- the dispatcher is told why, never just refused.
+async function assertCarrierVerified(conversationId, posting, deps = DEFAULT_DEPS) {
+  const booking = bookingFacts({
+    texts: dispatcherTexts(await deps.repo.listMessages(conversationId)),
+    carrier: await deps.getCarrier(),
+    posting,
+  })
+  const blocked = carrierNotVerified({ booking, contactName: posting.contactName })
+  if (blocked) throw new AppError('CARRIER_NOT_VERIFIED', blocked)
 }
 
 export async function openConversation({ postingId, userId }) {
@@ -122,7 +139,8 @@ export async function sendMessage({ conversationId, userId, text }) {
   // words to someone else's outage is not acceptable.
   const dispatcherMessage = await repo.addMessage(conversationId, 'dispatcher', text)
 
-  const history = (await repo.listMessages(conversationId)).slice(-HISTORY_TURNS - 1, -1)
+  const thread = await repo.listMessages(conversationId)
+  const history = thread.slice(-HISTORY_TURNS - 1, -1)
   const carrier = await getCarrier()
   // The dispatcher's own words so far, this one included. Read by code for
   // market claims and rate pushes (rateTalk.js). History is capped at
@@ -132,6 +150,9 @@ export async function sendMessage({ conversationId, userId, text }) {
   // reply must be the one the prompt's truck block was written from.
   const now = new Date()
   const truck = truckFacts({ texts: said, posting, now })
+  // Who is calling and what is still missing before a booking, from the WHOLE
+  // thread (not the 20-turn history): an MC told on message 3 stays told.
+  const booking = bookingFacts({ texts: dispatcherTexts(thread), carrier, posting, now })
   const systemPrompt = buildBrokerSystemPrompt({
     carrier,
     broker: { name: posting.name, contactName: posting.contactName, persona: posting.persona },
@@ -139,6 +160,7 @@ export async function sendMessage({ conversationId, userId, text }) {
     now,
     talk: talkFacts(said, posting.equipmentType),
     said,
+    booking,
   })
 
   // Every request this turn sends to the provider, counted where they are
@@ -150,6 +172,7 @@ export async function sendMessage({ conversationId, userId, text }) {
   // regenerated, and the error if the turn failed.
   let regenerated = null
   let failure = null
+  let usedFallback = false
   // The model that actually answered, which is the fallback when the
   // primary was throttled; the turn log records that one.
   let answeredModel = config.model
@@ -172,46 +195,23 @@ export async function sendMessage({ conversationId, userId, text }) {
       onAttempt,
     }))
 
-    // Two ways a reply can be unusable, both regenerated once and then
-    // replaced with a short in-character line. Neither can be silently
-    // dropped the way a bad seed row can — someone is waiting for an answer.
-    //
-    // Banned word: breaks the product's own vocabulary rule.
-    // Leaked reasoning: the model answers with its own thinking
-    //   ("We need to respond as Devin Marlowe...") instead of the broker's
-    //   words. Seen live on 2026-08-31 from a 120B model. Nothing destroys
-    //   the illusion faster.
-    //
-    // Too long: the token budget used to enforce this by itself -- a reply
-    //   could not exceed 220 tokens because 220 was all it was given. That
-    //   stopped being true when the budget had to grow to let a reasoning
-    //   model think (src/constants/chatBudget.js). The length rule did not
-    //   go away with it; it moved here, where it is about the REPLY rather
-    //   than about the reply plus whatever the model thought first.
-    const unusable = (t) => trippedBannedWord(t) !== null || leaksReasoning(t) || tooLongForChat(t)
-
-    const unusableWhy = unusable(reply)
-      ? (trippedBannedWord(reply)
-        ? 'used a forbidden word'
-        : leaksReasoning(reply)
-          ? 'showed your own reasoning instead of speaking as the broker'
-          : `ran to ${reply.trim().length} characters when the limit is ${CHAT_REPLY_MAX_CHARS}`)
-      : null
-    // Third way: the carrier's truck cannot reach the pickup in time
-    // (computed from the city they named and the clock) and the reply never
-    // says so. Same single second call -- one more request from the daily
-    // budget, only on turns where makesIt === false.
-    const missedPickup = ignoresUnreachable(reply, truck, { broker: true })
-    const why = unusableWhy ?? (missedPickup ? 'did not tell the carrier their truck gets there after your pickup' : null)
+    // What is wrong with a reply is decided in replyProblem.js, the same
+    // function the eval scripts use. Banned word, leaked reasoning and a
+    // too-long reply are unusable: regenerated once, then replaced with a
+    // short in-character line -- someone is waiting for an answer, so they
+    // cannot be silently dropped the way a bad seed row can. A content
+    // problem (the truck cannot reach the pickup and the reply never says
+    // so) is regenerated once, with one more request from the daily budget,
+    // and logged if it persists.
+    const problem = brokerReplyProblem(reply, { truck, booking, posting, now, text })
+    const why = problem?.why ?? null
 
     if (why) {
       console.warn(`[brokerChat] retrying — reply ${why}`)
       regenerated = why
       reply = clean(await chatText({
         messages: buildMessages({
-          systemPrompt: `${systemPrompt}
-
-Your last reply ${why}.${missedPickup ? ' The facts above say their truck gets there after your pickup: say so plainly, with the miles, then ask one thing.' : ''} Reply again as the broker, in character, one to three sentences only.`,
+          systemPrompt: brokerRetryPrompt(systemPrompt, problem),
           history,
           newMessage: text,
         }),
@@ -221,8 +221,12 @@ Your last reply ${why}.${missedPickup ? ' The facts above say their truck gets t
         onAttempt,
         cause: 'regenerate',
       }))
-      if (unusable(reply)) reply = FALLBACK_REPLY
-      else if (ignoresUnreachable(reply, truck, { broker: true })) console.warn('[brokerChat] regenerated reply still does not say the truck gets there after the pickup')
+      const remaining = brokerReplyProblem(reply, { truck, booking, posting, now, text })
+      if (remaining?.unusable) {
+        reply = remaining.safeReply ?? FALLBACK_REPLY
+        usedFallback = true
+      }
+      else if (remaining) console.warn(`[brokerChat] regenerated reply still ${remaining.why}`)
     }
   } catch (err) {
     failure = err.message
@@ -255,7 +259,7 @@ Your last reply ${why}.${missedPickup ? ' The facts above say their truck gets t
       chat: 'broker', conversationId, dispatcherMessageId: dispatcherMessage.id, userId,
       model: answeredModel, promptVersion: PROMPT_VERSION, systemPrompt, history, text,
       imageCount: 0, reply, regeneratedBecause: regenerated,
-      fellBack: reply === FALLBACK_REPLY, error: failure, providerRequests: spent,
+      fellBack: usedFallback, error: failure, providerRequests: spent,
       attempts, onTheRoad: false,
     })).catch((e) => {
       console.error(`[brokerChat] could not write the turn log for message ${dispatcherMessage.id}: ${e.message}`)
@@ -286,11 +290,11 @@ Your last reply ${why}.${missedPickup ? ' The facts above say their truck gets t
 // The dispatcher records what they settled on. Not parsed from the broker's
 // prose on purpose — pulling a number out of free text is fragile, and a
 // wrong number here quietly changes what the load is worth.
-export async function agreeRate({ conversationId, userId, rateUsd }) {
-  const conversation = await repo.getConversation(conversationId, userId)
+export async function agreeRate({ conversationId, userId, rateUsd }, { deps = DEFAULT_DEPS } = {}) {
+  const conversation = await deps.repo.getConversation(conversationId, userId)
   if (!conversation) throw new AppError('CONVERSATION_NOT_FOUND')
 
-  const posting = await repo.getPostingWithBroker(conversation.postingId)
+  const posting = await deps.repo.getPostingWithBroker(conversation.postingId)
   assertPostingOpen(posting)
 
   // loads_rpm_band (migration 007) requires rate_usd between distance and
@@ -305,24 +309,25 @@ export async function agreeRate({ conversationId, userId, rateUsd }) {
   }
 
   if (conversation.status === 'booked') throw new AppError('ALREADY_BOOKED')
+  await assertCarrierVerified(conversationId, posting, deps)
 
-  const updated = await repo.setAgreedRate(conversationId, userId, rateUsd)
+  const updated = await deps.repo.setAgreedRate(conversationId, userId, rateUsd)
   if (!updated) throw new AppError('CONVERSATION_NOT_FOUND')
 
   // Settling on a new number withdraws whatever paper was already on its
   // way. Without this a dispatcher could re-negotiate up and then accept
   // the old, lower rate confirmation still sitting in the thread.
-  await repo.clearRateCon(conversationId)
+  await deps.repo.clearRateCon(conversationId)
 
   // The broker draws up the paper. Sometimes the paper does not say what
   // the handshake said -- see replyTiming.rateConAmount. The load is
   // created at whatever this number is, so reading the document before
   // accepting it is the entire point of the step.
   const paperRate = rateConAmount(rateUsd, posting.creditRating, { minRate })
-  const withPaper = await repo.setRateCon(conversationId, paperRate)
+  const withPaper = await deps.repo.setRateCon(conversationId, paperRate)
   if (!withPaper) throw new AppError('CONVERSATION_NOT_FOUND')
 
-  await repo.addMessage(
+  await deps.repo.addMessage(
     conversationId,
     'broker',
     'Rate confirmation attached. Look it over and send it back signed.',
@@ -337,8 +342,8 @@ export async function agreeRate({ conversationId, userId, rateUsd }) {
 // read it, accept it. bookPosting reads the rate con's own number through
 // getAgreedRate, so a document that came back low produces a load worth
 // exactly that much.
-export async function acceptRateCon({ conversationId, userId }) {
-  const conversation = await repo.getConversation(conversationId, userId)
+export async function acceptRateCon({ conversationId, userId }, { deps = DEFAULT_DEPS } = {}) {
+  const conversation = await deps.repo.getConversation(conversationId, userId)
   if (!conversation) throw new AppError('CONVERSATION_NOT_FOUND')
 
   // Idempotent: a second click, or a second tab, gets the same load back
@@ -347,33 +352,34 @@ export async function acceptRateCon({ conversationId, userId }) {
     // bookPosting is idempotent for the same user and hands back the load
     // it already created, so the reply has the same shape either way --
     // a caller should not have to branch on whether it got there first.
-    const again = await bookPosting({ postingId: conversation.postingId, userId, driverId: null })
+    const again = await deps.bookPosting({ postingId: conversation.postingId, userId, driverId: null })
     return { conversation, load: again.load, warnings: again.warnings, alreadyAccepted: true }
   }
 
   if (conversation.status !== 'agreed') throw new AppError('NOT_AGREED_YET')
-  if (!(await repo.rateConDelivered(conversationId))) throw new AppError('RATE_CON_NOT_ARRIVED')
+  if (!(await deps.repo.rateConDelivered(conversationId))) throw new AppError('RATE_CON_NOT_ARRIVED')
 
-  const posting = await repo.getPostingWithBroker(conversation.postingId)
+  const posting = await deps.repo.getPostingWithBroker(conversation.postingId)
   assertPostingOpen(posting)
+  await assertCarrierVerified(conversationId, posting, deps)
 
   // No driver here on purpose. Accepting the paper commits the company to
   // the freight; deciding who runs it is dispatch's next decision, made
   // against the whole fleet rather than in a chat window.
-  const booked = await bookPosting({ postingId: conversation.postingId, userId, driverId: null })
+  const booked = await deps.bookPosting({ postingId: conversation.postingId, userId, driverId: null })
 
   // The load is already committed at this point. If the status update
   // loses a race with another tab, that is not a reason to report failure
   // and strand the thread on 'agreed' -- the posting is booked, and a
   // second accept would then hit POSTING_TAKEN forever. Report what is
   // true: the load exists.
-  const marked = await repo.markBooked(conversationId, userId)
+  const marked = await deps.repo.markBooked(conversationId, userId)
   if (!marked) {
     console.warn(`[brokerChat] load ${booked.load?.id} created but conversation ${conversationId} was not marked booked`)
   }
 
   return {
-    conversation: marked ?? (await repo.getConversation(conversationId, userId)),
+    conversation: marked ?? (await deps.repo.getConversation(conversationId, userId)),
     load: booked.load,
     warnings: booked.warnings,
     alreadyAccepted: false,
@@ -384,11 +390,18 @@ export async function listConversations({ userId }) {
   return { conversations: await repo.listConversations(userId) }
 }
 
-export async function getRateConfirmation({ conversationId, userId }) {
-  const row = await repo.getConversationForPDF(conversationId, userId)
+export async function getRateConfirmation({ conversationId, userId }, { deps = DEFAULT_DEPS } = {}) {
+  const row = await deps.repo.getConversationForPDF(conversationId, userId)
   if (!row) throw new AppError('CONVERSATION_NOT_FOUND')
   if (row.status !== 'agreed' && row.status !== 'booked') throw new AppError('NOT_AGREED_YET')
   // The document cannot be opened before the broker has sent it.
-  if (!(await repo.rateConDelivered(conversationId))) throw new AppError('RATE_CON_NOT_ARRIVED')
-  return row
+  if (!(await deps.repo.rateConDelivered(conversationId))) throw new AppError('RATE_CON_NOT_ARRIVED')
+  // What the dispatcher told the broker (driver, truck number, email for the
+  // paper) and the invented shipper and receiver for this posting.
+  const booking = bookingFacts({
+    texts: dispatcherTexts(await deps.repo.listMessages(conversationId)),
+    carrier: await deps.getCarrier(),
+    posting: row,
+  })
+  return { ...row, booking, stops: stopsForRow(row) }
 }

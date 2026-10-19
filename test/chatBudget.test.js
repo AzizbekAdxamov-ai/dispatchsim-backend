@@ -252,8 +252,10 @@ test('both chats treat an over-long reply the way they treat leaked reasoning', 
     'src/modules/driverChat/driverChat.service.js',
   ]) {
     const text = src(f)
-    assert.match(text, /tooLongForChat\(t\)/, `${f} javob uzunligini tekshirmayapti`)
-    assert.match(text, /unusable\(reply\)\) reply = FALLBACK_REPLY/, `${f} zaxira javobga tushmayapti`)
+    assert.match(text, /if \(remaining\?\.unusable\) \{[\s\S]*?reply = remaining\.safeReply \?\? FALLBACK_REPLY/, `${f} zaxira javobga tushmayapti`)
+    // The length rule itself lives in the shared reply check.
+    const check = src(f.replace(/[^/]*$/, 'replyProblem.js'))
+    assert.match(check, /tooLongForChat\(reply\)/, `${f} javob uzunligini tekshirmayapti`)
   }
 })
 
@@ -662,6 +664,30 @@ test('gpt-oss on Groq gets effort low and never reasoning_format or none', async
     assert.equal('reasoning_format' in bodies[0], false)
     assert.equal('reasoning' in bodies[0], false)
   }
+})
+
+async function withEffort(value, fn) {
+  const before = process.env.CHAT_GROQ_REASONING_EFFORT
+  process.env.CHAT_GROQ_REASONING_EFFORT = value ?? ''
+  try { return await fn() } finally {
+    if (before == null) delete process.env.CHAT_GROQ_REASONING_EFFORT
+    else process.env.CHAT_GROQ_REASONING_EFFORT = before
+  }
+}
+
+// Kills: CHAT_GROQ_REASONING_EFFORT ignored (medium/high never reach Groq), or
+// a typo/blank value sent as-is (a 400) instead of falling back to low.
+test('gpt-oss on Groq passes medium and high through; blank or invalid is low', async () => {
+  for (const [env, want] of [['medium', 'medium'], ['HIGH ', 'high'], ['low', 'low'], ['', 'low'], [null, 'low'], ['extreme', 'low']]) {
+    const got = await withEffort(env, () => groqReasoningParams(GROQ, 'openai/gpt-oss-20b'))
+    assert.deepEqual(got, { reasoning_effort: want })
+  }
+})
+
+// Kills: the effort setting leaking into qwen, which takes only none/low.
+test('qwen on Groq ignores CHAT_GROQ_REASONING_EFFORT', async () => {
+  const got = await withEffort('high', () => withReasoning(null, () => groqReasoningParams(GROQ, 'qwen/qwen3-32b')))
+  assert.deepEqual(got, { reasoning_format: 'parsed', reasoning_effort: 'low' })
 })
 
 // Kills: reasoning fields sent to a model that does not take them (a 400),

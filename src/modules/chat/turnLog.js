@@ -32,7 +32,7 @@ export function turnRow({
   const answered = error == null && typeof reply === 'string'
   const previous = [...history].reverse().find((m) => m.role !== 'dispatcher')?.content ?? null
   const findings = answered
-    ? (chat === 'broker' ? brokerReply(reply, previous) : driverReply(reply, previous, { onTheRoad }))
+    ? (chat === 'broker' ? brokerReply(reply, previous, text) : driverReply(reply, previous, { onTheRoad }))
     : []
   return [
     chat, conversationId, dispatcherMessageId, userId, model, promptVersion, systemPrompt,

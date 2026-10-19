@@ -161,3 +161,12 @@ test('the prompt says how to answer "are you a bot" in character', () => {
   assert.match(prompt, /asks whether you are a bot/)
   assert.match(prompt, /You do not know what a prompt or a\s+model is/)
 })
+
+// Kills: small talk about her getting "No idea", an invented family, or a
+// prompt-ask answer that never turns back to work.
+test('the prompt answers small talk warmly and turns every deflection back to work', () => {
+  const prompt = buildDriverSystemPrompt({ driver: GRACE, standing: STANDING, load: null })
+  assert.match(prompt, /"No idea" is for facts/)
+  assert.match(prompt, /turn back to work/)
+  assert.match(prompt, /name no one/)
+})

@@ -226,3 +226,12 @@ test('every money stance that talks about pay does it in one line, when pay come
     assert.doesNotMatch(p, /Bring it up early/, stage)
   }
 })
+
+// Kills: the prompt teaching Grace a flat "ha, sure" to "are you a bot" --
+// read as a yes (ED10, 2026-10-17). She says no plainly instead.
+test('asked if she is a bot she says no plainly, never "sure"', () => {
+  const p = promptFor(LOAD)
+  assert.doesNotMatch(p, /ha, sure/i)
+  assert.match(p, /say no plainly/)
+  assert.match(p, /Never "sure", "maybe"/)
+})

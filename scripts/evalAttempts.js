@@ -90,11 +90,40 @@ export function parseGap(args) {
   return { seconds }
 }
 
+// `--case EB04,ED07` or `--case=EB04,ED07` -> { ids: ['EB04', 'ED07'] };
+// no flag -> { ids: null } (everything). A missing value or an empty item
+// ("EB04,,ED07") is an error, never silently "all". `flag` is e.g. '--case'.
+export function parseIdList(args, flag) {
+  const eq = args.find((a) => a.startsWith(`${flag}=`))?.slice(flag.length + 1)
+  const position = args.indexOf(flag)
+  if (eq === undefined && position === -1) return { ids: null }
+  const raw = eq ?? args[position + 1]
+  if (raw === undefined || raw.trim() === '' || raw.startsWith('--')) {
+    return { error: `${flag} needs a value, e.g. ${flag} A,B` }
+  }
+  const ids = raw.split(',').map((s) => s.trim())
+  if (ids.some((s) => s === '')) return { error: `${flag} has an empty item: ${raw}` }
+  return { ids }
+}
+
 // The pause before a case: none before the first, `gapSec` seconds before
 // every later one. `sleep` is injected so a test does not wait.
 export function makePacer({ gapSec, sleep }) {
   let asked = 0
   return async () => {
     if (asked++ > 0 && gapSec > 0) await sleep(gapSec * 1000)
+  }
+}
+
+// Called at the HTTP boundary, including backoff, fallback and regeneration.
+// Measure request start times so a slow response already counts toward gap.
+export function makeRequestPacer({ gapSec, sleep, now = Date.now }) {
+  let last = null
+  return async () => {
+    if (last !== null) {
+      const remaining = last + gapSec * 1000 - now()
+      if (remaining > 0) await sleep(remaining)
+    }
+    last = now()
   }
 }

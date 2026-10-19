@@ -9,7 +9,8 @@ import { fileURLToPath } from 'node:url'
 
 import { DAILY_TOKENS_SQL, DAILY_UNRECORDED_SQL } from '../src/modules/chat/chatBudget.sql.js'
 import { chatTextRecorded, INSERT_SCRIPT_REQUESTS_SQL } from '../src/modules/chat/scriptRequests.js'
-import { attemptsLine, attemptFields, runTokenSummary, tokenPlanWarning, parseGap, makePacer } from '../scripts/evalAttempts.js'
+import { attemptsLine, attemptFields, runTokenSummary, tokenPlanWarning, parseGap, makePacer, makeRequestPacer } from '../scripts/evalAttempts.js'
+import { chatText } from '../scripts/seed/aiClient.js'
 import { tokenUsageLines, tokenFootnotes, tokenSectionLines, loadTokenSection } from '../scripts/tokenUsageText.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -240,7 +241,7 @@ test('a dataset row carries requests, attempts and summed usage', () => {
 test('chat-eval records attempts for both chats and names the 429 code', () => {
   const src = read('scripts', 'chat-eval.js')
   assert.equal((src.match(/\.\.\.attemptFields\(attempts\)/g) ?? []).length, 2)
-  assert.equal((src.match(/const \{ reply, model, attempts \} = await ask\(/g) ?? []).length, 2)
+  assert.equal((src.match(/const \{ reply, model, attempts, outcome \} = await answer\(/g) ?? []).length, 2)
   assert.match(src, /return \{ reply: reply\.trim\(\), model: answeredModel, attempts \}/)
   assert.match(src, /rate limit\$\{code \? ` \(\$\{code\}\)` : ''\}/)
   assert.match(src, /\*\*Requests:\*\* \$\{attemptsLine\(row\.attempts\)\}/)
@@ -309,13 +310,52 @@ test('the pacer waits between cases only, for the gap in milliseconds', async ()
   assert.deepEqual(quick, [])
 })
 
-// Kills: chat-eval ignoring parseGap / makePacer (a source check on purpose:
-// the script needs a database and a provider to run)
-test('chat-eval takes its gap and pauses from the tested helpers', () => {
-  const src = read('scripts', 'chat-eval.js')
-  assert.match(src, /const gap = parseGap\(args\)/)
-  assert.match(src, /makePacer\(\{ gapSec, sleep \}\)/)
-  assert.match(src, /await pauseBeforeCase\(\)/)
+// Kills: measuring from the previous response rather than request start,
+// or sleeping a full gap even when the response already took some time.
+test('request pacer measures the gap between HTTP starts', async () => {
+  let clock = 1000
+  const slept = []
+  const pause = makeRequestPacer({ gapSec: 20, now: () => clock, sleep: async (ms) => { slept.push(ms); clock += ms } })
+  await pause()
+  clock += 7000
+  await pause()
+  assert.deepEqual(slept, [13000])
+  assert.equal(clock, 21000)
+  clock += 25000
+  await pause()
+  assert.deepEqual(slept, [13000])
+})
+
+// Kills: calling the pacer once per chatText call instead of immediately
+// before every fetch; a primary 429 followed by fallback must wait too.
+test('provider client paces the fallback request inside one chatText call', async () => {
+  const originalFetch = globalThis.fetch
+  const starts = []
+  let clock = 0
+  const pause = makeRequestPacer({ gapSec: 20, now: () => clock, sleep: async (ms) => { clock += ms } })
+  globalThis.fetch = async () => {
+    starts.push(clock)
+    if (starts.length === 1) return { ok: false, status: 429, headers: new Headers(), text: async () => JSON.stringify({ error: { message: 'rate limit' } }) }
+    return { ok: true, status: 200, json: async () => ({ choices: [{ message: { content: 'Hello' }, finish_reason: 'stop' }] }) }
+  }
+  try {
+    const reply = await chatText({ messages: [{ role: 'user', content: 'Hi' }],
+      config: { baseUrl: 'https://api.groq.com/openai/v1', apiKey: 'local-test', model: 'openai/gpt-oss-120b', fallbackModel: 'fallback' },
+      beforeRequest: pause })
+    assert.equal(reply, 'Hello')
+    assert.deepEqual(starts, [0, 20000])
+  } finally { globalThis.fetch = originalFetch }
+})
+
+// Kills: either script leaving the pacer outside chatTextRecorded; then
+// internal retries are still unpaced even though consecutive cases wait.
+test('both live scripts pass one request pacer to the provider client', () => {
+  for (const file of ['chat-eval.js', 'chat-scenarios.js']) {
+    const src = read('scripts', file)
+    assert.match(src, /const gap = parseGap\(args\)/)
+    assert.match(src, /makeRequestPacer\(\{ gapSec, sleep \}\)/)
+    assert.match(src, /beforeRequest: pauseBeforeRequest/)
+  }
 })
 
 // Kills: chat-usage printing the token section by its own copy of the logic

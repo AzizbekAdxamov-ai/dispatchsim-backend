@@ -15,7 +15,7 @@ import { FALLBACK_REPLY as DRIVER_FALLBACK } from '../src/modules/driverChat/dri
 import { FALLBACK_REPLY as BROKER_FALLBACK } from '../src/modules/brokerChat/brokerChat.prompt.js'
 import {
   PROMISE, anyReply, brokerReply, driverReply, repeatsQuestion, dollars, summarize, BROKER_EXPECT, DRIVER_EXPECT,
-  agreesWithClaim,
+  agreesWithClaim, correctCount,
 } from '../scripts/scenarioChecks.js'
 
 // Kills: a promise pattern that misses "let me look at the paperwork"
@@ -197,4 +197,173 @@ test('S3: an echo that turns into a yes is flagged on both turns', () => {
     assert.deepEqual(s3[0](r), ['moved on the first push'], r)
     assert.deepEqual(s3[1](r), ['gave the whole ask'], r)
   }
+})
+
+// Kills: a "correct?" after a rate (S4, 2026-10-16) passing as a read-back,
+// or one that really reads the carrier's plan back being flagged.
+test('"correct?" is flagged after a rate, not after a read-back of their truck', () => {
+  assert.deepEqual(brokerReply('The posted rate is $5,002, all-in -- linehaul and fuel included. Correct?', null), ['correct? without a read-back'])
+  assert.deepEqual(brokerReply('So your truck is in Dallas, empty at 6. Correct?', null), [])
+  assert.deepEqual(brokerReply('The rate is firm. Correct?', null), ['correct? without a read-back'])
+})
+
+// Kills: the whole-chat count missing a second "correct?" (more than once).
+test('correctCount counts every "correct?" in the chat', () => {
+  assert.equal(correctCount(['So your truck is in Dallas. Correct?', 'Fine.', 'Your driver is Sam, correct?']), 2)
+  assert.equal(correctCount(['Fine.']), 0)
+})
+
+// -- S9: the booking call ---------------------------------------------------
+
+import { s9Ask, s9Email, s9Mc, s9WrongMc, afterTomorrowSixCentral, bookedBeforeAskingMc, STREET, PHONE } from '../scripts/scenarioChecks.js'
+
+// Heavy and picking up within a day: weight and a tight window are both true of it.
+const HOUR = 3600e3
+const S9_POSTING = { rateUsd: 2000, distanceMi: 1000, weightLbs: 45000, pickupAt: new Date(Date.now() + 20 * HOUR).toISOString() }
+const S9_OURS = { name: 'Cedar Ridge Transport Services', mcNumber: 'MC-741309' }
+const EMAIL = s9Email(S9_OURS)
+const s9 = (key) => BROKER_EXPECT[key]({ posting: S9_POSTING, email: EMAIL })
+
+// Kills: the S9 email on a real domain, or the MC typed in another shape
+test('S9 typed values: .example email, our digits, a wrong MC that is not ours', () => {
+  assert.equal(EMAIL, 'dispatch@cedar-ridge-transport-services.example')
+  assert.equal(s9Mc(S9_OURS), '741309')
+  assert.equal(s9WrongMc(S9_OURS), '999999')
+  assert.equal(s9WrongMc({ mcNumber: 'MC-999999' }), '999998')
+  assert.equal(s9Ask(S9_POSTING), 2200)
+})
+
+// Kills: a pickup before "empty tomorrow 6am" accepted for S9
+test('S9 posting: pickup must be later than tomorrow 06:00 Central', () => {
+  const now = new Date('2026-10-17T15:00:00Z')
+  assert.equal(afterTomorrowSixCentral('2026-10-18T10:00:00Z', now), false)
+  assert.equal(afterTomorrowSixCentral('2026-10-18T20:00:00Z', now), true)
+  assert.equal(afterTomorrowSixCentral('2026-10-20T14:00:00Z', now), true)
+})
+
+// Kills: more than one question per reply, or an invented street / phone / email, passing in S9
+test('S9 every turn: one question; no address, phone or other email', () => {
+  const t = s9('S9a')[2]
+  assert.deepEqual(t('Got it. What time is the driver free?'), [])
+  assert.deepEqual(t('Got it. Is it a dry van? And what time?'), ['more than one question'])
+  assert.deepEqual(s9('S9a')[5]('Rate con goes to ' + EMAIL + '.'), [])
+  assert.deepEqual(s9('S9a')[5]('Pickup is at 4412 Commerce Dr, call 214-555-0110.'), ['invents an address / phone / email'])
+  assert.deepEqual(s9('S9a')[5]('I will send it to dispatch@other.example.'), ['invents an address / phone / email'])
+  assert.ok(STREET.test('4412 Commerce Dr') && PHONE.test('214-555-0110'))
+})
+
+// Kills: S9a turn 0 where the broker never asks for the MC, or asks the company again
+test('S9a t0: MC asked, company not asked again', () => {
+  const t = s9('S9a')[0]
+  assert.deepEqual(t("Yes it is. What's your MC?"), [])
+  assert.deepEqual(t('Yes it is. Where is your truck?'), ['MC not asked'])
+  assert.deepEqual(t('Yes it is. What company are you with, and your MC?'), ['asks what was told'])
+})
+
+// Kills: the right MC rejected, or asked for again after it was given
+test('S9a t1: the right MC is not rejected or asked for again', () => {
+  const t = s9('S9a')[1]
+  assert.deepEqual(t('Got it, that comes up. Where is your truck?'), [])
+  assert.deepEqual(t("That MC doesn't come up on my end."), ['rejects the right MC'])
+  assert.deepEqual(t("Got it. What's your MC?"), ['asks what was told'])
+})
+
+// Kills: the truck, empty time or trailer asked again after S9a line 3
+test('S9a t2: location, empty time and trailer are not asked again', () => {
+  const t = s9('S9a')[2]
+  assert.deepEqual(t('Good, that works for pickup. What are you looking to pay?'), [])
+  assert.deepEqual(t("Where's your truck sitting?"), ['asks what was told'])
+  assert.deepEqual(t('What trailer is it?'), ['asks what was told'])
+})
+
+// Kills: moving on the first push, or the whole ask, or moving with no reason
+test('S9a t3/t4: first push held; meet in the middle only with a reason, not the whole ask', () => {
+  assert.deepEqual(s9('S9a')[3]('The posted rate is $2,000, all-in.'), [])
+  assert.deepEqual(s9('S9a')[3]('I can do $2,100.'), ['moved on the first push'])
+  assert.deepEqual(s9('S9a')[4]('With the weight and the tight window I can do $2,100.'), [])
+  assert.deepEqual(s9('S9a')[4]('I can do $2,100.'), ['moved without a reason'])
+  assert.deepEqual(s9('S9a')[4]('With the weight I can do $2,200.'), ['gave the whole ask'])
+})
+
+// Kills: a "tight window" accepted as the reason for a raise on a pickup more than a day out
+test('S9 t4: a reason the posting does not have is its own finding', () => {
+  const far = { ...S9_POSTING, weightLbs: 30000, pickupAt: new Date(Date.now() + 48 * HOUR).toISOString() }
+  const t = BROKER_EXPECT.S9a({ posting: far, email: EMAIL })[4]
+  assert.deepEqual(t("I can do $2,100, pickup window's tight."), ['reason not in the posting'])
+  assert.deepEqual(t('I can do $2,100.'), ['moved without a reason'])
+})
+
+// Kills: driver, truck number or email asked again after S9a line 6
+test('S9a t5: driver, truck and email are not asked again', () => {
+  const t = s9('S9a')[5]
+  assert.deepEqual(t('Rate con is on its way.'), [])
+  assert.deepEqual(t("What's the driver's name?"), ['asks what was told'])
+})
+
+// Kills: S9b booking on a wrong MC, not calling it out, or not asking again at the end
+test('S9b: a wrong MC is called out, nothing is booked, the MC is asked for again', () => {
+  const b = s9('S9b')
+  assert.deepEqual(b[1]("That MC doesn't come up on my end. Can you check it?"), [])
+  assert.deepEqual(b[1]('Thanks. Where is your truck?'), ['wrong MC not called out'])
+  assert.deepEqual(b[2]("You're booked."), ['books on a wrong MC'])
+  assert.deepEqual(b[5]("I can't book it, that MC doesn't come up. Send the right one?"), [])
+  assert.deepEqual(b[5]('Rate con goes out shortly.'), ['MC not asked again'])
+})
+
+// Kills: S9c booking with no MC, or "just book it" answered without asking the MC
+test('S9c: no booking without an MC; "just book it" gets the MC question', () => {
+  const c = s9('S9c')
+  assert.deepEqual(c[4]("Can't book without your MC. What is it?"), [])
+  assert.deepEqual(c[4]('Sure, what is the driver name?'), ['MC not asked before booking'])
+  assert.deepEqual(c[2]("You're all set."), ['books without an MC'])
+})
+
+// Kills: "booked" before the MC was ever asked not being found across the chat
+test('conversation: booked before asking MC', () => {
+  assert.equal(bookedBeforeAskingMc(['Yes it is.', "What's your MC?", "You're booked."]), false)
+  assert.equal(bookedBeforeAskingMc(['Yes it is.', "You're booked."]), true)
+  assert.equal(bookedBeforeAskingMc(['Yes it is.', 'Where is the truck?']), false)
+})
+
+// Kills: S9 keys missing from the script's turn counts (the budget check and --scenario S9a)
+test('chat-scenarios knows S9a/S9b/S9c and their turn counts', () => {
+  const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'scripts', 'chat-scenarios.js'), 'utf8')
+  assert.match(src, /S9a: 6, S9b: 6, S9c: 5/)
+})
+
+// -- False positives found in review (2026-10-17) ----------------------------
+
+import { paymentInvented } from '../scripts/scenarioChecks.js'
+
+// Kills: "correct?" flagged when it reads back the pickup or asks "is that correct?"
+test('correct? after a pickup read-back is not a tic; after "that" or "load" alone it is', () => {
+  assert.deepEqual(brokerReply('Pickup is Dallas at 6, correct?', null), [])
+  assert.deepEqual(brokerReply("That's all-in. Correct?", null), ['correct? without a read-back'])
+  assert.deepEqual(brokerReply('The load is all-in, correct?', null), ['correct? without a read-back'])
+  assert.deepEqual(brokerReply('The rate is firm. Correct?', null), ['correct? without a read-back'])
+})
+
+// Kills: payment terms flagged when echoing the carrier's own figure or denying a term
+test('paymentInvented: carrier\'s own words and denials pass; a new term is flagged', () => {
+  const said = 'can u pay in 7 days? net 30?'
+  assert.equal(paymentInvented("7 days to pay is accounting's call, not mine.", said), false)
+  assert.equal(paymentInvented("I can't speak to net 30 or any days, that's accounting.", said), false)
+  assert.equal(paymentInvented('7 days to pay is fine.', said), false)
+  assert.equal(paymentInvented('We pay net 15.', said), true)
+  assert.equal(paymentInvented('We pay net 30.', null), true)
+  assert.deepEqual(brokerReply('We pay net 15.', null, 'when do you pay?'), ['payment terms invented'])
+})
+
+// Kills: a denial of one term excusing a NEW invented term in the next clause
+test('paymentInvented: a denial does not cover another clause', () => {
+  const said = 'can u pay net 30?'
+  assert.equal(paymentInvented("I can't speak to net 30, but we pay net 15.", said), true)
+  assert.equal(paymentInvented("I can't speak to net 30 or any days, that's accounting.", said), false)
+})
+
+// Kills: a truthful deadhead reason flagged by a check that cannot see the dispatcher's truck line
+test('S9 t4: a deadhead reason is not judged by the reply-only check', () => {
+  const far = { ...S9_POSTING, weightLbs: 30000, pickupAt: new Date(Date.now() + 48 * HOUR).toISOString() }
+  const t = BROKER_EXPECT.S9a({ posting: far, email: EMAIL })[4]
+  assert.deepEqual(t('Long deadhead to get there, I can do $2,100.'), ['moved without a reason'])
 })

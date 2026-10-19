@@ -39,7 +39,7 @@ export function generatePod({ load, driver }) {
 
     const halfW = (RIGHT - M - 20) / 2
     y = helpers.field('Delivered at', formatDateTime(load.deliveredAt), M, y, { width: halfW })
-    helpers.field('Received by', 'Receiver — unsigned practice copy', M + halfW + 20, y - 26, { width: halfW })
+    helpers.field('Received by', 'Receiver — unsigned sample copy', M + halfW + 20, y - 26, { width: halfW })
 
     y = helpers.rule(y + 12)
 
