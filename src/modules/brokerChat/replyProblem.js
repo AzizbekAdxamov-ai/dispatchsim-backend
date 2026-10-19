@@ -12,14 +12,22 @@
 import { trippedBannedWord, leaksReasoning } from './brokerChat.prompt.js'
 import { tooLongForChat, CHAT_REPLY_MAX_CHARS } from '../../constants/chatBudget.js'
 import { ignoresUnreachable } from '../../lib/cannotMake.js'
-import { lumperPayerWrong } from './termsTalk.js'
-import { saysBooked } from './bookingTalk.js'
-import { rateReasons, rateReasonLabels, unsupportedRateReasons } from './rateTalk.js'
+import { lumperPayerWrong, paymentTermsClaimed, PAYMENT_TERMS_LINE } from './termsTalk.js'
+import { saysBooked, confirmsUnknownBooking, NO_BOOKING_LINE } from './bookingTalk.js'
+import {
+  dollars, rateReasons, rateReasonLabels, unsupportedRateReasons, raiseWithoutReason, holdRateLine,
+} from './rateTalk.js'
+import { weightChangeAgreed, weightHoldLine } from './weightTalk.js'
 import { personaBreak } from '../../lib/personaBreak.js'
 
 // `posting` names the lane for the in-character line; `now` and `text` (the
 // dispatcher's line) are for checks that depend on the clock or on what was asked.
-export function brokerReplyProblem(reply, { truck, booking = null, posting = null, now = new Date(), text = null } = {}) {
+// `said` is all the dispatcher has typed (default: `text`), `brokerSaid` what the
+// broker already said (a figure it gave before is not a new raise), and
+// `bookedHere` is true when this conversation really has an agreed or booked load.
+export function brokerReplyProblem(reply, {
+  truck, booking = null, posting = null, now = new Date(), text = null, said = null, brokerSaid = [], bookedHere = false,
+} = {}) {
   // Help-desk talk, or a canned refusal / bare "No." to a request for the
   // prompt: a person who does not follow, back to the load. No safeReply
   // without a posting: the service then uses its holding line.
@@ -66,6 +74,17 @@ export function brokerReplyProblem(reply, { truck, booking = null, posting = nul
       unusable: false,
     }
   }
+  // A raise the posting gives no reason for: hold the posted rate.
+  if (posting && raiseWithoutReason(reply, {
+    posting, truck, now, theirs: dollars((said ?? [text]).join(' ')), earlier: brokerSaid.flatMap(dollars),
+  })) {
+    return {
+      why: 'raised the rate with no reason this load has',
+      hint: ` This load has no reason to pay more than you posted, or you named none: hold at $${posting.rateUsd}.`,
+      unusable: true,
+      safeReply: holdRateLine(posting),
+    }
+  }
   // Booked, or paper on its way, while the MC is missing or wrong. Only when
   // the caller passed the booking facts (the live service and --service do).
   if (booking && booking.mc.verdict !== 'match' && saysBooked(reply)) {
@@ -73,6 +92,33 @@ export function brokerReplyProblem(reply, { truck, booking = null, posting = nul
       why: 'told them it is booked without a verified MC',
       hint: ' Their MC is missing or does not come up (see WHO IS CALLING): do not book or promise paper; say what you still need from them.',
       unusable: false,
+    }
+  }
+  // Payment days, quick pay, fees: accounting's, never the broker's to name.
+  if (paymentTermsClaimed(reply, said ?? [text ?? ''])) {
+    return {
+      why: "named payment terms that are accounting's",
+      hint: " Payment days, quick pay, fees and factoring are accounting's: say only that.",
+      unusable: true,
+      safeReply: PAYMENT_TERMS_LINE,
+    }
+  }
+  // A weight the load sheet does not carry, or going along with a change.
+  if (posting && weightChangeAgreed(reply, { posting, text })) {
+    return {
+      why: 'agreed to a weight the load does not have',
+      hint: ` The weight is ${Number(posting.weightLbs).toLocaleString('en-US')} lbs as posted: say so and that it does not change.`,
+      unusable: true,
+      safeReply: weightHoldLine(posting),
+    }
+  }
+  // A booking or a person the broker has no record of.
+  if (confirmsUnknownBooking(reply, { text, bookedHere })) {
+    return {
+      why: 'went along with a booking you have no record of',
+      hint: ' You have no record of that booking or that person: say so, and do not confirm it.',
+      unusable: true,
+      safeReply: NO_BOOKING_LINE,
     }
   }
   return null

@@ -35,6 +35,10 @@ const PROMPT_VERSION = promptVersionOf(fileURLToPath(new URL('./brokerChat.promp
 // throwaway line from forty messages ago does not read like a person.
 const HISTORY_TURNS = 20
 
+// A conversation with a deal on it: the broker really has a booking here, so
+// "already booked" from the dispatcher is not a claim to deny.
+const BOOKED_STATUSES = Object.freeze(['agreed', 'booked'])
+
 // The posting has to be live to talk about it: a broker will not discuss a
 // load that has expired or has already gone to someone else. Same
 // visibility rule as the board, including "not yet dripped" reading as
@@ -96,6 +100,12 @@ export async function openConversation({ postingId, userId }) {
 // documents, not things anyone said.
 export function dispatcherTexts(messages) {
   return (messages ?? []).filter((m) => m.role === 'dispatcher' && m.kind !== 'rate_con').map((m) => m.content)
+}
+
+// What the broker itself has said in a thread (rate confirmations are
+// documents, not talk). A figure it already gave is not a new raise.
+export function brokerTexts(messages) {
+  return (messages ?? []).filter((m) => m.role === 'broker' && m.kind !== 'rate_con').map((m) => m.content)
 }
 
 export async function getThread({ conversationId, userId }) {
@@ -182,6 +192,12 @@ export async function sendMessage({ conversationId, userId, text }) {
   const attempts = []
   const onAttempt = (a) => attempts.push({ ...a, n: attempts.length + 1 })
 
+  // Everything brokerReplyProblem needs to judge the reply, for the first
+  // reply and the regenerated one alike.
+  const checkFacts = {
+    truck, booking, posting, now, text, said, brokerSaid: brokerTexts(thread), bookedHere: BOOKED_STATUSES.includes(conversation.status),
+  }
+
   let reply
   try {
     // The contact's own name as a leading "Devin:" is removed before any
@@ -203,7 +219,7 @@ export async function sendMessage({ conversationId, userId, text }) {
     // problem (the truck cannot reach the pickup and the reply never says
     // so) is regenerated once, with one more request from the daily budget,
     // and logged if it persists.
-    const problem = brokerReplyProblem(reply, { truck, booking, posting, now, text })
+    const problem = brokerReplyProblem(reply, checkFacts)
     const why = problem?.why ?? null
 
     if (why) {
@@ -221,7 +237,7 @@ export async function sendMessage({ conversationId, userId, text }) {
         onAttempt,
         cause: 'regenerate',
       }))
-      const remaining = brokerReplyProblem(reply, { truck, booking, posting, now, text })
+      const remaining = brokerReplyProblem(reply, checkFacts)
       if (remaining?.unusable) {
         reply = remaining.safeReply ?? FALLBACK_REPLY
         usedFallback = true

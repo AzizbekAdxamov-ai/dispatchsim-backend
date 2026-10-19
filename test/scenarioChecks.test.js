@@ -367,3 +367,27 @@ test('S9 t4: a deadhead reason is not judged by the reply-only check', () => {
   const t = BROKER_EXPECT.S9a({ posting: far, email: EMAIL })[4]
   assert.deepEqual(t('Long deadhead to get there, I can do $2,100.'), ['moved without a reason'])
 })
+
+// Kills: the scenario check growing a second copy of the "no reason" rule
+// (it would drift from the live reply check), or the helpers moved into src
+// being lost from the old import path the eval cases still use.
+test('movedWithoutReason asks the shared raiseWithoutReason; moved helpers are still exported here', async () => {
+  const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'scripts', 'scenarioChecks.js'), 'utf8')
+  assert.match(src, /import \{[^}]*\braiseWithoutReason\b[^}]*\} from '\.\.\/src\/modules\/brokerChat\/rateTalk\.js'/)
+  assert.doesNotMatch(src, /REASON_WORDS\[k\]\.test/)
+  const mod = await import('../scripts/scenarioChecks.js')
+  const rate = await import('../src/modules/brokerChat/rateTalk.js')
+  const terms = await import('../src/modules/brokerChat/termsTalk.js')
+  assert.equal(mod.offeredFigures, rate.offeredFigures)
+  assert.equal(mod.dollars, rate.dollars)
+  assert.equal(mod.PAYMENT_INVENTED_RE, terms.PAYMENT_INVENTED_RE)
+})
+
+// Kills: S9 t4 reading a figure the reply refuses, or one the broker gave
+// before, as a raise (the check moved to rateTalk.js keeps its S9 behaviour).
+test('S9 t4: a flat load with no reason names "moved without a reason" through the shared rule', () => {
+  const flat = { rateUsd: 2000, distanceMi: 1000, weightLbs: 30000, pickupAt: new Date(Date.now() + 48 * HOUR).toISOString(), destinationState: 'IL', equipmentType: 'dry-van', originState: 'TX' }
+  const t = BROKER_EXPECT.S9a({ posting: flat, email: EMAIL })[4]
+  assert.deepEqual(t('I can do $2,100.'), ['moved without a reason'])
+  assert.ok(!t(`I can't do $${s9Ask(flat)}.`).includes('moved without a reason'))
+})

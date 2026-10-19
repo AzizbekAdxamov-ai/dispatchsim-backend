@@ -277,7 +277,9 @@ async function brokerConversation({ key, title, posting, lines }, carrier, confi
       config, side: 'broker', systemPrompt,
       messages: (sys) => bp.buildMessages({ systemPrompt: sys, history, newMessage: text }),
       clean: (t) => stripSpeakerLabel(t, posting.contactName),
-      problemOf: (r) => brokerReplyProblem(r, { truck, booking, posting, now, text }),
+      problemOf: (r) => brokerReplyProblem(r, {
+        truck, booking, posting, now, text, said: dispatcherSoFar, brokerSaid: history.filter((h) => h.role === 'broker').map((h) => h.content),
+      }),
       retryPrompt: brokerRetryPrompt,
       fallback: bp.FALLBACK_REPLY,
     })

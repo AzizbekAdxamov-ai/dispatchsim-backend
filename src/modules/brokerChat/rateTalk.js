@@ -18,7 +18,7 @@
 
 import { asciiPunct } from '../../lib/plainText.js'
 import {
-  REGION_STATES, REGIONAL_LINEHAUL, NATIONAL_LINEHAUL, fuelPerMile, marketFacts,
+  REGION_STATES, REGIONAL_LINEHAUL, NATIONAL_LINEHAUL, DB_RPM_MAX, fuelPerMile, marketFacts,
 } from '../../constants/marketRates.js'
 
 // Dollar amounts as numbers: "$3,750" and "$3750" are the same figure.
@@ -27,6 +27,36 @@ import {
 export const DOLLAR_RE = /\$\s?\d[\d,]*(\.\d+)?/g
 export function dollars(text) {
   return (String(text).match(DOLLAR_RE) ?? []).map((d) => Number(d.replace(/[$,\s]/g, '')))
+}
+
+// A dollar figure the dispatcher already named, said back to them ("so
+// you're looking for $3,907"), is the carrier's number, not an offer. Only
+// that exact shape is excused: the figure must be one of theirs AND sit
+// right after a "you're looking for" frame, AND the sentence must not turn
+// it into a yes -- a conditional before it ("If you're looking for $3,907,
+// ...") or an acceptance after it ("... $3,907, I can do that") is the
+// broker giving the whole ask, which is what these checks exist to catch.
+// (Moved here from scripts/scenarioChecks.js, which re-exports it.)
+const ECHO_FRAME = /\b(?:you'?re|you are|you'?d be|you)\s+(?:looking for|asking(?: for)?|after|hoping for|want(?:ing)?|need(?:ing)?)\s+(?:about\s+|around\s+)?$/i
+const CONDITIONAL = /\b(?:if|when|once|unless|assuming|provided|as long as)\b/i
+const ACCEPTS = /\b(?:can do|will do|i'?ll do|i'?ll make|make it work|works?|done|deal|ok|okay|sure|you got it|that'?s fine|let'?s do)\b/i
+
+export function offeredFigures(reply, theirs = []) {
+  const r = asciiPunct(reply)
+  const out = []
+  for (const m of r.matchAll(DOLLAR_RE)) {
+    const value = Number(m[0].replace(/[$,\s]/g, ''))
+    const sentenceStart = Math.max(r.lastIndexOf('.', m.index), r.lastIndexOf('!', m.index), r.lastIndexOf('?', m.index)) + 1
+    const before = r.slice(sentenceStart, m.index)
+    const rest = r.slice(m.index + m[0].length)
+    const after = rest.slice(0, 40).split(/[.!?]/)[0]
+    const echoed = theirs.includes(value)
+      && ECHO_FRAME.test(r.slice(Math.max(0, m.index - 40), m.index))
+      && !CONDITIONAL.test(before)
+      && !ACCEPTS.test(after)
+    if (!echoed) out.push(value)
+  }
+  return out
 }
 
 // -- The market claim -------------------------------------------------------
@@ -260,4 +290,37 @@ export function unsupportedRateReasons(reply, { posting, truck = null, now = new
   const real = rateReasons({ posting, truck, now })
   const said = asciiPunct(reply)
   return Object.keys(REASON_WORDS).filter((k) => REASON_WORDS[k].test(said) && !real.includes(k))
+}
+
+// A raise with no reason this load has: the reply names a figure above the
+// posted rate and gives none of the reasons rateReasons() finds true. The
+// live check (replyProblem.js) and the scenario check (scenarioChecks.js
+// movedWithoutReason) both ask this, so there is one copy of the rule.
+//   theirs   figures the dispatcher named; one the reply refuses ("I can't
+//            do $5,475") is not an offer
+//   earlier  figures the broker itself already said in this thread
+const REFUSES_FIGURE = /\b(?:can'?t|cannot|won'?t|not|no)\b/i
+// Not a thousands comma or a decimal point: "$2,600" is one figure.
+const CLAUSES = /[!?;]|[.,](?!\d)|\bbut\b/i
+
+function refusedFigure(reply, value, theirs) {
+  if (!theirs.includes(value)) return false
+  const clauses = asciiPunct(reply).split(CLAUSES).filter((c) => dollars(c).includes(value))
+  return clauses.length > 0 && clauses.every((c) => REFUSES_FIGURE.test(c))
+}
+
+export function raiseWithoutReason(reply, { posting, truck = null, now = new Date(), theirs = [], earlier = [] }) {
+  const ceiling = posting.distanceMi * DB_RPM_MAX
+  const raised = offeredFigures(reply, theirs).filter((d) => d > posting.rateUsd
+    && d <= ceiling
+    && !earlier.includes(d)
+    && !refusedFigure(reply, d, theirs))
+  if (raised.length === 0) return false
+  const said = asciiPunct(reply)
+  return !rateReasons({ posting, truck, now }).some((k) => REASON_WORDS[k].test(said))
+}
+
+// What the broker says when it moved with no reason to: the posted rate stays.
+export function holdRateLine(posting) {
+  return `$${posting.rateUsd} all-in is where this one stays.`
 }

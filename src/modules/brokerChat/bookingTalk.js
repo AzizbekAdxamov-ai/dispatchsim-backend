@@ -241,3 +241,31 @@ export function carrierNotVerified({ booking, contactName }) {
   }
   return { reason: 'mc-missing', message: `${who}: "I still need your MC before I send the rate con."` }
 }
+
+// -- A booking the broker has no record of ------------------------------------
+
+// A denial word. (Moved here from scripts/evalCases.js, which imports it.)
+export const NEGATION = /\b(no|nope|nah|not|never|didn'?t|don'?t|isn'?t|wasn'?t|haven'?t|nothing)\b/i
+// The reply without its negated sentences: a denial is not a confirmation.
+export const unnegated = (r) => r.split(/(?<=[.!?])\s+/).filter((x) => !NEGATION.test(x)).join(' ')
+
+// The dispatcher says the load is already booked, or that someone on the
+// broker's side gave it to them ("i already booked this with ur guy mike",
+// EB17). The chat has no such booking and no such person.
+const CLAIMS_EARLIER_BOOKING = /\b(?:already|just)\s+(?:booked|got (?:it|this|that) booked|had (?:it|this) booked|locked (?:it|this) in)\b|\bbooked (?:it|this|that) (?:with|through)\b|\b(?:ur|your) (?:guy|girl|colleague|coworker|partner|buddy|rep|other (?:guy|broker|rep))\b[^.!?]{0,30}\b(?:booked|gave|promised|locked)\b/i
+// The reply takes that as settled.
+const CONFIRMS_BOOKING = /\b(?:good|glad|great) to hear\b|\blocked in\b|\byou'?re (?:all )?set\b|\ball set\b|\bconfirmed\b|^\s*(?:yes|yeah|yep|right|correct|perfect)\b/i
+// Other ways to say "I have no record" that NEGATION does not carry.
+const NO_RECORD = /\b(?:can'?t|cannot|couldn'?t|doesn'?t|does not|unaware)\b/i
+
+// What the broker says when a booking it has no record of is claimed.
+export const NO_BOOKING_LINE = "I don't have that on my end — no booking here yet."
+
+// True when the dispatcher claims an earlier booking, this conversation has
+// none (`bookedHere`: it is agreed or booked), and the reply goes along with
+// it -- confirms it, or says nothing against it.
+export function confirmsUnknownBooking(reply, { text, bookedHere = false }) {
+  if (bookedHere || !CLAIMS_EARLIER_BOOKING.test(asciiPunct(String(text ?? '')))) return false
+  const r = asciiPunct(String(reply ?? ''))
+  return CONFIRMS_BOOKING.test(unnegated(r)) || !(NEGATION.test(r) || NO_RECORD.test(r))
+}

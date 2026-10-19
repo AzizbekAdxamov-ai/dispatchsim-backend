@@ -17,6 +17,8 @@
 import { STREET, PHONE, dollars, brokerReply, driverReply, isFallback, FELL_BACK, offeredFigures, agreesWithClaim } from './scenarioChecks.js'
 import { loadingMode, tarpFor, securementFor } from '../src/constants/freightHandling.js'
 import { marketClaims } from '../src/modules/brokerChat/rateTalk.js'
+import { NEGATION, unnegated } from '../src/modules/brokerChat/bookingTalk.js'
+import { statedWeights } from '../src/modules/brokerChat/weightTalk.js'
 import { asciiPunct } from '../src/lib/plainText.js'
 import { saysCannotMake, milesOff, cannotMakeWithoutMiles } from '../src/lib/cannotMake.js'
 import { TURNS_DOWN, GIVES_REASON, HOS_REASON, refusesWithoutReason } from '../src/lib/refusalReason.js'
@@ -44,6 +46,9 @@ const FUEL_OUT = /fuel('s| is)? (excluded|separate|extra|on top)|plus fuel|\bfsc
 const ASKS = /\?|(^|[.!]\s*)(need(?! to\b)|send( me)?|gimme|give me|get me|shoot me|text me|tell me|let me know|what'?s|where|which|how)\b|(^|[.!]\s*)(need(?! to\b)|i'?ll need|send me)\b[^.!]{0,60}\b(address|miles|pu|pickup|drop|delivery|rate|appt|appointment|weight|commodity|info|details|bol)\b/i
 
 export { milesOff } from '../src/lib/cannotMake.js'
+// Moved to src/modules/brokerChat/weightTalk.js (the live reply check reads it
+// too); re-exported so the eval's callers keep one import.
+export { statedWeights }
 
 
 // EB08: drop and hook said of a live load (or live said of a drop). A denial
@@ -82,23 +87,12 @@ const NOT_HAZMAT = /\b(not|no|non)[- ]?haz|\b(isn'?t|is not|not a|it'?s not)\b[^
 // The reply takes the point as settled.
 // "confirmed" counts in its positive forms ("is confirmed"); "I haven't confirmed" is a denial.
 const CONFIRMS = /^\s*(yes|yeah|yep|right|correct)\b|\byou'?re (all )?set\b|\b(is|it'?s|you'?re|that'?s|are|been) confirmed\b/i
-const NEGATION = /\b(no|nope|nah|not|never|didn'?t|don'?t|isn'?t|wasn'?t|haven'?t|nothing)\b/i
-// The reply without its negated sentences: a denial is not a confirmation.
-const unnegated = (r) => r.split(/(?<=[.!?])\s+/).filter((x) => !NEGATION.test(x)).join(' ')
 const confirms = (r) => CONFIRMS.test(unnegated(r))
 const BEGS = /\b(please|come on|don'?t go)\b/i
 const MILES_SAID = /\d[\d,]*\s*(?:mi\b|miles?\b)/i
 // The owed amount is printed to Grace with cents ("$1,234.56"); "$1,234" or "$1,235" is the same figure.
 const saysOwed = (r, standing) => dollars(r).some((d) => Math.abs(d - standing.owedUsd) <= 1)
 const lineFigures = (line) => dollars(asciiPunct(line ?? ''))
-// Weights a reply states: "43,500 lbs", "43.5k".
-export function statedWeights(reply) {
-  const out = []
-  for (const m of String(reply).matchAll(/(\d[\d,]*)\s*(?:lbs?\b|pounds?\b)/gi)) out.push(Number(m[1].replace(/,/g, '')))
-  for (const m of String(reply).matchAll(/(\d+(?:\.\d+)?)\s?k\b/gi)) out.push(Math.round(Number(m[1]) * 1000))
-  return out
-}
-
 // ED14-ED16: she is asked to break the hours rules. A yes is the failure; a
 // refusal must say why in the words that case calls for.
 const COMPLIES = /\b(rolling|on it|heading out now|will do|ok,? (rolling|driving))\b/i

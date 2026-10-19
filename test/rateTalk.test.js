@@ -6,7 +6,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { marketClaims, ratePushes, dollars, rateReasons, unsupportedRateReasons, HEAVY_LBS, DEADHEAD_REASON_MILES } from '../src/modules/brokerChat/rateTalk.js'
+import {
+  marketClaims, ratePushes, dollars, rateReasons, unsupportedRateReasons, raiseWithoutReason, holdRateLine, HEAVY_LBS, DEADHEAD_REASON_MILES,
+} from '../src/modules/brokerChat/rateTalk.js'
 import { HEAVY_LBS as BOOKING_HEAVY_LBS } from '../src/modules/brokerChat/bookingTalk.js'
 import { buildBrokerSystemPrompt, rateTalkBlock, rateReasonLines } from '../src/modules/brokerChat/brokerChat.prompt.js'
 import { REGIONAL_LINEHAUL, fuelPerMile } from '../src/constants/marketRates.js'
@@ -273,4 +275,87 @@ test('tight-window words need a tight window; $7.6k is read as 7600; a missing t
   assert.deepEqual(un('$2.4k, short notice'), ['tight-window'])
   assert.deepEqual(unsupportedRateReasons('ok $2.6k, short notice', { posting: far, now: NOW, text: '$2,600?' }), [])
   assert.doesNotMatch(rateReasonLines(far, { now: NOW, truck: {} }).join(' '), /undefined/)
+})
+
+// -- A raise with no reason ------------------------------------------------------
+
+// IL is not a weak reload, 30,000 lbs is not heavy and the pickup is two days
+// out: nothing about this load earns a raise.
+const FLAT = { ...lane, destinationState: 'IL', pickupAt: inHours(48) }
+const HEAVY = { ...FLAT, weightLbs: 45000 }
+const RAISE = 'I can do $2,300 on this one.'
+
+// Kills: the "no reason" gate returning true for every raise, or the reasons
+// being read from nothing -- the probe must be flagged on a flat load.
+test('raiseWithoutReason: a figure above the posted rate with no reason on the load is flagged', () => {
+  assert.deepEqual(rateReasons({ posting: FLAT, now: NOW }), [])
+  assert.equal(raiseWithoutReason(RAISE, { posting: FLAT, now: NOW }), true)
+})
+
+// Kills: the rateReasons gate removed (a raise flagged even with a true reason
+// named in the reply), or a reason word counted that the load does not have.
+test('raiseWithoutReason: a reason true of the load, named in the reply, clears the raise', () => {
+  assert.equal(raiseWithoutReason('I can do $2,300 with the weight on it.', { posting: HEAVY, now: NOW }), false)
+  // The same words on a load that is not heavy are not a reason it has.
+  assert.equal(raiseWithoutReason('I can do $2,300 with the weight on it.', { posting: FLAT, now: NOW }), true)
+  // A true reason the reply does not give is no help either.
+  assert.equal(raiseWithoutReason(RAISE, { posting: HEAVY, now: NOW }), true)
+})
+
+// Kills: the earlier-broker-figure exemption removed, so the broker repeating a
+// figure it already gave (and was already checked on) is flagged again.
+test('raiseWithoutReason: a figure the broker already said is not a new raise', () => {
+  assert.equal(raiseWithoutReason(RAISE, { posting: FLAT, now: NOW, earlier: [2300] }), false)
+  assert.equal(raiseWithoutReason(RAISE, { posting: FLAT, now: NOW, earlier: [2100] }), true)
+})
+
+// Kills: the refusal exemption removed (the broker turning down the carrier's
+// figure is flagged as offering it), or applied to a figure it did offer.
+test('raiseWithoutReason: refusing their figure is not a raise; offering it is', () => {
+  assert.equal(raiseWithoutReason("I can't do $2,600.", { posting: FLAT, now: NOW, theirs: [2600] }), false)
+  assert.equal(raiseWithoutReason("Can't do $2,600, but I can do $2,300.", { posting: FLAT, now: NOW, theirs: [2600] }), true)
+  assert.equal(raiseWithoutReason('I can do $2,600.', { posting: FLAT, now: NOW, theirs: [2600] }), true)
+  // A refusal of a figure the dispatcher never named is not covered.
+  assert.equal(raiseWithoutReason("I can't, but $2,300 is there.", { posting: FLAT, now: NOW, theirs: [2600] }), true)
+})
+
+// Kills: ">" turned into ">=" (the posted rate flagged as a raise), a figure
+// below the posted rate flagged, or the lane ceiling (DB_RPM_MAX per mile)
+// dropped so a total like "$9,000" is read as a raise.
+test('raiseWithoutReason: the posted rate, lower figures and figures past the lane ceiling are not a raise', () => {
+  assert.equal(raiseWithoutReason('$2,000 all-in is where it sits.', { posting: FLAT, now: NOW }), false)
+  assert.equal(raiseWithoutReason('I could come down to $1,900.', { posting: FLAT, now: NOW }), false)
+  assert.equal(raiseWithoutReason('That is $9,000 over the whole month.', { posting: FLAT, now: NOW }), false)
+  assert.equal(raiseWithoutReason('No figures here.', { posting: FLAT, now: NOW }), false)
+})
+
+// Kills: the live check not asking raiseWithoutReason (or dropping the
+// fallback line): an unexplained raise must end on the posted rate, not be shown.
+test('brokerReplyProblem: a raise with no reason is unusable and falls back to holding the posted rate', async () => {
+  const { brokerReplyProblem } = await import('../src/modules/brokerChat/replyProblem.js')
+  const p = brokerReplyProblem(RAISE, { posting: FLAT, now: NOW, text: 'need $2,600' })
+  assert.equal(p.why, 'raised the rate with no reason this load has')
+  assert.equal(p.unusable, true)
+  assert.match(p.hint, /hold at \$2000/)
+  assert.equal(p.safeReply, holdRateLine(FLAT))
+  assert.equal(brokerReplyProblem('I can do $2,300 with the weight on it.', { posting: HEAVY, now: NOW, text: 'need $2,600' }), null)
+})
+
+// Kills: the live check ignoring what the broker already said (brokerSaid), or
+// the dispatcher's whole thread (said): a figure the broker gave an earlier
+// turn, or refused in this one, must not be flagged again.
+test('brokerReplyProblem: earlier broker figures and refused dispatcher figures are exempt', async () => {
+  const { brokerReplyProblem } = await import('../src/modules/brokerChat/replyProblem.js')
+  const base = { posting: FLAT, now: NOW, text: 'ok' }
+  assert.equal(brokerReplyProblem(RAISE, { ...base, brokerSaid: ['Best I have is $2,300.'] }), null)
+  assert.equal(brokerReplyProblem("I can't do $2,600.", { ...base, said: ['can you do $2,600?', 'ok'] }), null)
+  assert.equal(brokerReplyProblem("I can't do $2,600.", { ...base, said: ['ok'] })?.why, 'raised the rate with no reason this load has')
+})
+
+// Kills: the hold line being a reply the shared check itself rejects, so the
+// fallback would be thrown away on the next turn.
+test('holdRateLine passes the full broker reply check', async () => {
+  const { brokerReplyProblem } = await import('../src/modules/brokerChat/replyProblem.js')
+  assert.equal(holdRateLine(FLAT), '$2000 all-in is where this one stays.')
+  assert.equal(brokerReplyProblem(holdRateLine(FLAT), { posting: FLAT, now: NOW, text: 'need $2,600', booking: null }), null)
 })

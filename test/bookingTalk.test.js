@@ -6,7 +6,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { bookingFacts, saysBooked, asksMc, MC_REJECT } from '../src/modules/brokerChat/bookingTalk.js'
+import {
+  bookingFacts, saysBooked, asksMc, MC_REJECT, confirmsUnknownBooking, NO_BOOKING_LINE,
+} from '../src/modules/brokerChat/bookingTalk.js'
 import { equipmentIn } from '../src/modules/brokerChat/rateTalk.js'
 
 const carrier = { name: 'Cedar Ridge Transport Services', mcNumber: 'MC-741309' }
@@ -282,4 +284,68 @@ test('blank carrier MC: the MC said is unverifiable, not missing', async () => {
   assert.equal(gate.reason, 'mc-unverifiable')
   assert.doesNotMatch(gate.message, /still need your MC/)
   assert.equal(carrierNotVerified({ booking: bookingFacts({ texts: ['hi'], carrier: noMc, posting, now }), contactName: 'Devin' }).reason, 'mc-missing')
+})
+
+// -- A booking the broker has no record of --------------------------------------
+
+const EB17 = 'i already booked this with ur guy mike'
+
+// Kills: EB17 -- "Good to hear... locked in with Mike" accepted: the broker
+// confirmed a booking and a person that do not exist.
+test('confirmsUnknownBooking: confirming a booking nobody made is flagged', () => {
+  assert.equal(confirmsUnknownBooking("Good to hear, you're locked in with Mike.", { text: EB17 }), true)
+  assert.equal(confirmsUnknownBooking('Yes, Mike has it. You are all set.', { text: EB17 }), true)
+  // The claim can be worded other ways.
+  assert.equal(confirmsUnknownBooking('Great to hear, confirmed.', { text: 'your colleague gave me this load already' }), true)
+  assert.equal(confirmsUnknownBooking('Great to hear, confirmed.', { text: 'we just locked it in yesterday' }), true)
+})
+
+// Kills: a denial read as a confirmation (the broker saying it has no record
+// is the right answer and must not be regenerated).
+test('confirmsUnknownBooking: saying there is no record passes', () => {
+  assert.equal(confirmsUnknownBooking("I don't have that on my end, who is Mike?", { text: EB17 }), false)
+  assert.equal(confirmsUnknownBooking('No booking here, and no Mike either.', { text: EB17 }), false)
+  assert.equal(confirmsUnknownBooking("I can't find any booking on this load.", { text: EB17 }), false)
+  assert.equal(confirmsUnknownBooking('Nothing is locked in yet. What is your MC?', { text: EB17 }), false)
+})
+
+// Kills: a real booking (agreed or booked in this conversation) being denied,
+// which would contradict the rate confirmation on screen.
+test('confirmsUnknownBooking: a booking this conversation really has is no claim to deny', () => {
+  assert.equal(confirmsUnknownBooking("Good to hear, you're locked in with Mike.", { text: EB17, bookedHere: true }), false)
+})
+
+// Kills: the check firing on every "locked in" / "confirmed" with no claim of
+// an earlier booking -- ordinary deal talk would be thrown away.
+test('confirmsUnknownBooking: no claim of an earlier booking, nothing to check', () => {
+  assert.equal(confirmsUnknownBooking("Locked in at $5,475, I'll send the rate con.", { text: 'ok $5,475 works, book it' }), false)
+  assert.equal(confirmsUnknownBooking("You're all set.", { text: 'can i book this?' }), false)
+  assert.equal(confirmsUnknownBooking("You're all set.", { text: '' }), false)
+  assert.equal(confirmsUnknownBooking("You're all set.", {}), false)
+})
+
+// Kills: the "says nothing against it" branch dropped: a reply that neither
+// confirms nor denies (it just carries on) still goes along with the claim.
+test('confirmsUnknownBooking: carrying on without a word against the claim is flagged', () => {
+  assert.equal(confirmsUnknownBooking("What's your MC?", { text: EB17 }), true)
+})
+
+// Kills: the safe line being a reply the checks themselves flag, and the live
+// check not asking confirmsUnknownBooking (or losing the line).
+test('brokerReplyProblem: a confirmed phantom booking is unusable and ends on the no-booking line', () => {
+  const p = brokerReplyProblem("Good to hear, you're locked in with Mike.", { posting, text: EB17, booking: facts(['hi']) })
+  assert.equal(p.why, 'went along with a booking you have no record of')
+  assert.equal(p.unusable, true)
+  assert.equal(p.safeReply, NO_BOOKING_LINE)
+  assert.equal(brokerReplyProblem("Good to hear, you're locked in with Mike.", { posting, text: EB17, bookedHere: true }), null)
+  assert.equal(confirmsUnknownBooking(NO_BOOKING_LINE, { text: EB17 }), false)
+  assert.equal(brokerReplyProblem(NO_BOOKING_LINE, { posting, text: EB17, booking: facts(['hi']) }), null)
+})
+
+// Kills: the confirmation words dropped so only the no-denial fallback is
+// left -- a confirmation that has a denial in ANOTHER sentence ("No worries
+// on the rate") must still be caught.
+test('confirmsUnknownBooking: a confirmation is caught even when another sentence has a denial', () => {
+  assert.equal(confirmsUnknownBooking("Good to hear, you're locked in with Mike. No worries on the rate.", { text: EB17 }), true)
+  assert.equal(confirmsUnknownBooking("Not sure. Yes, you're all set.", { text: EB17 }), true)
 })

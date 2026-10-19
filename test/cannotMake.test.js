@@ -65,7 +65,8 @@ test('the services regenerate on an unreachable pickup through the one existing 
   assert.match(driver, /const why = problem\?\.why \?\? null/)
   const broker = read('src', 'modules', 'brokerChat', 'brokerChat.service.js')
   assert.match(broker, /truckFacts\(\{ texts: said, posting, now \}\)/)
-  assert.match(broker, /brokerReplyProblem\(reply, \{ truck/)
+  assert.match(broker, /const checkFacts = \{\s*truck/)
+  assert.match(broker, /brokerReplyProblem\(reply, checkFacts\)/)
   assert.match(broker, /buildBrokerSystemPrompt\(\{[\s\S]*?\bnow\b/)
   assert.match(broker, /const why = problem\?\.why \?\? null/)
   for (const src of [driver, broker]) {
