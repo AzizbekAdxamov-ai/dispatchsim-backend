@@ -299,6 +299,15 @@ export function buildDriverSystemPrompt({ driver, standing, load, carrier = null
       : '  You have no truck assigned right now, and you know it.',
   ]
 
+  // The truck record knows the trailer type, but does not store its length.
+  // Keep the two separate so a known reefer cannot turn into an invented 48-footer.
+  if (driver.truckId) {
+    lines.push(driver.trailerType
+      ? `  Your truck record lists ${driver.trailerType.replaceAll('-', ' ')} as its trailer type.`
+      : '  Your truck record does not list a trailer type.')
+    lines.push('  Trailer length is not recorded. If asked, say you do not know it; never guess a length.')
+  }
+
   if (load) {
     lines.push(
       `  You are running load ${load.id}: ${load.originCity}, ${load.originState}`,
