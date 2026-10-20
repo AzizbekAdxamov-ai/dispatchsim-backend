@@ -9,7 +9,17 @@ export const authLimiter = rateLimit({
   limit: 10,
   standardHeaders: 'draft-7',
   legacyHeaders: false,
-  handler: (req, res, next) => next(new AppError('RATE_LIMITED')),
+  // Reserve a slot while authentication runs, then keep only client failures.
+  // Successful logins and server/transport failures must not lock people out.
+  // With skipFailedRequests, "successful" means keep the slot: only 4xx count.
+  skipFailedRequests: true,
+  requestWasSuccessful: (_req, res) => res.statusCode >= 400 && res.statusCode < 500,
+  handler: (req, res, next) => {
+    const remaining = Math.ceil((Number(req.rateLimit.resetTime) - Date.now()) / 1000)
+    const retryAfterSeconds = Number.isFinite(remaining) ? Math.max(1, Math.min(900, remaining)) : 900
+    res.setHeader('Retry-After', retryAfterSeconds)
+    next(new AppError('RATE_LIMITED', { retryAfterSeconds }))
+  },
 })
 
 // Registration needs a higher ceiling than login. A whole classroom behind
