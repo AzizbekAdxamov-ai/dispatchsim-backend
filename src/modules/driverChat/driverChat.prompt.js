@@ -203,6 +203,14 @@ export function situationLines({ driver, load, now = new Date() }) {
 export function offerLines(offer) {
   if (!offer) return []
   const head = ['', 'THE LOAD DISPATCH JUST MENTIONED:']
+  if (offer.deliveryVerified === false) {
+    if (offer.destinationCity) head.push(`  Offered destination: ${offer.destinationCity}, ${offer.destinationState}.`)
+    if (offer.loadedMiles != null) head.push(`  Loaded leg: ${offer.loadedMiles.toLocaleString('en-US')} miles, separate from the empty miles to pickup.`)
+    if (offer.deliveryAt) head.push(`  Delivery appointment: ${clockDateTime(offer.deliveryAt.toISOString())} (Central time).`)
+    head.push(offer.deliveryImpossible
+      ? '  You cannot make that delivery: even the loaded driving time alone exceeds the pickup-to-delivery window. Say so and ask for a later appointment.'
+      : '  Delivery feasibility is not verified: loading duration, duty window and rest timing are unknown. You may confirm a reachable pickup, but do not unconditionally promise delivery or both appointments. Qualify delivery on those details; remaining driving hours alone do not prove the whole trip legal.')
+  }
   const place = offer.state ? `${offer.city}, ${offer.state}` : offer.city
   if (offer.miles == null) {
     return [...head, `  You do not know how far ${place} is; ask for the miles, never guess one.`]

@@ -60,6 +60,23 @@ function ignoresWorkStance(reply, text, standing) {
   return !refuses || stillGivesEta
 }
 
+// A pickup calculation must not become a promise about the loaded leg.
+// Quoting the delivery appointment is fine; committing to arrival is not.
+function deliveryCommitment(reply, text, offer) {
+  if (!offer || offer.deliveryVerified !== false) return false
+  const deliveryAsk = /\b(?:delivery|deliver|receiver|both\s+appointments|both\s+times)\b/i.test(text ?? '')
+  const promise = /\b(?:I|we)(?:\s+(?:can(?!['\u2019]t)|will|could|should)|['\u2019]ll)\s+(?!not\b)(?:\w+\s+){0,3}(?:deliver\b|(?:make|hit|meet|reach|arrive|get|be)\b[^.!?]{0,100}\b(?:delivery|receiver|both\b|make\s+them))|\b(?:delivery|receiver)(?:\s+is)?\s+(?:no\s+problem|guaranteed|confirmed)(?!\s+(?:for|at)\b)\b|\bboth(?:\s+appointments)?\s+(?:work|are\s+(?:fine|doable))\b/i.test(reply)
+    || (deliveryAsk && /^\s*(?:yes|yeah|yep|sure|absolutely|no problem)[.!\s]*$/i.test(reply))
+    || (deliveryAsk && /\b(?:I|we)\s+can\s+(?:do\s+that|make\s+it)\b/i.test(reply))
+    || (deliveryAsk && /\b(?:I|we)(?:\s+(?:can(?!['\u2019]t)|will|could|should)|['\u2019]ll)\s+(?:be|get|arrive)\s+there\b/i.test(reply))
+  // The condition must qualify delivery itself. "If anything changes" in
+  // an unrelated second sentence cannot undo a firm first-sentence promise.
+  const qualified = reply.split(/[.!?;]/).some((clause) => /\b(?:delivery|deliver|receiver|both)\b/i.test(clause)
+    && /\b(?:loading|duty|rest)\b/i.test(clause)
+    && /\b(?:if|provided|assuming|depends|depending|subject\s+to|conditional|until|unknown|unverified|can't\s+confirm|cannot\s+confirm|not\s+(?:yet\s+)?confirmed|not\s+sure|need\s+to\s+(?:verify|confirm))\b/i.test(clause))
+  return promise && (offer.deliveryImpossible || !qualified)
+}
+
 export function driverReplyProblem(reply, { offer, text, load = null, driver = null, standing = null } = {}) {
   // HOS is a safety rule and wins when both fire. A correct HOS refusal
   // makes hosReplyProblem return null, so persona is skipped whenever the ask
@@ -113,6 +130,16 @@ export function driverReplyProblem(reply, { offer, text, load = null, driver = n
       safeReply: `${miles}I don't have a confirmed end time for this rest, so I can't give you a reliable arrival time yet.`,
     }
   }
+  if (deliveryCommitment(reply, text, offer)) {
+    return {
+      why: offer.deliveryImpossible ? 'promised an unreachable delivery' : 'promised delivery without verified loading, duty and rest timing',
+      hint: ' Pickup feasibility does not verify delivery. State the missing loading, duty and rest details; do not promise both appointments.',
+      unusable: true,
+      safeReply: offer.deliveryImpossible
+        ? "I can't make that delivery appointment; the loaded driving alone takes longer than that window on my clock. Can we get a later delivery?"
+        : `${offer.makesIt === true ? 'I can reach the pickup. ' : ''}I can't confirm delivery until the loading time, duty window and rest timing are clear.`,
+    }
+  }
   // The model may say "can't make it" but change the computed distance.
   // Correct it on retry; never show the wrong number after a second miss.
   if (milesOff(reply, offer)) {
@@ -146,7 +173,11 @@ export function driverReplyProblem(reply, { offer, text, load = null, driver = n
     }
   }
   // She was asked to do something and said no without saying why.
-  if (refusesWithoutReason(reply, text)) {
+  const qualifiedDelivery = offer?.deliveryVerified === false
+    && /\b(?:delivery|deliver)\b/i.test(reply)
+    && /\b(?:until|depends|depending|provided|assuming|if)\b/i.test(reply)
+    && /\b(?:loading|duty|rest)\b/i.test(reply)
+  if (!qualifiedDelivery && refusesWithoutReason(reply, text)) {
     return {
       why: 'turned it down without a reason',
       hint: ' Give the reason in a few words from what is written above (the miles, your hours, the rule, the empty run) -- never a bare no.',

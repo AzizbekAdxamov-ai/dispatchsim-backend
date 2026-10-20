@@ -23,6 +23,7 @@
 import { CITIES, findCity, roadMiles } from '../../../scripts/seed/cities.js'
 import { legalTransitHours } from '../loads/whereabouts.js'
 import { APP_TIMEZONE } from '../../constants/appClock.js'
+import { AVG_HIGHWAY_MPH } from '../../../scripts/seed/facilities.js'
 
 // How dispatchers write the two cities they type shortest. Small on
 // purpose: every entry is a guess about someone else's shorthand.
@@ -298,6 +299,49 @@ function pickupTimeFor({ list, placeOf, chosen, now }) {
   return null
 }
 
+// Keep the loaded leg separate: reaching the shipper proves nothing about
+// delivery after live loading. Only facts in this offer are carried forward.
+function deliveryFacts(text, pickupAt, now) {
+  const all = scan(text)
+  let destination = null
+  for (let i = 0; i + 1 < all.length; i++) {
+    if (LINK_RE.test(text.slice(all[i].end, all[i + 1].index))) {
+      destination = all[i + 1].ambiguous ? null : all[i + 1]
+      break
+    }
+  }
+  const cue = [...text.matchAll(DELIVERY_CUE_RE)].find((m) => DAY_RE.test(text.slice(m.index)))
+  const deliveryAt = cue ? pickupWhen(`pickup ${text.slice(cue.index + cue[0].length)}`, now) : null
+  const milesMatch = text.match(/\b([\d,]+)\s*(?:loaded\s+miles|loaded\s+mi)\b/i)
+  const loadedMiles = milesMatch ? Number(milesMatch[1].replaceAll(',', '')) : null
+  if (!destination && !deliveryAt && loadedMiles == null) return {}
+  // This is only a lower bound, never a legal feasibility approval: no dock
+  // duration, duty-window start or subsequent rest has been verified here.
+  const deliveryImpossible = pickupAt && deliveryAt && loadedMiles != null
+    ? deliveryAt.getTime() < pickupAt.getTime() + loadedMiles / AVG_HIGHWAY_MPH * 3600e3
+    : false
+  return { destinationCity: destination?.city ?? null, destinationState: destination?.state ?? null,
+    deliveryAt, loadedMiles, deliveryVerified: false, deliveryImpossible: Boolean(deliveryImpossible) }
+}
+
+function deliveryForOffer({ list, placeOf, chosen, pickupAt, now }) {
+  const own = deliveryFacts(list[chosen], pickupAt, now)
+  if (own.deliveryVerified === false) return own
+  // A question repeating the same pickup still refers to the offered leg.
+  // A new route or explicitly new load starts fresh, even in the same city.
+  if (/\b(?:new|next|another|different)\s+load\b/i.test(list[chosen])) return own
+  const current = placeOf[chosen]
+  for (let i = chosen - 1; i >= 0; i--) {
+    const previous = placeOf[i]
+    if (!previous) continue
+    if (previous.city !== current.city || previous.state !== current.state) break
+    const facts = deliveryFacts(list[i], pickupAt, now)
+    if (facts.deliveryVerified === false) return facts
+    if (/\b(?:new|next|another|different)\s+load\b/i.test(list[i])) break
+  }
+  return own
+}
+
 // What the dispatcher's last words say about a load, against Grace's own
 // day -- or null when no load is being offered.
 //
@@ -336,7 +380,8 @@ export function offerFacts({ driver, load = null, texts, now = new Date() }) {
     return name ? { city: name, state: null, miles: null, fromCity: null, onLoad: Boolean(load), earliestAt: null, pickupAt: null, makesIt: null } : null
   }
 
-  const base = { city: place.city, state: place.state }
+  const pickupAt = pickupTimeFor({ list, placeOf, chosen, now })
+  const base = { city: place.city, state: place.state, ...deliveryForOffer({ list, placeOf, chosen, pickupAt, now }) }
   if (load) {
     const from = findCity(load.destinationCity, load.destinationState)
     return { ...base, miles: from ? roadMiles(from, place) : null, fromCity: from ? `${from.city}, ${from.state}` : null, onLoad: true, earliestAt: null, pickupAt: null, makesIt: null }
@@ -345,7 +390,6 @@ export function offerFacts({ driver, load = null, texts, now = new Date() }) {
   const from = findCity(driver?.currentCity, driver?.currentState)
   if (!from) return { ...base, miles: null, fromCity: null, onLoad: false, earliestAt: null, pickupAt: null, makesIt: null }
   const miles = roadMiles(from, place)
-  const pickupAt = pickupTimeFor({ list, placeOf, chosen, now })
   // While she is resting, HOS remaining does not tell us when her ten ends.
   // Starting the trip at `now` would invent both a legal ETA and a verdict.
   if (driver.dutyStatus === 'resting') {
