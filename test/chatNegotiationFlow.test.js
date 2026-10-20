@@ -1,0 +1,104 @@
+// The real send service with an in-memory persistence boundary; no provider or live DB writes.
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { sendMessage, acceptRateCon, getRateConfirmation } from '../src/modules/brokerChat/brokerChat.service.js'
+import { makeFakeBrokerRepo, fakePosting, FAKE_IDS } from './helpers/fakeBrokerRepo.js'
+
+const carrier = { name: 'Keystone Line Haul', mcNumber: 'MC-741309', email: null }
+const ids = { conversationId: FAKE_IDS.conversation, userId: FAKE_IDS.user }
+function setup() {
+  const fake = makeFakeBrokerRepo({ posting: fakePosting({ rateUsd: 1571, distanceMi: 442, weightLbs: 42000 }),
+    lines: ['This is Keystone Line Haul, MC-741309.', 'Our truck is in Dallas, 53-foot dry van.'] })
+  let calls = 0
+  const deps = { repo: fake.repo, getCarrier: async () => carrier,
+    findById: async () => ({ email: 'login@example.com' }), assertCanSend: async () => {},
+    chatConfigFor: () => ({ model: 'fake' }), logTurn: async () => {},
+    chatText: async () => { calls += 1; return 'Rate confirmed: $9999 all-in. Sent to your Gmail.' },
+    bookPosting: async () => ({ load: { id: 'load-1' }, warnings: [] }),
+  }
+  const send = (text) => sendMessage({ ...ids, text }, { deps })
+  return { fake, deps, send, calls: () => calls }
+}
+
+test('chat acceptance -> explicit login email -> delayed card -> signature; recipient remains frozen', async () => {
+  const t = setup()
+  await t.send("I'll take it at $1571.")
+  assert.equal(t.fake.state.conversation.negotiationStage, 'awaiting_email')
+  assert.equal(t.fake.state.messages.filter((m) => m.kind === 'rate_con').length, 0)
+  assert.ok(!t.fake.state.messages.some((m) => m.content.includes('login@example.com')))
+  await t.send('Use my email.')
+  assert.equal(t.fake.state.conversation.recipientEmail, 'login@example.com')
+  assert.equal(t.fake.state.conversation.negotiationStage, 'paper_pending')
+  assert.equal(await t.fake.repo.rateConDelivered(), false)
+  await assert.rejects(() => acceptRateCon(ids, { deps: t.deps }), { code: 'RATE_CON_NOT_ARRIVED' })
+  await assert.rejects(() => getRateConfirmation(ids, { deps: t.deps }), { code: 'RATE_CON_NOT_ARRIVED' })
+  await t.send('Use my email.')
+  assert.equal(t.fake.state.messages.filter((m) => m.kind === 'rate_con').length, 1)
+  t.fake.deliverAll()
+  await t.send('My new email is changed@example.com.')
+  const paper = await getRateConfirmation(ids, { deps: t.deps })
+  assert.equal(paper.booking.email, 'login@example.com')
+  assert.equal(paper.rateConRateUsd, 1571)
+  assert.equal((await acceptRateCon(ids, { deps: t.deps })).load.id, 'load-1')
+  assert.ok(!t.fake.state.messages.some((m) => m.role === 'broker' && /9999|Gmail/.test(m.content)))
+})
+
+test('hold removes pending and delivered documents and prevents accept', async () => {
+  const t = setup()
+  await t.send("I'll take it at $1571.")
+  await t.send('Use my email.')
+  t.fake.deliverAll()
+  await t.send("Don't book us or issue the confirmation yet.")
+  assert.equal(t.fake.state.conversation.negotiationStage, 'held')
+  assert.equal(t.fake.state.messages.filter((m) => m.kind === 'rate_con').length, 0)
+  await assert.rejects(() => acceptRateCon(ids, { deps: t.deps }), { code: 'NOT_AGREED_YET' })
+})
+
+test('a newer hold supersedes an in-flight acceptance before model completion', async () => {
+  const t = setup()
+  let resolveOld
+  let entered
+  const started = new Promise((resolve) => { entered = resolve })
+  const oldReply = new Promise((resolve) => { resolveOld = resolve })
+  let first = true
+  t.deps.chatText = async () => {
+    if (first) { first = false; entered(); return oldReply }
+    return 'Understood. I will wait for your confirmation.'
+  }
+  const pending = t.send("I'll take it at $1571.")
+  await started
+  await t.send("Don't book us yet.")
+  resolveOld('$1571 all-in agreed. What email should I put on the rate confirmation?')
+  await pending
+  assert.equal(t.fake.state.conversation.negotiationStage, 'held')
+  assert.equal(t.fake.state.conversation.agreedRateUsd, null)
+  assert.ok(!t.fake.state.messages.some((m) => m.role === 'broker' && m.content.includes('all-in agreed')))
+})
+
+test('provider failure cannot commit acceptance; expiration prevents completing a new turn', async () => {
+  const t = setup()
+  t.deps.chatText = async () => { throw new Error('provider down') }
+  await assert.rejects(() => t.send("I'll take it at $1571."), { code: 'CHAT_UNAVAILABLE' })
+  assert.equal(t.fake.state.conversation.agreedRateUsd, null)
+  assert.equal(t.fake.state.messages.filter((m) => m.role === 'dispatcher').at(-1).content, "I'll take it at $1571.")
+})
+
+test('a third-party email question cannot issue a document in the real send flow', async () => {
+  const t = setup()
+  await t.send("I'll take it at $1571.")
+  await t.send('Is dispatch@broker.com your email?')
+  assert.equal(t.fake.state.conversation.recipientEmail, null)
+  assert.equal(t.fake.state.conversation.negotiationStage, 'awaiting_email')
+  assert.equal(t.fake.state.messages.filter((m) => m.kind === 'rate_con').length, 0)
+})
+
+test('mixed acceptance plus denied or conditional recipient keeps the real flow awaiting email', async () => {
+  for (const tail of ['Do not use old@example.com.', 'If needed, send it to old@example.com.']) {
+    const t = setup()
+    await t.send(`I accept $1571. ${tail}`)
+    assert.equal(t.fake.state.conversation.agreedRateUsd, 1571)
+    assert.equal(t.fake.state.conversation.negotiationStage, 'awaiting_email')
+    assert.equal(t.fake.state.conversation.recipientEmail, null)
+    assert.equal(t.fake.state.messages.filter((m) => m.kind === 'rate_con').length, 0)
+  }
+})

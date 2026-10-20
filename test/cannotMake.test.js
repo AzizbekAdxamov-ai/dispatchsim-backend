@@ -70,7 +70,7 @@ test('the services regenerate on an unreachable pickup through the one existing 
   assert.match(broker, /buildBrokerSystemPrompt\(\{[\s\S]*?\bnow\b/)
   assert.match(broker, /const why = problem\?\.why \?\? null/)
   for (const src of [driver, broker]) {
-    assert.equal(src.match(/await chatText\(\{/g).length, 2)
+    assert.equal(src.match(/await (?:deps\.)?chatText\(\{/g).length, 2)
   }
   const driverCheck = read('src', 'modules', 'driverChat', 'replyProblem.js')
   assert.match(driverCheck, /ignoresUnreachable\(reply, offer\)/)

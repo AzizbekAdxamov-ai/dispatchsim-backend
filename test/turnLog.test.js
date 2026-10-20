@@ -62,7 +62,7 @@ test('056 keeps the prompt, one outcome per turn, and no foreign keys', () => {
 for (const file of ['brokerChat', 'driverChat']) {
   test(`the ${file} service logs every turn in finally`, () => {
     const src = read('src', 'modules', file, `${file}.service.js`)
-    assert.match(src, /\} finally \{[\s\S]*?await logTurn\(turnRow\(\{[\s\S]*?systemPrompt, history, text,[\s\S]*?error: failure/)
+    assert.match(src, /\} finally \{[\s\S]*?await (?:deps\.)?logTurn\(turnRow\(\{[\s\S]*?systemPrompt, history, text,[\s\S]*?error: failure/)
     assert.match(src, /failure = err\.message/)
     assert.match(src, /regenerated = why/)
   })
@@ -107,7 +107,7 @@ test('the prompt version follows the prompt file', () => {
 // right; the broker did not).
 test('the broker service logs the model that answered, from both chatText calls', () => {
   const src = read('src', 'modules', 'brokerChat', 'brokerChat.service.js')
-  const calls = src.split('await chatText({').slice(1).map((part) => part.split('onRequest,')[1].slice(0, 40))
+  const calls = src.split(/await (?:deps\.)?chatText\(\{/).slice(1).map((part) => part.split('onRequest,')[1].slice(0, 40))
   assert.equal(calls.length, 2)
   for (const call of calls) assert.match(call, /onModel/)
   assert.match(src, /let answeredModel = config\.model/)
@@ -166,7 +166,7 @@ test('060 adds attempts to both tables, as a checked array', () => {
 for (const file of ['brokerChat', 'driverChat']) {
   test(`the ${file} service passes onAttempt to both calls and logs the attempts`, () => {
     const src = read('src', 'modules', file, `${file}.service.js`)
-    const parts = src.split('await chatText({').slice(1).map((p) => p.split('}))')[0])
+    const parts = src.split(/await (?:deps\.)?chatText\(\{/).slice(1).map((p) => p.split('}))')[0])
     assert.equal(parts.length, 2)
     for (const call of parts) assert.match(call, /onRequest,\s*onModel,\s*onAttempt,/)
     assert.doesNotMatch(parts[0], /cause:/)

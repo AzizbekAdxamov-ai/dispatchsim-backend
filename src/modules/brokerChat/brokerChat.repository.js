@@ -1,6 +1,8 @@
 // SQL for broker conversations. One table pair: broker_conversations holds
 // the thread and the agreed rate, broker_messages holds the turns.
-import { query } from '../../db/pool.js'
+import { query, withTransaction } from '../../db/pool.js'
+import { AppError } from '../../lib/errors.js'
+import { chatIntent } from './negotiation.js'
 
 // rate_con_rate_usd is deliberately ABSENT here.
 //
@@ -17,6 +19,9 @@ import { query } from '../../db/pool.js'
 const CONVERSATION_COLUMNS = `
   c.id, c.posting_id AS "postingId", c.user_id AS "userId",
   c.agreed_rate_usd AS "agreedRateUsd", c.status,
+  c.negotiation_stage AS "negotiationStage", c.broker_offer_usd AS "brokerOfferUsd",
+  c.recipient_email AS "recipientEmail", c.rate_push_count AS "ratePushCount",
+  c.best_counter_used AS "bestCounterUsed", c.negotiation_revision AS "negotiationRevision",
   c.created_at AS "createdAt", c.updated_at AS "updatedAt"
 `
 
@@ -207,7 +212,7 @@ export async function listConversations(userId) {
 export async function getConversationForPDF(conversationId, userId) {
   const result = await query(
     `SELECT c.id, c.agreed_rate_usd AS "agreedRateUsd",
-            c.rate_con_rate_usd AS "rateConRateUsd", c.status,
+            c.rate_con_rate_usd AS "rateConRateUsd", c.status, c.recipient_email AS "recipientEmail",
             c.updated_at AS "updatedAt",
             p.id AS "postingId", p.origin_city AS "originCity",
             p.origin_state AS "originState",
@@ -239,12 +244,17 @@ export async function getConversationForPDF(conversationId, userId) {
 // who accepted a rate con without reading it should see that number on
 // the load. agreed_rate_usd is the fallback for threads booked before
 // migration 018 added the column.
-export async function getAgreedRate(client, postingId, userId) {
+export async function getAgreedRate(client, postingId, userId, agreement = null) {
   const result = await client.query(
     `SELECT coalesce(rate_con_rate_usd, agreed_rate_usd) AS rate
        FROM broker_conversations
-      WHERE posting_id = $1 AND user_id = $2 AND status IN ('agreed', 'booked')`,
-    [postingId, userId],
+      WHERE posting_id = $1 AND user_id = $2 AND status IN ('agreed', 'booked')
+        AND ($3::uuid IS NULL OR (id = $3 AND negotiation_revision = $4
+          AND rate_con_rate_usd IS NOT NULL
+          AND EXISTS (SELECT 1 FROM broker_messages m WHERE m.conversation_id = broker_conversations.id
+            AND m.kind = 'rate_con' AND m.deliver_at <= now())))
+      FOR UPDATE`,
+    [postingId, userId, agreement?.conversationId ?? null, agreement?.revision ?? null],
   )
   return result.rows[0]?.rate ?? null
 }
@@ -278,13 +288,76 @@ export async function clearRateCon(conversationId) {
 export async function markBooked(conversationId, userId) {
   const result = await query(
     `UPDATE broker_conversations
-        SET status = 'booked', updated_at = now()
+        SET status = 'booked', negotiation_stage = 'booked', updated_at = now()
       WHERE id = $1 AND user_id = $2 AND status = 'agreed'
         AND rate_con_rate_usd IS NOT NULL
       RETURNING ${CONVERSATION_COLUMNS.replaceAll('c.', '')}`,
     [conversationId, userId],
   )
   return result.rows[0] ?? null
+}
+
+// Lock posting before conversation, the same order booking uses. No AI call runs
+// inside a transaction. Reserving a revision makes an older in-flight answer inert.
+async function lockedConversation(client, conversationId, userId) {
+  const found = await client.query('SELECT posting_id FROM broker_conversations WHERE id = $1 AND user_id = $2', [conversationId, userId])
+  if (!found.rows[0]) throw new AppError('CONVERSATION_NOT_FOUND')
+  const p = await client.query('SELECT status, posted_at, expires_at FROM load_postings WHERE id = $1 FOR SHARE', [found.rows[0].posting_id])
+  const posting = p.rows[0]
+  if (!posting || new Date(posting.posted_at) > new Date()) throw new AppError('POSTING_NOT_FOUND')
+  if (posting.status !== 'open') throw new AppError('POSTING_TAKEN')
+  if (new Date(posting.expires_at) <= new Date()) throw new AppError('POSTING_EXPIRED')
+  const c = await client.query(`SELECT ${CONVERSATION_COLUMNS} FROM broker_conversations c WHERE c.id = $1 AND c.user_id = $2 FOR UPDATE`, [conversationId, userId])
+  return c.rows[0]
+}
+
+export async function beginChatTurn(conversationId, userId, text) {
+  return withTransaction(async (client) => {
+    const conversation = await lockedConversation(client, conversationId, userId)
+    const intent = chatIntent(text)
+    const invalidate = intent.kind === 'hold' || intent.kind === 'walk' || intent.kind === 'push'
+      || (['offer', 'accept_amount'].includes(intent.kind) && conversation.agreedRateUsd !== null && intent.rateUsd !== conversation.agreedRateUsd)
+    const updated = await client.query(`UPDATE broker_conversations SET negotiation_revision = negotiation_revision + 1,
+      agreed_rate_usd = CASE WHEN $3 THEN NULL ELSE agreed_rate_usd END,
+      rate_con_rate_usd = CASE WHEN $3 THEN NULL ELSE rate_con_rate_usd END,
+      recipient_email = CASE WHEN $3 THEN NULL ELSE recipient_email END,
+      status = CASE WHEN $3 THEN 'open' ELSE status END,
+      negotiation_stage = CASE WHEN $3 THEN $4 ELSE negotiation_stage END, updated_at = now()
+      WHERE id = $1 AND user_id = $2 RETURNING negotiation_revision`,
+    [conversationId, userId, invalidate, intent.kind === 'hold' ? 'held' : 'negotiating'])
+    if (invalidate) await client.query("DELETE FROM broker_messages WHERE conversation_id = $1 AND kind = 'rate_con'", [conversationId])
+    // Superseded pending prose must not say a previous rate was accepted after a hold.
+    await client.query("DELETE FROM broker_messages WHERE conversation_id = $1 AND role = 'broker' AND kind = 'text' AND deliver_at > now()", [conversationId])
+    const message = await client.query(`INSERT INTO broker_messages (conversation_id, role, content)
+      VALUES ($1, 'dispatcher', $2) RETURNING id, role, content, kind, created_at AS "createdAt"`, [conversationId, text])
+    return { conversation: { ...conversation, negotiationRevision: updated.rows[0].negotiation_revision }, dispatcherMessage: message.rows[0] }
+  })
+}
+
+export async function completeChatTurn({ conversationId, userId, revision, decision, reply, delaySec, paperDelaySec, paperRate }) {
+  return withTransaction(async (client) => {
+    const conversation = await lockedConversation(client, conversationId, userId)
+    if (conversation.negotiationRevision !== revision) return false
+    const s = decision.state
+    if (decision.invalidatePaper) await client.query("DELETE FROM broker_messages WHERE conversation_id = $1 AND kind = 'rate_con'", [conversationId])
+    await client.query(`UPDATE broker_conversations SET broker_offer_usd = $3,
+      agreed_rate_usd = $4, status = CASE WHEN $4::integer IS NULL THEN 'open' ELSE 'agreed' END,
+      negotiation_stage = $5, recipient_email = $6, rate_push_count = $7, best_counter_used = $8,
+      rate_con_rate_usd = CASE WHEN $9 THEN $10::integer WHEN $11 THEN NULL ELSE rate_con_rate_usd END,
+      updated_at = now() WHERE id = $1 AND user_id = $2`,
+    [conversationId, userId, s.offer, s.agreed, s.stage, s.recipient, s.pushes, s.bestCounterUsed, decision.issuePaper, paperRate, decision.invalidatePaper])
+    await client.query(`INSERT INTO broker_messages (conversation_id, role, content, deliver_at)
+      VALUES ($1, 'broker', $2, now() + make_interval(secs => $3))`, [conversationId, reply, delaySec])
+    if (decision.issuePaper) {
+      // Conversation lock + existence check make retries and duplicate email sends idempotent.
+      await client.query(`INSERT INTO broker_messages (conversation_id, role, content, kind, deliver_at)
+        SELECT $1, 'broker', 'Rate confirmation attached. Please review the details before signing.', 'rate_con',
+          now() + make_interval(secs => $2)
+        WHERE NOT EXISTS (SELECT 1 FROM broker_messages WHERE conversation_id = $1 AND kind = 'rate_con')`,
+      [conversationId, delaySec + Math.max(1, paperDelaySec)])
+    }
+    return true
+  })
 }
 
 // Has the rate confirmation actually landed in the thread yet? Accepting

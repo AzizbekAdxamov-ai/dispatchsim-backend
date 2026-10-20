@@ -213,6 +213,6 @@ test('the live service passes one checkFacts to both brokerReplyProblem calls', 
   assert.match(scenarios, /const brokerSaid = history\.filter/)
   assert.match(scenarios, /said: dispatcherSoFar, brokerSaid,/)
   // The prompt gets it too: the MC question depends on what the broker already asked.
-  assert.match(src, /booking,\s+brokerSaid,\s+\}\)/)
+  assert.match(src, /booking,\s+brokerSaid,\s+negotiation: decision,\s+\}\)/)
   assert.match(scenarios, /booking,\s+brokerSaid,\s+\}\)/)
 })

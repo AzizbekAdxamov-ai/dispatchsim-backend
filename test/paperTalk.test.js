@@ -51,7 +51,7 @@ test('the prompt receives actual paper state, independent of the dialogue', () =
   assert.match(buildBrokerSystemPrompt({ ...base, paper: open }), /No agreed rate is recorded/)
   assert.match(buildBrokerSystemPrompt({ ...base, paper: pending }), /still on its way/)
   assert.match(buildBrokerSystemPrompt({ ...base, paper: arrived }), /available in this thread/)
-  assert.match(paperLines(open).join(' '), /never to external email/)
+  assert.match(paperLines(open).join(' '), /no external email is sent/)
   const facts = bookingFacts({ texts: [], posting })
   assert.doesNotMatch(callerBlock(facts).join(' '), /email to send the rate confirmation/)
 })

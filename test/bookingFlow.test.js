@@ -86,6 +86,7 @@ test('S9b: wrong MC is turned away at agree, and again at accept', async () => {
 // or a paper that leaves out a side of the deal
 test('S9a: right MC agrees, the paper names everyone, accept books', async () => {
   const t = setup([intro, `MC ${s9Mc(CARRIER)}`, truckLine, price, middle, bookIt])
+  t.fake.forceAgreed(ask) // An existing chat handshake; /agree cannot create one.
   const agreed = await agreeAt(t)
   assert.equal(agreed.status, 'agreed')
   assert.equal(agreed.awaitingReply, true)
@@ -103,7 +104,7 @@ test('S9a: right MC agrees, the paper names everyone, accept books', async () =>
   }
 
   const out = await acceptRateCon(t.ids, { deps: t.deps })
-  assert.deepEqual(t.booked, [{ postingId: posting.id, userId: FAKE_IDS.user, driverId: null }])
+  assert.deepEqual(t.booked, [{ postingId: posting.id, userId: FAKE_IDS.user, driverId: null, agreement: { conversationId: FAKE_IDS.conversation, revision: 0 } }])
   assert.equal(out.conversation.status, 'booked')
   assert.equal(out.alreadyAccepted, false)
 })
@@ -117,6 +118,7 @@ test('an out-of-band rate is refused before the MC gate', async () => {
 
 test('only delivered canonical paper permits an attachment claim, never an email claim', async () => {
   const t = setup([intro, `MC ${s9Mc(CARRIER)}`, truckLine, bookIt])
+  t.fake.forceAgreed(ask)
   await agreeAt(t)
   const delivered = t.fake.repo.rateConDelivered
   // An agreement can exist while the delayed card is still invisible.
@@ -131,4 +133,14 @@ test('only delivered canonical paper permits an attachment claim, never an email
   assert.equal(brokerReplyProblem(card.content, { paper }), null)
   assert.equal(brokerReplyProblem('Rate confirmation sent to carrier@example.com.', { paper })?.unusable, true)
   assert.equal(t.booked.length, 0)
+})
+
+// A hidden legacy form/API must not bypass broker economics.
+test('legacy agree cannot create a rate or replace the chat handshake', async () => {
+  const t = setup([intro, `MC ${s9Mc(CARRIER)}`])
+  assert.equal((await rejection(agreeAt(t))).code, 'NOT_AGREED_YET')
+  assert.equal(t.fake.state.conversation.status, 'open')
+  t.fake.forceAgreed(posting.rateUsd)
+  assert.equal((await rejection(agreeAt(t))).code, 'NOT_AGREED_YET')
+  assert.equal(t.fake.state.conversation.agreedRateUsd, posting.rateUsd)
 })

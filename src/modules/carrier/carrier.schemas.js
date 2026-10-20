@@ -13,6 +13,7 @@ export const updateCarrierSchema = z
     mcNumber: z.string().trim().regex(/^MC-[0-9]{6}$/, 'MC number looks like MC-123456').optional(),
     dotNumber: z.string().trim().regex(/^[0-9]{6,8}$/, 'A USDOT number is 6 to 8 digits').optional(),
     phone: z.string().trim().min(7).max(32).optional(),
+    email: z.string().trim().toLowerCase().email().max(254).nullable().optional(),
     addressLine: z.string().trim().min(3).max(160).optional(),
     city: z.string().trim().min(2).max(80).optional(),
     state: z.string().trim().regex(/^[A-Z]{2}$/, 'Two capital letters, like TX').optional(),

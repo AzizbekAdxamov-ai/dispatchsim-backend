@@ -152,7 +152,7 @@ async function collectWarnings(posting, driverId) {
  * Book a posting. Returns { load, posting, warnings } for both 201 and 200.
  * Throws AppError on failure.
  */
-export async function bookPosting({ postingId, userId, driverId }) {
+export async function bookPosting({ postingId, userId, driverId, agreement = null }) {
   let posting
   let loadId
   let isIdempotent = false
@@ -201,7 +201,9 @@ export async function bookPosting({ postingId, userId, driverId }) {
         throw new AppError('POSTING_NOT_FOUND')
       }
 
-      const agreedRate = await getAgreedRate(client, postingId, userId)
+      const agreedRate = await getAgreedRate(client, postingId, userId, agreement)
+      // A held or renegotiated chat cannot race a signature into a posted-price booking.
+      if (agreement && agreedRate === null) throw new AppError('NOT_AGREED_YET')
 
       // Step 2: posting is now 'booked'. Generate load ID.
       loadId = await nextLoadId(client)

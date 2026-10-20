@@ -100,11 +100,11 @@ test('sitting, parked and empty count only with a truck, driver, I or we as the 
   assert.equal(truckCity(['my driver is in reno'])?.city, 'Reno')
 })
 
-// Kills: a statement from five messages ago still driving the block
-test('only the last four dispatcher messages are read', () => {
+// A known location must survive the paperwork conversation.
+test('current location survives more than four paperwork messages', () => {
   const old = 'my truck is in seattle'
   assert.equal(truckCity([old, 'a', 'b', 'c'])?.city, 'Seattle')
-  assert.equal(truckCity([old, 'a', 'b', 'c', 'd']), null)
+  assert.equal(truckCity([old, 'a', 'b', 'c', 'd'])?.city, 'Seattle')
 })
 
 // Kills: an older truck city used after a newer message moved the truck

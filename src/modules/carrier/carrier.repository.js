@@ -21,8 +21,16 @@ export async function updateCarrier(patch, client = null) {
     patch.city ?? null,
     patch.state ?? null,
     patch.postalCode ?? null,
+    Object.hasOwn(patch, 'email'),
+    patch.email ?? null,
   ])
   return result.rows[0] ?? null
+}
+
+// The login fallback belongs to this requester; it is never stored as the shared carrier email.
+export function carrierEmail(carrier, user) {
+  const effectiveEmail = carrier?.email || user?.email || null
+  return { effectiveEmail, emailSource: carrier?.email ? 'carrier' : user?.email ? 'account' : null }
 }
 
 // The one line a document or a prompt puts under the company's name.

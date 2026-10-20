@@ -253,7 +253,7 @@ test('both chats treat an over-long reply the way they treat leaked reasoning', 
     'src/modules/driverChat/driverChat.service.js',
   ]) {
     const text = src(f)
-    assert.match(text, /if \(remaining\?\.unusable\) \{[\s\S]*?reply = remaining\.safeReply \?\? FALLBACK_REPLY/, `${f} zaxira javobga tushmayapti`)
+    assert.match(text, /if \(remaining\?\.unusable\) \{[\s\S]*?reply = remaining\.safeReply \?\? (?:decision\.line \?\? )?FALLBACK_REPLY/, `${f} zaxira javobga tushmayapti`)
     // The length rule itself lives in the shared reply check.
     const check = src(f.replace(/[^/]*$/, 'replyProblem.js'))
     assert.match(check, /tooLongForChat\(reply\)/, `${f} javob uzunligini tekshirmayapti`)

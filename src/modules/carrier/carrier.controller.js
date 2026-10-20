@@ -3,19 +3,20 @@
 import { AppError } from '../../lib/errors.js'
 import * as repo from './carrier.repository.js'
 import { updateCarrierSchema } from './carrier.schemas.js'
+import { findById } from '../auth/users.repository.js'
 
-export async function getCarrier(_req, res) {
+export async function getCarrier(req, res) {
   const carrier = await repo.getCarrier()
   // 048 seeds the row, so a missing one means a database that has not
   // been migrated -- said plainly rather than answered with an empty
   // object the UI would render as a company with no name.
   if (!carrier) throw new AppError('CARRIER_NOT_SET')
-  res.status(200).json(carrier)
+  res.status(200).json({ ...carrier, ...repo.carrierEmail(carrier, await findById(req.auth.userId)) })
 }
 
 export async function updateCarrier(req, res) {
   const patch = updateCarrierSchema.parse(req.body)
   const carrier = await repo.updateCarrier(patch)
   if (!carrier) throw new AppError('CARRIER_NOT_SET')
-  res.status(200).json(carrier)
+  res.status(200).json({ ...carrier, ...repo.carrierEmail(carrier, await findById(req.auth.userId)) })
 }

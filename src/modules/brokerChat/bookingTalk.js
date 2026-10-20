@@ -65,7 +65,13 @@ const COMPANY_RE = new RegExp(
 const NOT_A_COMPANY = /^(?:a|an|the|my|our|your|you|it|this|that|them|him|her|no|one|two|three|\d)\b/i
 
 function companyIn(text) {
-  const m = COMPANY_RE.exec(asciiPunct(text))
+  const src = asciiPunct(text)
+  // Direct carrier introductions do not require an extra "with/from".
+  const direct = /\b(?:this is|we are|company(?: name)?(?: is|:)?)\s+([a-z][a-z0-9&.' -]{2,60}?)(?=,|[!?]|\s+(?:mc|calling about|on your|checking on)\b|$)/i.exec(src)
+  if (direct && !/\b(?:with|from)\b/i.test(direct[1]) && /\b(?:haul|transport|trucking|logistics|freight|carrier|express|lines?|services)\b/i.test(direct[1])) return direct[1].trim()
+  // A route after "calling ... from" is not a company introduction.
+  if (/\bcalling\b[^.!?]{0,80}\bfrom\s+[a-z .'-]+,?\s+[A-Z]{2}\s+to\b/.test(src)) return null
+  const m = COMPANY_RE.exec(src)
   const name = (m?.[1] ?? m?.[2] ?? '').trim()
   if (!name || NOT_A_COMPANY.test(name)) return null
   return name
@@ -93,12 +99,13 @@ function companyMatches(said, carrierName) {
 // -- Truck, trailer, driver, email ---------------------------------------
 
 const EMPTY_RE = /\b(?:empty|mt|available|free|ready)\b[^.;!?]{0,20}?\b(?:now|today|tonight|tomorrow|tmrw|tmr|(?:mon|tues|wednes|thurs|fri|satur|sun)day|\d{1,2}(?::\d{2})?\s?(?:am|pm))(?:\s+(?:at\s+)?\d{1,2}(?::\d{2})?\s?(?:am|pm))?/i
-const LENGTH_RE = /\b(48|53)\s*(?:'|ft\b|foot\b|feet\b|(?=\s*(?:dry|van|reefer|refer|flat|step)))/i
+const LENGTH_RE = /\b(48|53)\s*-?\s*(?:'|ft\b|foot\b|feet\b|(?=\s*(?:dry|van|reefer|refer|flat|step)))/i
 
 const NAME_STOPS = new Set([
   'is', 'will', 'has', 'can', 'could', 'would', 'should', 'was', 'were', 'be', 'in', 'at', 'on', 'near', 'out', 'from', 'to',
   'with', 'the', 'a', 'an', 'and', 'for', 'needs', 'need', 'got', 'have', 'name', 'truck', 'trk', 'unit', 'tractor', 'email',
   'send', 'rc', 'ratecon', 'rate', 'then', 'who', 'that', 'it', 'i', 'we',
+  'assist', 'assistance', 'eta', 'before', 'after', 'hours', 'available', 'required', 'confirmed',
 ])
 const DRIVER_RE = /\bdriver(?:'s| is|:)?\s+(?:name\s*:?\s*(?:is\s+)?)?([a-z]+(?:\s+[a-z]+)?)/gi
 const TRUCK_NO_RE = /\b(?:truck|unit|trk|tractor)\s*(?:#|no\.?|number|:)?\s*([A-Z0-9][A-Z0-9-]{1,11})\b/gi

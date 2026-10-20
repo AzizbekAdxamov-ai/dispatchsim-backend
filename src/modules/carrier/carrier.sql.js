@@ -9,7 +9,7 @@
 
 export const GET_CARRIER_SQL = `
   SELECT name, mc_number AS "mcNumber", dot_number AS "dotNumber",
-         phone, address_line AS "addressLine", city, state,
+         phone, email, address_line AS "addressLine", city, state,
          postal_code AS "postalCode", updated_at AS "updatedAt"
     FROM carrier
    WHERE id = true`
@@ -28,8 +28,9 @@ export const UPDATE_CARRIER_SQL = `
          city         = coalesce($6, city),
          state        = coalesce($7, state),
          postal_code  = coalesce($8, postal_code),
+         email        = CASE WHEN $9::boolean THEN $10::text ELSE email END,
          updated_at   = now()
    WHERE id = true
   RETURNING name, mc_number AS "mcNumber", dot_number AS "dotNumber",
-            phone, address_line AS "addressLine", city, state,
+            phone, email, address_line AS "addressLine", city, state,
             postal_code AS "postalCode", updated_at AS "updatedAt"`

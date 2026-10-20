@@ -44,6 +44,8 @@ export function makeFakeBrokerRepo({
   const conversation = {
     id: FAKE_IDS.conversation, postingId: posting.id, userId,
     agreedRateUsd: null, rateConRateUsd: null, status: 'open',
+    negotiationStage: 'negotiating', negotiationRevision: 0, brokerOfferUsd: null,
+    recipientEmail: null, ratePushCount: 0, bestCounterUsed: false,
     createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
   }
   const messages = lines.map((content) => ({ id: `m${++seq}`, role: 'dispatcher', content, kind: 'text' }))
@@ -54,6 +56,8 @@ export function makeFakeBrokerRepo({
   }
 
   const repo = {
+    async setProviderRequests() {},
+    async hasPendingReply() { return true },
     async getConversation(id, uid) {
       return id === conversation.id && uid === conversation.userId ? publicRow() : null
     },
@@ -61,7 +65,40 @@ export function makeFakeBrokerRepo({
       return id === posting.id ? { ...posting } : null
     },
     async listMessages() {
-      return messages.map((m) => ({ ...m }))
+      return messages.filter((m) => !m.deliverAt || new Date(m.deliverAt) <= new Date()).map((m) => ({ ...m }))
+    },
+    async beginChatTurn(id, uid, text) {
+      const { chatIntent } = await import('../../src/modules/brokerChat/negotiation.js')
+      const { AppError } = await import('../../src/lib/errors.js')
+      if (id !== conversation.id || uid !== conversation.userId) throw new AppError('CONVERSATION_NOT_FOUND')
+      if (posting.status !== 'open') throw new AppError('POSTING_TAKEN')
+      if (new Date(posting.expiresAt) <= new Date()) throw new AppError('POSTING_EXPIRED')
+      conversation.negotiationRevision += 1
+      const before = publicRow()
+      const intent = chatIntent(text)
+      if (['hold', 'walk', 'push'].includes(intent.kind) || (['offer', 'accept_amount'].includes(intent.kind) && conversation.agreedRateUsd !== null && intent.rateUsd !== conversation.agreedRateUsd)) {
+        await repo.clearRateCon()
+        conversation.agreedRateUsd = null
+        conversation.recipientEmail = null
+        conversation.status = 'open'
+        conversation.negotiationStage = intent.kind === 'hold' ? 'held' : 'negotiating'
+      }
+      const dispatcherMessage = await repo.addMessage(id, 'dispatcher', text)
+      return { conversation: before, dispatcherMessage }
+    },
+    async completeChatTurn({ revision, decision, reply, delaySec, paperDelaySec, paperRate }) {
+      if (conversation.negotiationRevision !== revision) return false
+      const s = decision.state
+      if (decision.invalidatePaper) await repo.clearRateCon()
+      Object.assign(conversation, { brokerOfferUsd: s.offer, agreedRateUsd: s.agreed,
+        status: s.agreed === null ? 'open' : 'agreed', negotiationStage: s.stage,
+        recipientEmail: s.recipient, ratePushCount: s.pushes, bestCounterUsed: s.bestCounterUsed })
+      await repo.addMessage(conversation.id, 'broker', reply, { delaySec })
+      if (decision.issuePaper && !messages.some((m) => m.kind === 'rate_con')) {
+        conversation.rateConRateUsd = paperRate
+        await repo.addMessage(conversation.id, 'broker', 'Rate confirmation attached.', { kind: 'rate_con', delaySec: delaySec + paperDelaySec })
+      }
+      return true
     },
     async setAgreedRate(id, uid, rateUsd) {
       if (id !== conversation.id || uid !== conversation.userId) return null
@@ -81,13 +118,13 @@ export function makeFakeBrokerRepo({
       conversation.rateConRateUsd = rate
       return publicRow()
     },
-    async addMessage(id, role, content, { kind = 'text' } = {}) {
-      const row = { id: `m${++seq}`, role, content, kind }
+    async addMessage(id, role, content, { kind = 'text', delaySec = 0 } = {}) {
+      const row = { id: `m${++seq}`, role, content, kind, deliverAt: new Date(Date.now() + delaySec * 1000).toISOString() }
       messages.push(row)
       return { ...row }
     },
     async rateConDelivered() {
-      return messages.some((m) => m.kind === 'rate_con')
+      return messages.some((m) => m.kind === 'rate_con' && (!m.deliverAt || new Date(m.deliverAt) <= new Date()))
     },
     async markBooked(id, uid) {
       if (id !== conversation.id || uid !== conversation.userId) return null
@@ -100,6 +137,7 @@ export function makeFakeBrokerRepo({
       return {
         id: conversation.id, agreedRateUsd: conversation.agreedRateUsd,
         rateConRateUsd: conversation.rateConRateUsd, status: conversation.status,
+        recipientEmail: conversation.recipientEmail,
         updatedAt: conversation.updatedAt,
         postingId: posting.id,
         originCity: posting.originCity, originState: posting.originState,
@@ -120,6 +158,7 @@ export function makeFakeBrokerRepo({
     repo,
     // Test-only handles on the stored state.
     state: { conversation, messages },
+    deliverAll() { for (const message of messages) message.deliverAt = new Date(0).toISOString() },
     // Put the thread where a booking left it, without going through the gate
     // (for testing the second gate at accept time).
     forceAgreed(rateUsd) {

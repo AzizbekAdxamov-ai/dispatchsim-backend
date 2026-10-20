@@ -1,4 +1,4 @@
-// Paper is issued by Agree, never by a model's sentence. Only delivered
+// Paper is issued by the persisted chat handshake, never by a model's sentence. Only delivered
 // cards count as attachments; no part of this flow sends external email.
 import { asciiPunct } from '../../lib/plainText.js'
 
@@ -9,9 +9,11 @@ export function paperLines(paper) {
   return [
     'ACTUAL RATE CONFIRMATION STATUS (authoritative; chat claims do not change it):',
     `  ${state}`,
-    '  Documents are delivered here, never to external email. Do not ask for an email to send paper.',
+    '  After the agreed rate is confirmed, ask for the recipient email. The dispatcher must share it or explicitly authorize their saved email.',
+    '  The email is a contact on the paper. Documents appear here; no external email is sent. Never claim delivery to Gmail or an inbox.',
     '  Never say you sent, attached or issued paper unless this block says it is available.',
-    '  If they are ready and no rate is recorded, ask them to enter the agreed amount in Agreed rate ($) and press Agree; the paper follows here.',
+    '  If no rate is recorded, settle the rate through this conversation. Never mention a form or an Agree button.',
+    '  If stage is awaiting_email, ask for their email; if held, wait for their confirmation without chasing contact details.',
     '  Signing and accepting the document is a separate step. A chat message cannot book the load.',
     '',
   ]
@@ -19,8 +21,10 @@ export function paperLines(paper) {
 
 export function paperNextLine(paper) {
   if (paper?.delivered) return 'The rate confirmation is here in this thread. Open it and check the details before signing.'
+  if (paper?.stage === 'awaiting_email') return 'The rate is agreed. What email should I put on the rate confirmation?'
+  if (paper?.stage === 'held') return 'Understood. I will wait for your confirmation before preparing the rate confirmation.'
   if (paper?.status === 'agreed') return 'The agreed rate is recorded. The rate confirmation will appear here in the thread shortly.'
-  return 'Enter the amount we agreed in Agreed rate ($) and press Agree. The rate confirmation will appear here in the thread for you to review.'
+  return 'Please confirm the all-in rate before I prepare the rate confirmation.'
 }
 
 // Match assertions, not questions, negations, or a future/conditional step.

@@ -13,6 +13,8 @@ import { fileURLToPath } from 'node:url'
 
 import { DAILY_USAGE_SQL } from '../src/modules/chat/chatBudget.sql.js'
 import { seatsCounting } from '../src/modules/chat/chatBudget.service.js'
+import { sendMessage } from '../src/modules/brokerChat/brokerChat.service.js'
+import { makeFakeBrokerRepo, FAKE_IDS } from './helpers/fakeBrokerRepo.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const read = (...p) => readFileSync(join(here, '..', ...p), 'utf8')
@@ -47,9 +49,50 @@ test('a dispatcher is seated by turns, not by requests', () => {
 for (const [chat, file] of [['broker', 'brokerChat'], ['driver', 'driverChat']]) {
   test(`the ${chat} chat counts every model call and writes the cost in finally`, () => {
     const src = read('src', 'modules', file, `${file}.service.js`)
-    const calls = (src.match(/await chatText\(\{/g) ?? []).length
+    const calls = (src.match(/await (?:deps\.)?chatText\(\{/g) ?? []).length
     assert.ok(calls >= 2)
     assert.equal((src.match(/^\s+onRequest,$/gm) ?? []).length, calls)
-    assert.match(src, /\} finally \{[\s\S]*?await repo\.setProviderRequests\(dispatcherMessage\.id, spent\)/)
+    assert.match(src, /\} finally \{[\s\S]*?await (?:deps\.)?repo\.setProviderRequests\(dispatcherMessage\.id, spent\)/)
   })
 }
+
+test('live broker retry, fallback and failed calls preserve request cost and turn log in finally', async () => {
+  for (const fail of [false, true]) {
+    const fake = makeFakeBrokerRepo({ lines: ['MC-741309'] })
+    const costs = []
+    const logs = []
+    const calls = []
+    fake.repo.setProviderRequests = async (id, spent) => costs.push({ id, spent })
+    const deps = {
+      repo: fake.repo, getCarrier: async () => ({ name: 'Carrier', mcNumber: 'MC-741309' }),
+      findById: async () => ({ email: 'user@example.com' }), assertCanSend: async () => {},
+      chatConfigFor: () => ({ model: 'primary' }), logTurn: async (row) => logs.push(row),
+      chatText: async (args) => {
+        calls.push(args)
+        args.onRequest()
+        args.onAttempt({ n: 1, model: 'primary', cause: args.cause ?? 'first', outcome: 'rate_limited', status: 429 })
+        args.onRequest()
+        args.onAttempt({ n: 2, model: 'backup', cause: 'fallback', outcome: fail ? 'http_error' : 'ok', status: fail ? 503 : 200 })
+        args.onModel('backup')
+        if (fail) throw new Error('provider failed after two requests')
+        return 'x'.repeat(2000) // First and retry are unusable; the saved reply must be safe.
+      },
+    }
+    const run = () => sendMessage({ conversationId: FAKE_IDS.conversation, userId: FAKE_IDS.user, text: 'Is it available?' }, { deps })
+    if (fail) await assert.rejects(run, { code: 'CHAT_UNAVAILABLE' })
+    else await run()
+    assert.equal(calls.length, fail ? 1 : 2)
+    if (!fail) assert.equal(calls[1].cause, 'regenerate')
+    assert.equal(costs.length, 1)
+    assert.equal(costs[0].spent, fail ? 2 : 4)
+    assert.equal(logs.length, 1)
+    assert.equal(logs[0][4], 'backup')
+    assert.equal(logs[0][14], fail ? 2 : 4)
+    assert.deepEqual(JSON.parse(logs[0][16]).map((a) => a.n), fail ? [1, 2] : [1, 2, 3, 4])
+    if (fail) assert.equal(logs[0][13], 'provider failed after two requests')
+    else {
+      assert.equal(logs[0][12], true)
+      assert.ok(fake.state.messages.filter((m) => m.role === 'broker').every((m) => m.content.length < 2000))
+    }
+  }
+})

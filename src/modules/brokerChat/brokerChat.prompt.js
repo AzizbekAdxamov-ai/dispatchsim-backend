@@ -10,7 +10,9 @@
 
 import { BANNED } from '../../../scripts/seed/validate.js'
 import { clockDateTime, clockDateTimeDay } from '../../constants/appClock.js'
-import { hash01 } from '../../lib/stableHash.js'
+import { ceilingFor } from './ratePolicy.js'
+import { negotiationLines } from './negotiation.js'
+export { ceilingFor, MIN_ROOM, MAX_ROOM } from './ratePolicy.js'
 import { leaksReasoning as sharedLeaksReasoning } from '../../lib/reasoningLeak.js'
 import { brokerTerms, termsLines } from '../../constants/accessorials.js'
 import { loadingMode, tarpFor, securementFor, isOpenDeck } from '../../constants/freightHandling.js'
@@ -40,16 +42,6 @@ const BANNED_WORDS = BANNED.source
 // conversation -- a broker who quietly changes their limit between two
 // messages reads as a machine -- but different from load to load, so the
 // student cannot learn one magic percentage and stop thinking.
-export const MIN_ROOM = 0.08
-export const MAX_ROOM = 0.22
-
-
-export function ceilingFor(posting) {
-  const room = MIN_ROOM + hash01(posting.id) * (MAX_ROOM - MIN_ROOM)
-  // Rounded to $25 so the number reads like something a person would say.
-  return Math.round((posting.rateUsd * (1 + room)) / 25) * 25
-}
-
 // How long, said the way a person says it: "40 minutes", "5 hours",
 // "3 days". Rounded down, because "it has been up 3 hours" when it has
 // been up 3h50m is how people talk and "4 hours" would be a small lie.
@@ -395,7 +387,7 @@ export function rateReasonLines(posting, { truck = null, now = new Date() } = {}
   ]
 }
 
-export function buildBrokerSystemPrompt({ broker, posting, carrier = null, now = new Date(), talk = null, said = null, booking = null, brokerSaid = [], paper = null }) {
+export function buildBrokerSystemPrompt({ broker, posting, carrier = null, now = new Date(), talk = null, said = null, booking = null, brokerSaid = [], paper = null, negotiation = null }) {
   const rpm = (posting.rateUsd / posting.distanceMi).toFixed(2)
   const ceiling = ceilingFor(posting)
   const ceilingRpm = (ceiling / posting.distanceMi).toFixed(2)
@@ -435,7 +427,7 @@ export function buildBrokerSystemPrompt({ broker, posting, carrier = null, now =
     // its own pickup.
     `  Pickup: ${clockDateTimeDay(posting.pickupAt, now.toISOString()) ?? 'not set'}`,
     `  Delivery: ${clockDateTimeDay(posting.deliveryAt, now.toISOString()) ?? 'not set'}`,
-    '  (Central time. Say the day the way it is written in brackets.)',
+    '  (Central Time. Say Central Time, never a guessed CST or CDT abbreviation. Say the day as written.)',
     // Asked "appt or FCFS?", a broker told the scenario run (2026-10-06)
     // to "check the shipper directly" -- a broker who does not know their
     // own load's appointment. The board prints exact times, so they are
@@ -462,6 +454,7 @@ export function buildBrokerSystemPrompt({ broker, posting, carrier = null, now =
     }),
     ...talkBlock(talk),
     ...paperLines(paper),
+    ...negotiationLines(negotiation),
     'HOW YOU TALK:',
     '- One to three sentences. Never a list, never a wall of text. This is a',
     '  phone-style back-and-forth, not an email.',
@@ -475,6 +468,8 @@ export function buildBrokerSystemPrompt({ broker, posting, carrier = null, now =
     // read like a form because it was one (Azizbek, 2026-09-30: "every
     // new broker chat gives the same answer"). The topics are still here;
     // the order and the choosing are the broker's now.
+    '- Answer every direct question in their latest message before asking a new one. Respect a hold or request to wait; do not ask for email during that hold.',
+    '- Be natural and courteous in your own character. Brief does not mean clipped or aggressive.',
     '- React to what they just said before anything else. Do not volunteer',
     '  everything you know.',
     '- Then, if you need something, ask ONE thing: whatever matters most for',
@@ -617,8 +612,7 @@ export function buildBrokerSystemPrompt({ broker, posting, carrier = null, now =
     '',
     `NEVER use these words: ${BANNED_WORDS}.`,
     '',
-    'If the carrier proposes a number you accept, say so clearly in your own',
-    'words — they will record the agreed rate on their side.',
+    'Follow AUTHORITATIVE RATE DECISION when present. Only a confirmed chat handshake records an agreed rate. Never direct them to an Agree form.',
   ].join('\n')
 }
 
