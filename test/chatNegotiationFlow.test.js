@@ -6,6 +6,42 @@ import { makeFakeBrokerRepo, fakePosting, FAKE_IDS } from './helpers/fakeBrokerR
 
 const carrier = { name: 'Keystone Line Haul', mcNumber: 'MC-741309', email: null }
 const ids = { conversationId: FAKE_IDS.conversation, userId: FAKE_IDS.user }
+
+test('live Toledo transcript counters without identity spam, agreement or documents', async () => {
+  const load = fakePosting({ id: '4cbdd03f-96f8-4e20-b2f4-14557092473a', originCity: 'Toledo', originState: 'OH',
+    destinationCity: 'Yakima', destinationState: 'WA', rateUsd: 8153, distanceMi: 2180, weightLbs: 26200,
+    name: 'Blue Meridian Logistics Group', contactName: 'Priyanka Raman', persona: 'Formal, precise, courteous.' })
+  const fake = makeFakeBrokerRepo({ posting: load })
+  const prompts = []
+  const deps = { repo: fake.repo, getCarrier: async () => carrier,
+    findById: async () => ({ email: 'login@example.com' }), assertCanSend: async () => {},
+    chatConfigFor: () => ({ model: 'fake' }), logTurn: async () => {},
+    chatText: async ({ messages }) => { prompts.push(messages[0].content); return 'Please provide your company name and MC number so we can continue.' },
+  }
+  const transcript = ['wassap brother', 'look bro Toledo, OH → Yakima, WA load stil avaivable?',
+    'okay how much u asking', 'brother can you 9000$', '8100 to low brother can u add litle bit or what is your best']
+  const replies = []
+  for (const text of transcript) {
+    await sendMessage({ ...ids, text }, { deps })
+    fake.deliverAll()
+    replies.push(fake.state.messages.filter((m) => m.role === 'broker').at(-1).content)
+    assert.equal(fake.state.conversation.agreedRateUsd, null)
+    assert.equal(fake.state.messages.filter((m) => m.kind === 'rate_con').length, 0)
+  }
+  assert.match(replies[0], /^Hey!/)
+  assert.match(replies[1], /still available/)
+  assert.match(replies[2], /8,153/)
+  assert.match(replies[3], /8,153/)
+  assert.match(replies[4], /8,353/)
+  assert.ok(replies.every((reply) => !/\bMC\b|company name/i.test(reply)))
+  assert.equal(fake.state.conversation.ratePushCount, 2)
+  assert.equal(fake.state.conversation.brokerOfferUsd, 8353)
+  assert.equal(prompts.length, 10, 'each adversarial identity demand is regenerated once before the safe answer')
+  assert.ok(prompts.every((prompt) => prompt.includes('This is not a booking turn.')))
+  assert.ok(prompts[0].includes('Return a greeting with a short greeting'))
+  assert.ok(prompts[0].includes('Formal, precise, courteous.'))
+})
+
 function setup() {
   const fake = makeFakeBrokerRepo({ posting: fakePosting({ rateUsd: 1571, distanceMi: 442, weightLbs: 42000 }),
     lines: ['This is Keystone Line Haul, MC-741309.', 'Our truck is in Dallas, 53-foot dry van.'] })

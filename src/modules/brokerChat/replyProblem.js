@@ -20,7 +20,18 @@ import {
 import { weightChangeAgreed, weightHoldLine } from './weightTalk.js'
 import { personaBreak } from '../../lib/personaBreak.js'
 import { paperClaimProblem, paperNextLine } from './paperTalk.js'
-import { negotiationReplyProblem } from './negotiation.js'
+import { negotiationReplyProblem, bookingTurn } from './negotiation.js'
+
+function discussionReply(text, posting, negotiation) {
+  if (negotiation?.line) return negotiation.line
+  if (/\b(?:hi|hey|hello|wassap|wassup|what'?s up)\b/i.test(text)) {
+    return `Hey! I've got the ${posting.originCity} to ${posting.destinationCity} load here.`
+  }
+  if (/\b(?:available|avaivable|open|still there)\b/i.test(text)) {
+    return `Yes, the ${posting.originCity} to ${posting.destinationCity} load is still available.`
+  }
+  return `I'm at $${Number(negotiation?.state.offer ?? posting.rateUsd).toLocaleString('en-US')} all-in on this one.`
+}
 
 // `posting` names the lane for the in-character line; `now` and `text` (the
 // dispatcher's line) are for checks that depend on the clock or on what was asked.
@@ -62,6 +73,17 @@ export function brokerReplyProblem(reply, {
   if (tooLongForChat(reply)) {
     return { why: `ran to ${reply.trim().length} characters when the limit is ${CHAT_REPLY_MAX_CHARS}`, hint: '', unusable: true }
   }
+  // A missing MC must not turn every greeting or counteroffer into an
+  // identity form. Persisting after regeneration gets an answer, not MC spam.
+  if (booking && posting && text !== null && !bookingTurn(text, negotiation)
+    && (mcQuestion(reply) || /(?:\b(?:what|provide|share|give|need|may I have|can I have|could I have)\b[^.!?]{0,35}\bcompany name\b)/i.test(reply))) {
+    return {
+      why: 'asked for carrier identity before rate acceptance or booking',
+      hint: ' Answer their greeting or question and discuss the current offer. Do not ask for company or MC until they accept the rate or ask to book.',
+      unusable: true,
+      safeReply: discussionReply(text, posting, negotiation),
+    }
+  }
   // The carrier's truck cannot reach the pickup in time (computed from the
   // city they named and the clock) and the reply never says so.
   if (ignoresUnreachable(reply, truck, { broker: true })) {
@@ -91,7 +113,7 @@ export function brokerReplyProblem(reply, {
     }
   }
   // A raise the posting gives no reason for: hold the posted rate.
-  if (posting && raiseWithoutReason(reply, {
+  if (!negotiation && posting && raiseWithoutReason(reply, {
     posting, truck, now, theirs: dollars((said ?? [text]).join(' ')), earlier: brokerSaid.flatMap(dollars),
   })) {
     return {

@@ -232,7 +232,7 @@ export const MC_REJECT = /(?:doesn'?t|does not|didn'?t|did not) (?:come up|match
 
 // The reply asks for the MC (it names it AND asks or requests it).
 const MC_WORD = /\bmc\b|motor carrier|docket/i
-const ASKING = /\?|\b(?:need|give me|send me|what'?s|what is|got an?)\b/i
+const ASKING = /\?|\b(?:need|give me|send me|provide|share|(?:may|can|could) I have|what'?s|what is|got an?)\b/i
 export function asksMc(reply) {
   const text = asciiPunct(reply)
   return MC_WORD.test(text) && ASKING.test(text)

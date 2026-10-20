@@ -11,7 +11,7 @@
 import { BANNED } from '../../../scripts/seed/validate.js'
 import { clockDateTime, clockDateTimeDay } from '../../constants/appClock.js'
 import { ceilingFor } from './ratePolicy.js'
-import { negotiationLines } from './negotiation.js'
+import { negotiationLines, bookingTurn } from './negotiation.js'
 export { ceilingFor, MIN_ROOM, MAX_ROOM } from './ratePolicy.js'
 import { leaksReasoning as sharedLeaksReasoning } from '../../lib/reasoningLeak.js'
 import { brokerTerms, termsLines } from '../../constants/accessorials.js'
@@ -19,7 +19,7 @@ import { loadingMode, tarpFor, securementFor, isOpenDeck } from '../../constants
 import { marketClaims, ratePushes, rateReasons, rateReasonLabels } from './rateTalk.js'
 import { truckFacts } from './truckTalk.js'
 import { paperLines } from './paperTalk.js'
-import { bookingFacts, mcQuestion, MOVES_TO_BOOK, SOON_PICKUP_HOURS } from './bookingTalk.js'
+import { bookingFacts, mcQuestion, SOON_PICKUP_HOURS } from './bookingTalk.js'
 import { DRIVING_LIMIT_HOURS, REQUIRED_REST_HOURS } from '../../constants/hosClock.js'
 import { marketFacts, seasonNote, benchmarkAgeDays, STALE_AFTER_DAYS } from '../../constants/marketRates.js'
 
@@ -216,7 +216,7 @@ export function talkBlock(talk) {
 // no rate gets no extra lines.
 const label = (key) => String(key).replace(/-/g, ' ')
 
-export function rateTalkBlock({ posting, said = null }) {
+export function rateTalkBlock({ posting, said = null, negotiation = null }) {
   if (!said || said.length === 0) return []
   const out = []
 
@@ -240,7 +240,11 @@ export function rateTalkBlock({ posting, said = null }) {
     out.push('')
   }
 
-  const pushes = ratePushes(said, posting)
+  // The persisted intent count understands informal offers too. Legacy
+  // text counting must not contradict an authoritative counter this turn.
+  const pushes = negotiation
+    ? { count: negotiation.state.pushes, current: ['offer', 'push'].includes(negotiation.intent.kind) }
+    : ratePushes(said, posting)
   if (pushes?.count === 1 && pushes.current) {
     out.push(
       `ON THE RATE SO FAR (counted from this chat): this is the first time they have asked for more than your $${posting.rateUsd}. Hold at $${posting.rateUsd} this time, whatever reason they give -- reload, deadhead, weight -- unless they are walking away; then the walk-away rule applies. No new figure. Give them your reason the number is what it is.`,
@@ -248,7 +252,7 @@ export function rateTalkBlock({ posting, said = null }) {
     )
   } else if (pushes?.count >= 2) {
     out.push(
-      `ON THE RATE SO FAR (counted from this chat): they have asked for more ${pushes.count} times. If they have given a real reason, you may come up part of the way.`,
+      `ON THE RATE SO FAR (counted from this chat): they have asked for more ${pushes.count} times. Follow AUTHORITATIVE RATE DECISION for any counter; ordinary bargaining may earn one small move even without an operational reason.`,
       '',
     )
   }
@@ -331,6 +335,7 @@ export function callerBlock(facts, carrier = null, { mcAsked = false, towardBook
   if (facts.email) told.push(`email: ${facts.email}`)
 
   const lines = ['WHO IS CALLING (worked out by code from what they typed; you cannot look anything up yourself):']
+  if (!towardBooking) lines.push('  This is not a booking turn. Do not ask for company or MC now, even if missing or wrong. Greet them or answer their availability, rate or operational question first; keep talking price.')
   lines.push(told.length ? `  They have told you: ${told.join(' · ')}.` : '  They have told you nothing about themselves yet.')
   if (facts.mc.verdict === 'match') {
     lines.push(`  MC checks out: it comes up as ${carrier?.name ?? 'their company'}.`)
@@ -348,8 +353,7 @@ export function callerBlock(facts, carrier = null, { mcAsked = false, towardBook
       lines.push('  You already asked for their MC. Answer what they asked; ask for the MC again only when they move to book.')
     }
   }
-  // A wrong or unverifiable MC blocks everything: the broker asks for the
-  // MC alone, not the driver, the truck number or the email.
+  // Identity blocks a booking, never an ordinary price discussion.
   const mcBlocked = ['mismatch', 'unverifiable'].includes(facts.mc.verdict)
   // Email can be a contact detail, but paper is delivered in this thread.
   const missing = (mcBlocked ? ['mc-ok'] : facts.missing.filter((k) => k !== 'email')).map((k) => MISSING_LABEL[k]).filter(Boolean)
@@ -377,13 +381,13 @@ const NOT_A_REASON = Object.freeze({
 export function rateReasonLines(posting, { truck = null, now = new Date() } = {}) {
   const keys = rateReasons({ posting, truck, now })
   if (keys.length === 0) {
-    return ['- This load has no reason to pay more; hold, and never give a reason it does not have.']
+    return ['- No operational reason for a raise is established. A small bargaining counter may still be authorized by AUTHORITATIVE RATE DECISION; never invent a reason for it.']
   }
   const rest = Object.keys(NOT_A_REASON).filter((k) => !keys.includes(k)).map((k) => NOT_A_REASON[k])
   return [
-    `- From their second push on, move only for a reason true of THIS load: ${rateReasonLabels(keys, { posting, truck }).join('; ')}.`,
-    `  Nothing else earns money, not "too cheap"${rest.length > 0 ? ` and not ${rest.join(', ')}` : ''}.`,
-    '  Come up part of the way, then part of the way again.',
+    `- From their second push on, these reasons can support a larger move: ${rateReasonLabels(keys, { posting, truck }).join('; ')}.`,
+    `  A small bargaining counter needs no operational excuse${rest.length > 0 ? `; never invent ${rest.join(', ')}` : ''}.`,
+    '  Follow AUTHORITATIVE RATE DECISION for the amount; never increase it yourself.',
   ]
 }
 
@@ -446,11 +450,11 @@ export function buildBrokerSystemPrompt({ broker, posting, carrier = null, now =
     '',
     ...loadSituation({ posting, now }),
     ...marketBlock(posting, now),
-    ...rateTalkBlock({ posting, said }),
+    ...rateTalkBlock({ posting, said, negotiation }),
     ...truckBlock({ posting, said, now }),
     ...callerBlock(booking ?? bookingFacts({ texts: said ?? [], carrier, posting, now }), carrier, {
       mcAsked: brokerSaid.some(mcQuestion),
-      towardBooking: MOVES_TO_BOOK.test(said?.at(-1) ?? ''),
+      towardBooking: bookingTurn(said?.at(-1) ?? '', negotiation),
     }),
     ...talkBlock(talk),
     ...paperLines(paper),
@@ -470,6 +474,9 @@ export function buildBrokerSystemPrompt({ broker, posting, carrier = null, now =
     // the order and the choosing are the broker's now.
     '- Answer every direct question in their latest message before asking a new one. Respect a hold or request to wait; do not ask for email during that hold.',
     '- Be natural and courteous in your own character. Brief does not mean clipped or aggressive.',
+    '- Return a greeting with a short greeting before business. Meet friendly, casual',
+    '  language with a little warmth even if your character is formal; keep your own',
+    '  voice. Do not copy typos, imitate an accent, force "bro" or add a joke every turn.',
     // Let the existing personas breathe without turning every broker into a comedian.
     '- Use natural American contractions. A casual character may use clear trucking',
     '  idioms or light slang; a reserved character stays reserved. Do not give everyone',
@@ -521,7 +528,7 @@ export function buildBrokerSystemPrompt({ broker, posting, carrier = null, now =
     // Replaces "NEVER ask for their MC number...": the booking call starts
     // with who they are (WHO IS CALLING above).
     '- Before you book you need their company and MC (see WHO IS CALLING).',
-    '  Ask once, early; after that only when they move to book. Never ask for a W-9, a certificate of insurance or',
+    '  Ask when they accept the rate or explicitly move to book, not during greetings, availability or bargaining. Never ask for a W-9, a certificate of insurance or',
     '  any other paperwork.',
     '- Before booking you give the city and the appointment, nothing more. The',
     '  shipper and receiver names and the street addresses are on the rate',
@@ -573,8 +580,8 @@ export function buildBrokerSystemPrompt({ broker, posting, carrier = null, now =
     // broker never does. "That's my best" stays: a broker says it, and
     // sometimes it is a bluff.
     '- Never say how much room you have left, and never use the words',
-    '  "ceiling" or "limit" about your own number. "That\'s my best" is fine',
-    '  when you mean it -- or when you want them to think so.',
+    '  "ceiling" or "limit" about your own number. Avoid repeating "best" or "final"',
+    '  as an automatic refusal. Give the current offer naturally, without claiming a hard stop when a later counter is authorized.',
     '- Do not jump to it. The first time they push -- whatever the reason, a weak',
     '  reload or deadhead included -- hold at your posted number, give no new',
     '  figure, and tell them why it is what it is.',

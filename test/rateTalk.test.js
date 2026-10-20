@@ -238,7 +238,7 @@ test('unsupportedRateReasons: tight window on a far pickup is flagged', () => {
 })
 
 // Kills: the prompt listing "a pickup within a day" on a load that is two days out
-test('rateReasonLines: only reasons true of the load, or hold', () => {
+test('rateReasonLines: only true operational reasons, with bounded bargaining allowed', () => {
   const text = (p, o = {}) => rateReasonLines(p, { now: NOW, ...o }).join(' ')
   assert.doesNotMatch(text({ ...lane, pickupAt: inHours(48) }), /a pickup within a day/)
   assert.match(text({ ...lane, pickupAt: inHours(10) }), /a pickup within a day/)
@@ -247,7 +247,7 @@ test('rateReasonLines: only reasons true of the load, or hold', () => {
   // A destination that pays at least national, a light load, a far pickup: nothing to pay more for.
   const holdState = ['FL', 'TX', 'IL', 'CA', 'NY', 'GA', 'OH', 'WA'].find((st) => rateReasons({ posting: { ...lane, destinationState: st }, now: NOW }).length === 0)
   assert.ok(holdState, 'some destination has no reason')
-  assert.match(text({ ...lane, destinationState: holdState }), /no reason to pay more; hold/)
+  assert.match(text({ ...lane, destinationState: holdState }), /small bargaining counter may still be authorized/)
   const prompt = buildBrokerSystemPrompt({ broker: { name: 'B', contactName: 'Dee', persona: 'p' }, posting: { ...lane, pickupAt: inHours(48), id: 'p9' }, now: NOW })
   assert.doesNotMatch(prompt, /a pickup within a day/)
 })

@@ -4,14 +4,14 @@ import { ceilingFor } from './ratePolicy.js'
 import { rateReasons, REASON_WORDS } from './rateTalk.js'
 
 const EMAIL = /\b[a-z0-9._%+-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}\b/gi
-const MONEY = '(?:\\$\\s*)?(\\d{1,3}(?:,\\d{3})+|\\d{3,5})(?:\\.00)?'
-const OFFER = new RegExp(`\\b(?:need|want|asking for|can (?:you|u) do|could you do|how about|what about|offer|pay|take (?:it|this|the load) for|run (?:it|this) for|do (?:it|this) for)\\s+${MONEY}(?![\\d.,])`, 'gi')
+const MONEY = '(?:\\$\\s*)?(\\d{1,3}(?:,\\d{3})+|\\d{3,5})(?:\\.00)?(?:\\s*\\$)?'
+const OFFER = new RegExp(`\\b(?:need|want|asking for|(?:can|could) (?:you|u)(?: do)?|how about|what about|offer|pay|take (?:it|this|the load) for|run (?:it|this) for|do (?:it|this) for)\\s+${MONEY}(?![\\d.,])`, 'gi')
 const ACCEPT_AT = new RegExp(`\\b(?:accept|agree (?:on|to)|take (?:it|this|the load) (?:at|for)|book (?:it|this|the load) (?:at|for)|works? (?:at|for))\\s+${MONEY}(?![\\d.,])`, 'gi')
 const AMOUNT_FIRST = new RegExp(`^\\s*${MONEY}\\s*(?:all[- ]?in\\s*)?(?:works(?: for (?:me|us))?|is (?:fine|good)|(?:is )?accepted|(?:is )?agreed)[.!]?\\s*$`, 'i')
 const ACCEPT = /^(?:(?:ok(?:ay)?|yes|great|thanks)[,!. ]+)*(?:i(?:'ll| will)|we(?:'ll| will)) take (?:it|this|the load)[.!]?\s*$|^(?:(?:ok(?:ay)?|yes)[,!. ]+)*(?:deal|agreed|book it|let's do it|(?:that|the rate|your rate|your offer) works(?: for (?:me|us))?|sounds good|i accept(?: your (?:rate|offer))?)[.!]?\s*$/i
 const HOLD = /\b(?:hold off|on hold|not ready|don't (?:book|send|issue|confirm)|do not (?:book|send|issue|confirm)|not (?:book|confirm|accept)(?:ing|ed)? yet|before (?:we|i) (?:book|confirm)|let me (?:check|confirm|verify)|wait for (?:my|our) confirmation|cancel (?:it|this|the load)|release (?:it|this|the load))\b/i
 const WALK = /\b(?:i(?:'ll| will) pass|we(?:'ll| will) pass|pass on (?:it|this)|walk away|find another (?:truck|carrier))\b/i
-const MORE = /\b(?:do better|need more|pay more|too low|too cheap|more money|bump (?:it|the rate))\b/i
+const MORE = /\b(?:do better|need more|pay more|to{1,2} low|too cheap|more money|bump (?:it|the rate)|add (?:a )?(?:little|litle)(?: bit)?|what(?:'s| is) your best)\b/i
 const QUOTED = /["“][^"”]*["”]|'[^'\n]{2,}'/g
 const HYPOTHETICAL = /\b(?:if|unless|hypothetically|example|suppose|said|quoted|asks?|asking whether|what if|would you accept)\b/i
 const NEGATIVE = /\b(?:not|never|can't|cannot|won't|don't|do not|isn't|is not|haven't)\b/i
@@ -88,6 +88,17 @@ export function chatIntent(raw) {
 }
 
 const money = (n) => `$${Number(n).toLocaleString('en-US')}`
+// Sharing a truck/driver or asking a price is not a request to book.
+// Use the same intent at the prompt and reply boundary so MC cannot gate haggling.
+export function bookingTurn(text, decision = null) {
+  const intent = decision?.intent ?? chatIntent(text)
+  if (intent.kind === 'accept') return true
+  if (['offer', 'accept_amount'].includes(intent.kind)) return decision ? decision.bookingRequested === true : intent.kind === 'accept_amount'
+  if (intent.kind === 'email') return decision?.state.agreed !== null && decision?.state.agreed !== undefined
+  if (intent.kind !== 'talk' || NEGATIVE.test(text) || HYPOTHETICAL.test(text)) return false
+  return /\b(?:can (?:we|i) book|ready to book)\b/i.test(text)
+}
+
 export function negotiationState(conversation, posting) {
   return {
     stage: conversation.negotiationStage ?? (conversation.status === 'booked' ? 'booked' : conversation.status === 'agreed' ? 'paper_pending' : 'negotiating'),
@@ -107,16 +118,18 @@ export function negotiate({ conversation, posting, text, booking, truck, effecti
   let issuePaper = false
   let invalidatePaper = false
   let line = null
+  let bookingRequested = false
   const verified = booking?.mc?.verdict === 'match'
   const clear = () => { state.agreed = null; state.recipient = null; state.stage = 'negotiating'; invalidatePaper = true; changed = true }
   const agree = (amount) => {
+    bookingRequested = true
     if (!verified) { line = 'I still need your correct MC number before we can confirm the rate.'; return }
     if (truck?.makesIt === false || booking?.trailer?.fits === false) { line = 'We need a truck that can meet the pickup and equipment requirements before confirming.'; return }
     if (state.agreed !== amount || state.stage === 'held') clear()
     state.offer = amount; state.agreed = amount; state.stage = 'awaiting_email'; changed = true
     line = `${money(amount)} all-in agreed. What email should I put on the rate confirmation?`
   }
-  if (state.stage === 'booked' || conversation.status === 'booked') return { state, intent, changed, issuePaper, invalidatePaper, line: null }
+  if (state.stage === 'booked' || conversation.status === 'booked') return { state, intent, changed, issuePaper, invalidatePaper, bookingRequested, line: null }
   if (intent.kind === 'hold') {
     clear(); state.stage = 'held'; line = 'Understood. I will hold off on the rate confirmation until you confirm.'
   } else if (['offer', 'accept_amount', 'push'].includes(intent.kind)) {
@@ -127,6 +140,9 @@ export function negotiate({ conversation, posting, text, booking, truck, effecti
     if (amount < min || amount > max) {
       line = `I cannot do that figure. My offer is ${money(state.offer)} all-in.`
     } else if (amount <= state.offer && intent.kind !== 'push') {
+      // Record the validated settlement attempt even when MC verification
+      // prevents agreement. Prompt and guard must allow that required question.
+      bookingRequested = true
       if (state.agreed === amount && ['paper_pending', 'paper_delivered'].includes(state.stage)) line = 'The rate confirmation is already in this thread or on its way.'
       else agree(amount)
     } else {
@@ -136,6 +152,12 @@ export function negotiate({ conversation, posting, text, booking, truck, effecti
         const ceiling = ceilingFor(posting)
         const step = Math.max(25, Math.round((Math.min(amount, ceiling) - state.offer) / 2 / 25) * 25)
         state.offer = Math.min(ceiling, state.offer + step)
+      } else if (state.pushes > 1) {
+        // Ordinary bargaining can earn one small counter, not an endless
+        // ladder. Anchor it to the posting so retries never compound it.
+        const allowance = Math.max(25, Math.round(posting.rateUsd * 0.025 / 25) * 25)
+        const counter = Math.min(ceilingFor(posting), posting.rateUsd + allowance, amount)
+        state.offer = Math.max(state.offer, counter)
       }
       line = `I can offer ${money(state.offer)} all-in. Does that work for you?`
     }
@@ -164,7 +186,7 @@ export function negotiate({ conversation, posting, text, booking, truck, effecti
   } else if (intent.kind === 'email' && state.agreed === null) {
     line = `Before I prepare the rate confirmation, can you confirm ${money(state.offer)} all-in?`
   }
-  return { state, intent, changed, issuePaper, invalidatePaper, line }
+  return { state, intent, changed, issuePaper, invalidatePaper, bookingRequested, line }
 }
 
 export function negotiationLines(decision) {

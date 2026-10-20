@@ -406,6 +406,10 @@ test('mcQuestion: the MC has to be asked about in one sentence', () => {
   assert.equal(mcQuestion("Your MC checks out. Where's the truck?"), false)
   assert.equal(mcQuestion("Where's the truck? What's your MC?"), true)
   assert.equal(mcQuestion('Send me your MC number.'), true)
+  assert.equal(mcQuestion('Please provide your MC.'), true)
+  assert.equal(mcQuestion('Could you share your MC number, please?'), true)
+  assert.equal(mcQuestion('Please share your MC number.'), true)
+  assert.equal(mcQuestion('I have your MC number.'), false)
   assert.equal(mcQuestion('$2,400 all-in is the rate.'), false)
 })
 
@@ -449,7 +453,7 @@ test('buildBrokerSystemPrompt: the MC-asked note follows brokerSaid and the last
   assert.match(build(['is it open?'], ["What's your MC?"]), NOTE)
   assert.doesNotMatch(build(['is it open?'], ['Yes it is.']), NOTE)
   assert.doesNotMatch(build(['ok book it'], ["What's your MC?"]), NOTE)
-  assert.match(build(['hi'], []), /Ask once, early; after that only when they move to book\./)
+  assert.match(build(['hi'], []), /Ask when they accept the rate or explicitly move to book, not during greetings, availability or bargaining\./)
 })
 
 // Kills: the two content checks missing, firing on the wrong verdict, or marked

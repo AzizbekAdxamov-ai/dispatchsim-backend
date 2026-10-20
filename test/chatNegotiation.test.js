@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { chatIntent, negotiate, negotiationReplyProblem } from '../src/modules/brokerChat/negotiation.js'
+import { chatIntent, negotiate, negotiationReplyProblem, bookingTurn } from '../src/modules/brokerChat/negotiation.js'
 import { ceilingFor } from '../src/modules/brokerChat/ratePolicy.js'
 import { bookingFacts } from '../src/modules/brokerChat/bookingTalk.js'
 import { carrierEmail } from '../src/modules/carrier/carrier.repository.js'
@@ -26,6 +26,93 @@ test('only explicit monetary intention becomes an offer or acceptance', () => {
     assert.ok(!['offer', 'accept_amount', 'accept'].includes(chatIntent(text).kind), text)
   }
   assert.equal(chatIntent('Can you do $1700 or $1800?').kind, 'ambiguous')
+})
+
+test('informal suffix-dollar offers and low-rate objections retain their intent safely', () => {
+  for (const text of ['brother can you 9000$', 'can u 9000', 'could you do $9,000']) {
+    assert.deepEqual(chatIntent(text), { kind: 'offer', rateUsd: 9000, emails: [], useOwnEmail: false }, text)
+  }
+  for (const text of ['8100 to low brother can u add litle bit or what is your best', 'can u add a little bit?', 'what is your best?']) {
+    assert.equal(chatIntent(text).kind, 'push', text)
+  }
+  for (const text of ['If you can you 9000$, I might take it.', 'I cannot do 9000$', 'He said "can you 9000$".', 'Can u 9000 miles?', 'Can you 9000$ per hour?']) {
+    assert.ok(!['offer', 'accept_amount', 'accept'].includes(chatIntent(text).kind), text)
+  }
+})
+
+test('ordinary haggling earns one bounded counter without MC and cannot ratchet or issue paper', () => {
+  const load = { ...posting, id: '4cbdd03f-96f8-4e20-b2f4-14557092473a', rateUsd: 8153, distanceMi: 2180, weightLbs: 26200 }
+  const unverified = { mc: { verdict: null } }
+  let conversation = { ...initial, brokerOfferUsd: load.rateUsd }
+  const ask = (text, extra = {}) => negotiate({ conversation, posting: load, text, booking: unverified, offerVisible: true, ...extra })
+  let decision = ask('brother can you 9000$')
+  assert.equal(decision.state.offer, 8153)
+  conversation = saved(decision)
+  decision = ask('8100 to low brother can u add litle bit or what is your best')
+  assert.equal(decision.state.offer, 8353)
+  assert.equal(brokerReplyProblem(decision.line, { posting: load, booking: unverified, text: 'what is your best?', negotiation: decision }), null)
+  for (let n = 0; n < 5; n += 1) {
+    conversation = saved(decision)
+    decision = ask('Can you add a little bit?')
+    assert.equal(decision.state.offer, 8353)
+    assert.equal(decision.state.agreed, null)
+    assert.equal(decision.issuePaper, false)
+    assert.ok(decision.state.offer <= ceilingFor(load))
+  }
+  const accept = ask('Deal.')
+  assert.equal(accept.state.agreed, null)
+  assert.match(accept.line, /correct MC/)
+  assert.equal(bookingTurn('Deal.', accept), true)
+  for (const text of ['My driver is Ethan Brooks', 'Truck number IL-2048-EB', 'ops@example.com', 'Need $9000']) {
+    assert.equal(bookingTurn(text, ask(text)), false, text)
+  }
+  const wrong = ask('Can you add a little bit?', { booking: { mc: { verdict: 'mismatch' } } })
+  assert.equal(wrong.state.offer, 8353)
+  assert.equal(wrong.state.agreed, null)
+})
+
+test('MC questions wait for acceptance while authorized prices and reason guards stay authoritative', () => {
+  const missing = { mc: { verdict: null } }
+  const hello = step('wassap brother', initial, { booking: missing })
+  const premature = brokerReplyProblem('May I have your MC number?', { posting, booking: missing, text: 'wassap brother', negotiation: hello })
+  assert.equal(premature.unusable, true)
+  assert.match(premature.safeReply, /^Hey!/)
+  for (const text of ['What is the rate?', 'My driver is Ethan Brooks', 'Can you do $1800?']) {
+    const decision = step(text, initial, { booking: missing })
+    assert.equal(brokerReplyProblem('Please provide your MC.', { posting, booking: missing, text, negotiation: decision }).unusable, true)
+  }
+  const accepted = step('Deal.', initial, { booking: missing })
+  assert.equal(brokerReplyProblem(accepted.line, { posting, booking: missing, text: 'Deal.', negotiation: accepted }), null)
+  const wrong = { mc: { verdict: 'mismatch' } }
+  const price = step('Can you do $1800?', initial, { booking: wrong })
+  assert.equal(brokerReplyProblem('Please give me the correct MC.', { posting, booking: wrong, text: 'Can you do $1800?', negotiation: price }).unusable, true)
+  assert.equal(step('Deal.', initial, { booking: wrong }).issuePaper, false)
+})
+
+test('validated lower offers allow required MC while objections and invalid figures do not', () => {
+  const load = { ...posting, rateUsd: 8153, distanceMi: 2180 }
+  for (const verdict of [null, 'match']) {
+    const identity = { mc: { verdict }, trailer: { fits: true } }
+    const ask = (text) => negotiate({ conversation: { ...initial, brokerOfferUsd: 8153 }, posting: load,
+      text, booking: identity, offerVisible: true })
+    for (const text of ['Can you do 8100?', 'I need 8100', 'brother can you 8100$']) {
+      const decision = ask(text)
+      assert.equal(decision.intent.kind, 'offer')
+      assert.equal(bookingTurn(text, decision), true, text)
+      assert.equal(brokerReplyProblem(decision.line, { posting: load, booking: identity, text, negotiation: decision }), null)
+      assert.equal(decision.state.agreed, verdict === 'match' ? 8100 : null)
+      assert.equal(decision.issuePaper, false)
+      if (verdict !== 'match') assert.match(decision.line, /correct MC/)
+    }
+    for (const text of ['Can you do 100?', 'I accept 100.', 'I accept 20000.', 'Can you do 20000?',
+      '8100 to low brother can u add litle bit or what is your best']) {
+      const decision = ask(text)
+      assert.equal(bookingTurn(text, decision), false, text)
+      assert.equal(decision.state.agreed, null, text)
+      assert.equal(decision.issuePaper, false, text)
+      assert.equal(brokerReplyProblem('Please provide your MC.', { posting: load, booking: identity, text, negotiation: decision }).unusable, true)
+    }
+  }
 })
 
 test('valid current offer acceptance needs no forced bargaining; email alone cannot agree', () => {
@@ -83,7 +170,7 @@ test('first push holds, grounded later push moves partway, huge requests never b
   assert.ok(second.state.offer <= ceilingFor(posting))
   assert.ok(second.state.offer < 1800)
   assert.equal(step('I accept $45678.').state.agreed, null)
-  assert.equal(step('Need $1800.', saved(first)).state.offer, 1571)
+  assert.ok(step('Need $1800.', saved(first)).state.offer > 1571)
   const walk = step("I'll pass.")
   const again = step("I'll pass.", saved(walk))
   assert.equal(walk.state.bestCounterUsed, true)
