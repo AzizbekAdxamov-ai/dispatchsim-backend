@@ -108,3 +108,59 @@ test('same-pickup follow-up keeps delivery facts, while a new same-city load cle
   assert.equal(changedRoute.loadedMiles, null)
   assert.equal(changedRoute.deliveryAt, null)
 })
+
+
+test('a pickup in the current city replaces the previous offer and clears its loaded mileage', () => {
+  const message = 'Different load: pickup in Chicago, IL Wednesday 10 am, delivery Indianapolis, IN Thursday 8 am.'
+  const offer = offerFacts({ driver, now, texts: [text, message] })
+  assert.equal(offer.city, 'Chicago')
+  assert.equal(offer.miles, 0)
+  assert.equal(offer.destinationCity, 'Indianapolis')
+  assert.equal(offer.pickupAt.toISOString(), '2026-10-21T15:00:00.000Z')
+  assert.equal(offer.deliveryAt.toISOString(), '2026-10-22T13:00:00.000Z')
+  assert.equal(offer.loadedMiles, null)
+  assert.equal(offerFacts({ driver, now, texts: ["I'm in Chicago, IL."] }), null)
+  const noTimes = offerFacts({ driver, now, texts: [text, 'Different load: pickup in Chicago, IL.'] })
+  assert.equal(noTimes.pickupAt, null)
+  assert.equal(noTimes.loadedMiles, undefined)
+})
+
+test('a city-less delivery correction updates this route and recalculates the impossible window', () => {
+  const correction = 'Delivery Wednesday 7 am Central. Can you make it?'
+  const offer = offerFacts({ driver, now, texts: [text, correction] })
+  assert.equal(offer.city, 'Rockford')
+  assert.equal(offer.destinationCity, 'Columbus')
+  assert.equal(offer.loadedMiles, 442)
+  assert.equal(offer.pickupAt.toISOString(), '2026-10-21T11:14:00.000Z')
+  assert.equal(offer.deliveryAt.toISOString(), '2026-10-21T12:00:00.000Z')
+  assert.equal(offer.deliveryImpossible, true)
+  assert.equal(driverReplyProblem('I can make delivery.', { offer, text: correction })?.unusable, true)
+})
+
+test('each delivery promise needs its own condition, regardless of sentence order', () => {
+  const offer = facts()
+  for (const reply of ['I will make delivery on time. Delivery depends on loading and rest.',
+    'Delivery depends on loading and rest. I will make delivery on time.']) {
+    assert.equal(driverReplyProblem(reply, { offer, text })?.unusable, true, reply)
+  }
+  assert.equal(driverReplyProblem('I will make delivery if loading and rest timing allow it.', { offer, text }), null)
+})
+
+
+test('explicit current-city pickup works in the route-pair parser too', () => {
+  for (const message of [
+    'Different load: pickup Chicago, IL to Indianapolis, IN Wednesday 10 am, delivery Thursday 8 am.',
+    'Different load: Chicago, IL to Indianapolis, IN Wednesday 10 am, delivery Thursday 8 am.',
+    'I have a load from Chicago, IL to Indianapolis, IN Wednesday 10 am, delivery Thursday 8 am.',
+    'Different load: pickup in Chicago, IL to Indianapolis, IN Wednesday 10 am, delivery Thursday 8 am.',
+  ]) {
+    const offer = offerFacts({ driver, now, texts: [text, message] })
+    assert.equal(offer.city, 'Chicago', message)
+    assert.equal(offer.miles, 0, message)
+    assert.equal(offer.destinationCity, 'Indianapolis', message)
+    assert.equal(offer.pickupAt.toISOString(), '2026-10-21T15:00:00.000Z', message)
+    assert.equal(offer.deliveryAt.toISOString(), '2026-10-22T13:00:00.000Z', message)
+    assert.equal(offer.loadedMiles, null, message)
+  }
+  assert.equal(offerFacts({ driver, now, texts: ['Chicago, IL is where I am parked.'] }), null)
+})

@@ -102,3 +102,26 @@ test('mixed acceptance plus denied or conditional recipient keeps the real flow 
     assert.equal(t.fake.state.messages.filter((m) => m.kind === 'rate_con').length, 0)
   }
 })
+
+
+test('pending driver confirmation never queues a document in the send service', async () => {
+  for (const condition of ['after I confirm', 'when driver confirms', 'once driver confirms']) {
+    const t = setup()
+    await t.send(`I accept $1571. Send it to ops@example.com ${condition}.`)
+    assert.equal(t.fake.state.conversation.agreedRateUsd, 1571)
+    assert.equal(t.fake.state.conversation.negotiationStage, 'awaiting_email')
+    assert.equal(t.fake.state.conversation.recipientEmail, null)
+    assert.equal(t.fake.state.messages.filter((m) => m.kind === 'rate_con').length, 0)
+  }
+})
+
+
+test('coordinated pending approvals remain attached to the recipient instruction', async () => {
+  const t = setup()
+  await t.send('I accept $1571.')
+  await t.send('After I confirm the driver and approve the truck, send it to ops@example.com.')
+  assert.equal(t.fake.state.conversation.agreedRateUsd, 1571)
+  assert.equal(t.fake.state.conversation.negotiationStage, 'awaiting_email')
+  assert.equal(t.fake.state.conversation.recipientEmail, null)
+  assert.equal(t.fake.state.messages.filter((m) => m.kind === 'rate_con').length, 0)
+})

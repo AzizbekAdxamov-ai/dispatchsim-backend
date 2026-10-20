@@ -65,16 +65,18 @@ function ignoresWorkStance(reply, text, standing) {
 function deliveryCommitment(reply, text, offer) {
   if (!offer || offer.deliveryVerified !== false) return false
   const deliveryAsk = /\b(?:delivery|deliver|receiver|both\s+appointments|both\s+times)\b/i.test(text ?? '')
-  const promise = /\b(?:I|we)(?:\s+(?:can(?!['\u2019]t)|will|could|should)|['\u2019]ll)\s+(?!not\b)(?:\w+\s+){0,3}(?:deliver\b|(?:make|hit|meet|reach|arrive|get|be)\b[^.!?]{0,100}\b(?:delivery|receiver|both\b|make\s+them))|\b(?:delivery|receiver)(?:\s+is)?\s+(?:no\s+problem|guaranteed|confirmed)(?!\s+(?:for|at)\b)\b|\bboth(?:\s+appointments)?\s+(?:work|are\s+(?:fine|doable))\b/i.test(reply)
+  const promises = (clause) => /\b(?:I|we)(?:\s+(?:can(?!['\u2019]t)|will|could|should)|['\u2019]ll)\s+(?!not\b)(?:\w+\s+){0,3}(?:deliver\b|(?:make|hit|meet|reach|arrive|get|be)\b[^.!?]{0,100}\b(?:delivery|receiver|both\b|make\s+them))|\b(?:delivery|receiver)(?:\s+is)?\s+(?:no\s+problem|guaranteed|confirmed)(?!\s+(?:for|at)\b)\b|\bboth(?:\s+appointments)?\s+(?:work|are\s+(?:fine|doable))\b/i.test(clause)
     || (deliveryAsk && /^\s*(?:yes|yeah|yep|sure|absolutely|no problem)[.!\s]*$/i.test(reply))
-    || (deliveryAsk && /\b(?:I|we)\s+can\s+(?:do\s+that|make\s+it)\b/i.test(reply))
-    || (deliveryAsk && /\b(?:I|we)(?:\s+(?:can(?!['\u2019]t)|will|could|should)|['\u2019]ll)\s+(?:be|get|arrive)\s+there\b/i.test(reply))
-  // The condition must qualify delivery itself. "If anything changes" in
-  // an unrelated second sentence cannot undo a firm first-sentence promise.
-  const qualified = reply.split(/[.!?;]/).some((clause) => /\b(?:delivery|deliver|receiver|both)\b/i.test(clause)
-    && /\b(?:loading|duty|rest)\b/i.test(clause)
-    && /\b(?:if|provided|assuming|depends|depending|subject\s+to|conditional|until|unknown|unverified|can't\s+confirm|cannot\s+confirm|not\s+(?:yet\s+)?confirmed|not\s+sure|need\s+to\s+(?:verify|confirm))\b/i.test(clause))
-  return promise && (offer.deliveryImpossible || !qualified)
+    || (deliveryAsk && /\b(?:I|we)\s+can\s+(?:do\s+that|make\s+it)\b/i.test(clause))
+    || (deliveryAsk && /\b(?:I|we)(?:\s+(?:can(?!['\u2019]t)|will|could|should)|['\u2019]ll)\s+(?:be|get|arrive)\s+there\b/i.test(clause))
+  // Each commitment needs its own qualification; a separate cautious
+  // sentence must not excuse an unconditional delivery promise.
+  return reply.split(/[.!?;]/).some((clause) => {
+    const qualified = /\b(?:delivery|deliver|receiver|both)\b/i.test(clause)
+      && /\b(?:loading|duty|rest)\b/i.test(clause)
+      && /\b(?:if|provided|assuming|depends|depending|subject\s+to|conditional|until|unknown|unverified|can't\s+confirm|cannot\s+confirm|not\s+(?:yet\s+)?confirmed|not\s+sure|need\s+to\s+(?:verify|confirm))\b/i.test(clause)
+    return promises(clause) && (offer.deliveryImpossible || !qualified)
+  })
 }
 
 export function driverReplyProblem(reply, { offer, text, load = null, driver = null, standing = null } = {}) {

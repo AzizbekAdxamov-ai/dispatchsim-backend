@@ -26,7 +26,13 @@ function authorizedRecipient(src) {
   })
   const authorized = []
   let useOwnEmail = false
-  for (const clause of masked.split(/(?<=[.!?;])\s+|\n+|\b(?:but|however|and)\b/i)) {
+  // Check dependencies before splitting coordinated clauses: "after I
+  // confirm and approve, send..." is still conditional in its entirety.
+  const clauses = masked.split(/(?<=[.!?;])\s+|\n+/).flatMap((sentence) => {
+    const pendingApproval = /\b(?:after|when|once|until)\b[^.!?;]{0,80}\b(?:confirm\w*|approv\w*|verif\w*|accept\w*|agree\w*|check\w*)\b/i.test(sentence)
+    return pendingApproval ? [] : sentence.split(/\b(?:but|however|and)\b/i)
+  })
+  for (const clause of clauses) {
     if (NEGATIVE.test(clause) || HYPOTHETICAL.test(clause)) continue
     const own = /^(?:(?:yes|okay|ok)[,.! ]+)?(?:please )?(?:use|send (?:it|the (?:rate )?confirmation|the rate con) to) (?:my|our) (?:(?:saved|company|carrier|account|login) )?e-?mail[.!\s]*$/i.test(clause.trim())
     if (own) useOwnEmail = true

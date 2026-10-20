@@ -188,10 +188,11 @@ const promptFor = (load) => buildDriverSystemPrompt({
 
 // Kills: the driver volunteering hours, fuel, pay or IDs nobody asked
 // about (ED01 "how r u" -> hours + fuel; ED10 "r u a bot" -> a data dump),
-// or going back to "one to three sentences".
-test('the driver answers only what was asked, in one or two sentences', () => {
+// or losing brevity while permitting an optional fitting personal reaction.
+test('the driver answers first and stays brief while allowing a fitting personal reaction', () => {
   const p = promptFor(LOAD)
-  assert.match(p, /Answer only what was asked, in one or two short sentences/)
+  assert.match(p, /Answer what was asked first, in one or two short sentences/)
+  assert.match(p, /After the answer, a brief dry joke or friendly bit of banter is welcome when\s+your personality and the message invite it\. Most replies need none/)
   assert.match(p, /Do not volunteer hours, fuel, pay, truck number, load ID/)
   assert.doesNotMatch(p, /One to three sentences/)
 })

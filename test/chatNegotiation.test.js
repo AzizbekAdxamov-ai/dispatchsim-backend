@@ -182,3 +182,26 @@ test('live carrier introduction and operational questions preserve company, driv
   assert.equal(facts.trailer.lengthFt, 53)
   assert.equal(facts.truck.city, 'Chicago')
 })
+
+
+test('future approval conditions keep recipient unauthorized without losing a separate price acceptance', () => {
+  const accepted = saved(step('Deal.'))
+  for (const clause of ['Send it to ops@example.com after I confirm.',
+    'Send it to ops@example.com when driver confirms.', 'Send it to ops@example.com once driver confirms.',
+    'Send it to ops@example.com until I approve.',
+    'After I confirm the driver and approve the truck, send it to ops@example.com.']) {
+    for (const conversation of [initial, accepted]) {
+      const result = step(`I accept $1571. ${clause}`, conversation)
+      assert.equal(result.state.agreed, 1571, clause)
+      assert.equal(result.state.recipient, null, clause)
+      assert.equal(result.state.stage, 'awaiting_email', clause)
+      assert.equal(result.issuePaper, false, clause)
+    }
+    assert.equal(step(clause, accepted).issuePaper, false, clause)
+  }
+  for (const text of ['Send it to ops@example.com when you get a chance.',
+    "Send it to ops@example.com when it's ready.",
+    'Send it to ops@example.com. After I confirm the driver, I will call the shipper.']) {
+    assert.equal(step(text, accepted).issuePaper, true, text)
+  }
+})

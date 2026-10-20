@@ -139,13 +139,18 @@ export function pickupCity(text, { except = null } = {}) {
   const src = String(text ?? '')
   const all = scan(src)
   const sameAs = (c) => except && c.city === except.city && c.state === except.state
+  // Both route-pair and single-city parsing must honor explicit pickup
+  // cues, including a pickup where the truck is already parked.
+  const eligible = (c) => !sameAs(c) || CUE_BEFORE.test(src.slice(0, c.index)) || CUE_AFTER.test(src.slice(c.end))
+    || /\b(?:new|next|another|different)\s+load\s*:\s*$/i.test(src.slice(0, c.index))
 
   for (let i = 0; i + 1 < all.length; i++) {
-    if (LINK_RE.test(src.slice(all[i].end, all[i + 1].index))) return all[i].ambiguous || sameAs(all[i]) ? null : all[i]
+    if (LINK_RE.test(src.slice(all[i].end, all[i + 1].index))) return all[i].ambiguous || !eligible(all[i]) ? null : all[i]
   }
 
   const keywords = [...src.matchAll(KEYWORD_RE)].map((k) => ({ start: k.index, end: k.index + k[0].length }))
-  const near = all.filter((c) => !sameAs(c) && keywords.some((k) => {
+  // Explicit pickup wording can name the city the truck is already in.
+  const near = all.filter((c) => eligible(c) && keywords.some((k) => {
     const gap = k.start >= c.end ? k.start - c.end : c.index >= k.end ? c.index - k.end : 0
     return gap <= NEAR_CHARS
   }))
@@ -289,6 +294,7 @@ function pickupTimeFor({ list, placeOf, chosen, now }) {
     const w = aboutHerLoad(list[j]) ? null : pickupWhen(list[j], now)
     if (w) return w
   }
+  if (/\b(?:new|next|another|different)\s+load\b/i.test(list[chosen])) return null
   const c = placeOf[chosen]
   for (let k = chosen - 1; k >= 0; k--) {
     const other = placeOf[k]
@@ -310,6 +316,9 @@ function deliveryFacts(text, pickupAt, now) {
       break
     }
   }
+  if (!destination) {
+    destination = all.find((city) => !city.ambiguous && /\b(?:delivery|deliver|dropoff)\s*(?::|is)?\s*(?:(?:in|at|to)\s+)?$/i.test(text.slice(0, city.index))) ?? null
+  }
   const cue = [...text.matchAll(DELIVERY_CUE_RE)].find((m) => DAY_RE.test(text.slice(m.index)))
   const deliveryAt = cue ? pickupWhen(`pickup ${text.slice(cue.index + cue[0].length)}`, now) : null
   const milesMatch = text.match(/\b([\d,]+)\s*(?:loaded\s+miles|loaded\s+mi)\b/i)
@@ -325,21 +334,34 @@ function deliveryFacts(text, pickupAt, now) {
 }
 
 function deliveryForOffer({ list, placeOf, chosen, pickupAt, now }) {
-  const own = deliveryFacts(list[chosen], pickupAt, now)
-  if (own.deliveryVerified === false) return own
-  // A question repeating the same pickup still refers to the offered leg.
-  // A new route or explicitly new load starts fresh, even in the same city.
-  if (/\b(?:new|next|another|different)\s+load\b/i.test(list[chosen])) return own
   const current = placeOf[chosen]
-  for (let i = chosen - 1; i >= 0; i--) {
-    const previous = placeOf[i]
-    if (!previous) continue
-    if (previous.city !== current.city || previous.state !== current.state) break
-    const facts = deliveryFacts(list[i], pickupAt, now)
-    if (facts.deliveryVerified === false) return facts
-    if (/\b(?:new|next|another|different)\s+load\b/i.test(list[i])) break
+  const own = deliveryFacts(list[chosen], pickupAt, now)
+  let start = chosen
+  // Carry facts only within this offer. A new route owns its own details.
+  if (!own.destinationCity && !/\b(?:new|next|another|different)\s+load\b/i.test(list[chosen])) {
+    for (let i = chosen - 1; i >= 0; i--) {
+      const previous = placeOf[i]
+      if (previous && (previous.city !== current.city || previous.state !== current.state)) break
+      start = i
+      if (/\b(?:new|next|another|different)\s+load\b/i.test(list[i])) break
+    }
   }
-  return own
+  let merged = {}
+  for (let i = start; i < list.length; i++) {
+    if (aboutHerLoad(list[i])) continue
+    const facts = deliveryFacts(list[i], pickupAt, now)
+    // A city-less appointment correction updates this leg without erasing
+    // its known destination or loaded miles.
+    for (const [key, value] of Object.entries(facts)) {
+      if (value != null) merged[key] = value
+      else if (!(key in merged)) merged[key] = value
+    }
+  }
+  if (merged.deliveryVerified === false) {
+    merged.deliveryImpossible = Boolean(pickupAt && merged.deliveryAt && merged.loadedMiles != null
+      && merged.deliveryAt.getTime() < pickupAt.getTime() + merged.loadedMiles / AVG_HIGHWAY_MPH * 3600e3)
+  }
+  return merged
 }
 
 // What the dispatcher's last words say about a load, against Grace's own
