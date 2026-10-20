@@ -164,7 +164,7 @@ test('the prompt asks for company and MC once, never for paperwork, and carries 
 
 const CALLER_CARRIER = { name: 'Keystone Line Haul', mcNumber: 'MC-741309' }
 const callerLines = (texts, carrier = CALLER_CARRIER) =>
-  callerBlock(bookingFacts({ texts, carrier, posting: posting(), now: NOW }), carrier).join(String.fromCharCode(10))
+  callerBlock(bookingFacts({ texts, carrier, posting: posting(), now: NOW }), carrier, { towardBooking: true }).join(String.fromCharCode(10))
 
 // Kills: a right MC not said to check out, or a wrong MC allowed to pass
 test('callerBlock: matching MC checks out; a wrong one is told plainly and blocks booking', () => {

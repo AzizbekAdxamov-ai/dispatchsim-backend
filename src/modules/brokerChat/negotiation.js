@@ -194,8 +194,16 @@ export function negotiationLines(decision) {
   return ['AUTHORITATIVE RATE DECISION FOR THIS TURN:',
     `  Your current offer is ${money(decision.state.offer)} all-in. Agreed rate: ${decision.state.agreed === null ? 'none' : money(decision.state.agreed)}.`,
     `  Stage: ${decision.state.stage}.`,
-    ...(decision.line ? [`  Convey this decision in your own character: ${decision.line}`] : []),
-    '  You may change the wording, but never the amount, acceptance, email request or document state.',
+    `  Carrier intent: ${decision.intent.kind}${decision.intent.rateUsd ? `; requested price ${money(decision.intent.rateUsd)}` : ''}.`,
+    `  Booking requested: ${decision.bookingRequested ? 'yes' : 'no'}. Document authorized this turn: ${decision.issuePaper ? 'yes' : 'no'}.`,
+    ...(decision.state.agreed === null ? ['  No handshake exists; a requested price is not an accepted deal.'] : []),
+    ...(['offer', 'push', 'accept_amount'].includes(decision.intent.kind) && !decision.bookingRequested
+      ? ['  Answer their bargaining request with the current authorized offer; do not present their requested price as accepted.'] : []),
+    ...(decision.state.stage === 'awaiting_email' ? ['  Rate is agreed. Request the recipient email unless they have already supplied authorization.'] : []),
+    ...(decision.state.stage === 'held' ? ['  Booking is on hold; do not request email or promise a document.'] : []),
+    ...(decision.issuePaper ? ['  The authorized document will appear in this chat shortly for review and signature; do not claim an email was sent.'] : []),
+    ...(decision.bookingRequested && decision.state.agreed === null ? ['  The rate cannot be confirmed yet. Follow the verified caller and equipment facts for the missing prerequisite.'] : []),
+    '  These are facts, not a script. Use your own words; never change the amount, acceptance, recipient authorization or document state.',
     '  Do not agree to another number or create a handshake through prose. Answer any direct operational question first.', '']
 }
 

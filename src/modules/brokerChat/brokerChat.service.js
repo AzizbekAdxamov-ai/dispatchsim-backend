@@ -225,7 +225,7 @@ export async function sendMessage({ conversationId, userId, text }, { deps = DEF
     // check or save -- see src/lib/speakerLabel.js.
     const clean = (t) => stripSpeakerLabel(t, posting.contactName)
     reply = clean(await deps.chatText({
-      messages: buildMessages({ systemPrompt, history, newMessage: text }),
+      messages: buildMessages({ systemPrompt, history, newMessage: text, negotiation: decision }),
       config,
       onRequest,
       onModel,
@@ -251,6 +251,7 @@ export async function sendMessage({ conversationId, userId, text }, { deps = DEF
           systemPrompt: brokerRetryPrompt(systemPrompt, problem),
           history,
           newMessage: text,
+          negotiation: decision,
         }),
         config,
         onRequest,

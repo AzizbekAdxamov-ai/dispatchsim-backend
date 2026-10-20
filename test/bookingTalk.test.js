@@ -277,7 +277,7 @@ test('blank carrier MC: the MC said is unverifiable, not missing', async () => {
   const noMc = { name: 'Cedar Ridge Transport Services', mcNumber: '' }
   const f = bookingFacts({ texts: ['MC 741309'], carrier: noMc, posting, now })
   assert.equal(f.mc.verdict, 'unverifiable')
-  const block = callerBlock(f, noMc).join('\n')
+  const block = callerBlock(f, noMc, { towardBooking: true }).join('\n')
   assert.match(block, /cannot be checked/)
   assert.doesNotMatch(block, /No MC yet/)
   const gate = carrierNotVerified({ booking: f, contactName: 'Devin' })
@@ -425,12 +425,13 @@ test('MOVES_TO_BOOK: booking words, a driver, a truck number or an email; not a 
 // by a driver/truck/email question.
 test('callerBlock: the MC is done, asked once, and alone when it does not check out', async () => {
   const { callerBlock } = await import('../src/modules/brokerChat/brokerChat.prompt.js')
-  const text = (f, opts) => callerBlock(f, carrier, opts).join('\n')
+  const text = (f, opts = { towardBooking: true }) => callerBlock(f, carrier, opts).join('\n')
   assert.match(text(facts(['MC 741309'])), /Their MC is done -- never ask for it again\./)
   assert.doesNotMatch(text(facts(['hi'])), /Their MC is done/)
 
   const asked = text(facts(['hi']), { mcAsked: true, towardBooking: false })
-  assert.match(asked, /You already asked for their MC\. Answer what they asked; ask for the MC again only when they move to book\./)
+  assert.match(asked, /You already asked for their MC\. Do not repeat that question during this discussion\./)
+  assert.doesNotMatch(asked, /Still missing|Ask ONE missing/)
   assert.doesNotMatch(text(facts(['hi']), { mcAsked: true, towardBooking: true }), /You already asked/)
   assert.doesNotMatch(text(facts(['hi']), { mcAsked: false }), /You already asked/)
 

@@ -7,6 +7,48 @@ import { makeFakeBrokerRepo, fakePosting, FAKE_IDS } from './helpers/fakeBrokerR
 const carrier = { name: 'Keystone Line Haul', mcNumber: 'MC-741309', email: null }
 const ids = { conversationId: FAKE_IDS.conversation, userId: FAKE_IDS.user }
 
+test('old MC-spam history cannot prescribe the next reply or override the authorized counter', async () => {
+  const load = fakePosting({ id: '4cbdd03f-96f8-4e20-b2f4-14557092473a', originCity: 'Toledo', originState: 'OH',
+    destinationCity: 'Yakima', destinationState: 'WA', rateUsd: 8153, distanceMi: 2180, weightLbs: 26200 })
+  const fake = makeFakeBrokerRepo({ posting: load })
+  for (const content of ['May I have your MC number?', 'Our best is $8,153 all-in. Please provide your MC.',
+    'Could you share your MC number, please?', 'The posted rate is my best offer. May I have your MC?',
+    'I need your company and MC to continue.']) await fake.repo.addMessage(ids.conversationId, 'broker', content)
+  const originalHistory = fake.state.messages.map((m) => ({ ...m }))
+  const natural = ['I hear you, but $8,153 all-in is where I am on this one right now.',
+    "All right, I can come up a little—$8,353 all-in."]
+  const logs = []
+  let calls = 0
+  const deps = { repo: fake.repo, getCarrier: async () => carrier,
+    findById: async () => ({ email: 'login@example.com' }), assertCanSend: async () => {},
+    chatConfigFor: () => ({ model: 'fake' }), logTurn: async (row) => logs.push(row),
+    chatText: async ({ messages }) => {
+      assert.equal(messages.at(-1).content, 'Come on, can you do $8,700 all-in?')
+      assert.equal(messages.at(-2).role, 'system')
+      assert.match(messages.at(-2).content, /requested price \$8,700/)
+      assert.match(messages.at(-2).content, /Do not ask for MC, company, email or booking details/)
+      assert.match(messages.at(-2).content, /warmth/)
+      assert.ok(messages.some((m) => m.role === 'assistant' && m.content === originalHistory[0].content))
+      const initial = messages[0].content
+      assert.doesNotMatch(initial, /Still missing before you can book|Ask ONE missing|absolute ceiling|first time they have asked|Convey this decision in your own character/)
+      assert.ok(!messages.some((m) => m.role === 'system' && m.content.includes('I can offer $8,153 all-in. Does that work for you?')))
+      return natural[calls++]
+    },
+  }
+  for (const expected of natural) {
+    await sendMessage({ ...ids, text: 'Come on, can you do $8,700 all-in?' }, { deps })
+    fake.deliverAll()
+    assert.equal(fake.state.messages.filter((m) => m.role === 'broker').at(-1).content, expected)
+    assert.equal(fake.state.conversation.agreedRateUsd, null)
+    assert.equal(fake.state.messages.filter((m) => m.kind === 'rate_con').length, 0)
+  }
+  assert.equal(calls, 2, 'natural valid answers survive without regeneration or fallback')
+  assert.equal(fake.state.conversation.brokerOfferUsd, 8353)
+  assert.deepEqual(fake.state.messages.slice(0, originalHistory.length).map(({ deliverAt, ...m }) => m),
+    originalHistory.map(({ deliverAt, ...m }) => m))
+  assert.ok(logs.every((row) => row[12] === false && row[11] === null))
+})
+
 test('live Toledo transcript counters without identity spam, agreement or documents', async () => {
   const load = fakePosting({ id: '4cbdd03f-96f8-4e20-b2f4-14557092473a', originCity: 'Toledo', originState: 'OH',
     destinationCity: 'Yakima', destinationState: 'WA', rateUsd: 8153, distanceMi: 2180, weightLbs: 26200,

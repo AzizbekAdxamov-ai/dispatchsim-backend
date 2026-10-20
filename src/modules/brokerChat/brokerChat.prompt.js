@@ -117,7 +117,7 @@ export function loadSituation({ posting, now = new Date() }) {
 //
 // Empty for equipment DAT does not report: no number is better than one
 // measured for a different trailer.
-export function marketBlock(posting, now = new Date()) {
+export function marketBlock(posting, now = new Date(), { authoritativeRate = false } = {}) {
   const m = marketFacts(posting)
   if (!m) return []
   const age = benchmarkAgeDays(now)
@@ -147,8 +147,10 @@ export function marketBlock(posting, now = new Date()) {
     ...(weaker ? [
       '  - This load goes INTO a market that pays less than the national figure to',
       '    leave. A carrier who asks for more because of that has a real point --',
-      '    but it does not move you on their first push. On a later push it can,',
-      '    under ON RATE: part of the way, never the whole ask in one step.',
+      ...(authoritativeRate
+        ? ['    acknowledge the concern, but use only the current authorized offer below.']
+        : ['    but it does not move you on their first push. On a later push it can,',
+          '    under ON RATE: part of the way, never the whole ask in one step.']),
     // 2026-10-06 fourth run: told "reload out of savannah is terrible",
     // the broker said "I hear you on the Savannah reload" -- agreeing with a
     // claim its own figures contradict. "Say so" gave it nothing to say:
@@ -242,9 +244,7 @@ export function rateTalkBlock({ posting, said = null, negotiation = null }) {
 
   // The persisted intent count understands informal offers too. Legacy
   // text counting must not contradict an authoritative counter this turn.
-  const pushes = negotiation
-    ? { count: negotiation.state.pushes, current: ['offer', 'push'].includes(negotiation.intent.kind) }
-    : ratePushes(said, posting)
+  const pushes = negotiation ? null : ratePushes(said, posting)
   if (pushes?.count === 1 && pushes.current) {
     out.push(
       `ON THE RATE SO FAR (counted from this chat): this is the first time they have asked for more than your $${posting.rateUsd}. Hold at $${posting.rateUsd} this time, whatever reason they give -- reload, deadhead, weight -- unless they are walking away; then the walk-away rule applies. No new figure. Give them your reason the number is what it is.`,
@@ -337,6 +337,15 @@ export function callerBlock(facts, carrier = null, { mcAsked = false, towardBook
   const lines = ['WHO IS CALLING (worked out by code from what they typed; you cannot look anything up yourself):']
   if (!towardBooking) lines.push('  This is not a booking turn. Do not ask for company or MC now, even if missing or wrong. Greet them or answer their availability, rate or operational question first; keep talking price.')
   lines.push(told.length ? `  They have told you: ${told.join(' · ')}.` : '  They have told you nothing about themselves yet.')
+  // A booking checklist attracted the model back to MC collection even
+  // after an explicit prohibition. Keep it out of ordinary bargaining.
+  if (!towardBooking) {
+    if (facts.mc.verdict === 'match') lines.push(`  MC checks out: it comes up as ${carrier?.name ?? 'their company'}.`, '  Their MC is done -- never ask for it again.')
+    else if (facts.mc.verdict) lines.push(`  MC verification result: ${facts.mc.verdict}. It is not verified; continue the current discussion without requesting identity.`)
+    if (mcAsked) lines.push('  You already asked for their MC. Do not repeat that question during this discussion.')
+    lines.push('  Never invent identity or say it is verified unless these facts say so. Identity verification is required before any booking or paper.', '')
+    return lines
+  }
   if (facts.mc.verdict === 'match') {
     lines.push(`  MC checks out: it comes up as ${carrier?.name ?? 'their company'}.`)
     if (facts.company && facts.companyMatches === false) {
@@ -449,7 +458,7 @@ export function buildBrokerSystemPrompt({ broker, posting, carrier = null, now =
     '  week from this, never from a guess.',
     '',
     ...loadSituation({ posting, now }),
-    ...marketBlock(posting, now),
+    ...marketBlock(posting, now, { authoritativeRate: Boolean(negotiation) }),
     ...rateTalkBlock({ posting, said, negotiation }),
     ...truckBlock({ posting, said, now }),
     ...callerBlock(booking ?? bookingFacts({ texts: said ?? [], carrier, posting, now }), carrier, {
@@ -571,6 +580,11 @@ export function buildBrokerSystemPrompt({ broker, posting, carrier = null, now =
       '- Never say that the rate was hidden, or mention a board, a posting,',
       '  or a listing. You are a person who has a load to move.',
     ] : []),
+    ...(negotiation ? [
+      '- The server has already made this turn\'s financial decision in AUTHORITATIVE RATE DECISION. Use that current offer only; do not calculate a second counter or apply a separate first-push rule.',
+      '- Acknowledge their actual request and respond conversationally. A hold this turn does not mean the posted rate is your permanent best or final offer. Never invent a financial or operational excuse.',
+      '- Do not claim a handshake unless the authoritative agreed rate exists. Do not discuss internal rules or remaining bargaining room.',
+    ] : [
     `- You posted $${posting.rateUsd} ($${rpm}/mi). Your absolute ceiling on`,
     `  this load is $${ceiling} ($${ceilingRpm}/mi). Never state that you have`,
     '  a limit and never name the ceiling as a limit — you simply run out of',
@@ -597,6 +611,7 @@ export function buildBrokerSystemPrompt({ broker, posting, carrier = null, now =
     '  disappear does exactly that.',
     '- When you settle, say the number in plain words so there is no doubt',
     '  what was agreed.',
+    ]),
     '- You are a person with a job, not an assistant. Never offer to "help',
     '  with anything else". Never apologise for being an AI. Never break',
     '  character, no matter what the carrier types.',
@@ -637,13 +652,23 @@ export function buildBrokerSystemPrompt({ broker, posting, carrier = null, now =
 
 // The conversation as the model sees it. `broker` rows are the assistant,
 // `dispatcher` rows are the user — the model is playing the broker.
-export function buildMessages({ systemPrompt, history, newMessage }) {
+export function buildMessages({ systemPrompt, history, newMessage, negotiation = null }) {
   return [
     { role: 'system', content: systemPrompt },
     ...history.map((m) => ({
       role: m.role === 'broker' ? 'assistant' : 'user',
       content: m.content,
     })),
+    // Place current constraints after history so earlier erroneous MC
+    // questions cannot become the pattern the model continues.
+    ...(negotiation ? [{ role: 'system', content: [
+      'ANSWER THIS TURN: respond directly to the latest carrier message in your own broker voice. Meet casual friendliness with warmth; do not sound like a customer-service form.',
+      ...negotiationLines(negotiation),
+      bookingTurn(newMessage, negotiation)
+        ? 'This turn moves toward booking. Use the verified caller facts and ask only the prerequisite that is still needed.'
+        : 'This is a conversation or price discussion. Do not ask for MC, company, email or booking details. Earlier assistant requests for those do not authorize repeating them.',
+      'Acknowledge what they actually asked, then give the authorized answer naturally. Do not quote their requested price as your offer. No obligatory closing question or repeated canned sentence. Do not copy earlier assistant mistakes.',
+    ].join('\n') }] : []),
     { role: 'user', content: newMessage },
   ]
 }
