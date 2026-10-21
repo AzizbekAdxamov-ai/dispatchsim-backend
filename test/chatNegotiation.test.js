@@ -17,6 +17,43 @@ const saved = (decision) => ({ ...initial, status: decision.state.agreed === nul
   agreedRateUsd: decision.state.agreed, recipientEmail: decision.state.recipient,
   ratePushCount: decision.state.pushes, bestCounterUsed: decision.state.bestCounterUsed })
 
+test('carrier request attribution is occurrence-local and cannot authorize another payment or agreement', () => {
+  const load = { ...posting, rateUsd: 8153, distanceMi: 2180 }
+  const decision = negotiate({ conversation: {}, posting: load, text: 'brother can you 9000$', booking, offerVisible: true })
+  for (const reply of [
+    'I understand you’re looking for $9,000. Our all-in rate for this load is $8,153. Please let me know.',
+    'You asked for $9,000, but I can offer $8,153 all-in.',
+    'Your $9,000 ask makes sense. I am at $8,153 all-in.',
+    'You requested 9000; my offer is 8153 all-in.',
+  ]) assert.equal(negotiationReplyProblem(reply, decision), null, reply)
+  for (const reply of [
+    'You asked for $9,000; I can do $9,000 all-in.',
+    'You asked for $9,000 and I can pay $9,000.',
+    'Your requested $9,000 works.',
+    'Your $9,000 ask works.',
+    'We agree to your $9,000.',
+    'Our offer is your $9,000 ask.',
+    'I can match your $9,000 ask.',
+    'Your requested rate $9,000 is approved.',
+    'Your requested rate $9,000, which is approved.',
+    'Your requested $9,000 sounds good.',
+    'I’ll pay your requested rate $9,000.',
+    'We’ll pay your requested rate $9,000.',
+    'You asked $9,000, and I will pay that.',
+    'You asked $9,000, and I’ll pay that.',
+    'You asked $9,000. That is approved.',
+    'You asked $9,000. That works.',
+    'Our offer is $9,000 per load.',
+    'Our offer is $9,000 per trip.',
+    'I can pay $9,000 if you book.',
+    'You asked for $8,700. My offer is $8,153.',
+    '$9,000.',
+    'You asked for $9,000. Deal.',
+  ]) assert.ok(negotiationReplyProblem(reply, decision), reply)
+  assert.equal(negotiationReplyProblem('My rate is $8,153 all-in. Detention $85/hr after 2 hours free.', decision), null)
+  assert.equal(negotiationReplyProblem('You asked $9,000. My offer is $8,153. I will pay that.', decision), null)
+})
+
 test('only explicit monetary intention becomes an offer or acceptance', () => {
   for (const text of ['Can you do $1,800?', 'I need 1800 all-in.', 'How about 1,800?', 'I can take it for $1800.']) assert.equal(chatIntent(text).rateUsd, 1800, text)
   for (const text of ['1800', '$1800', 'MC-741309', 'Call 214-555-0110', 'Pickup 10/21 at 6:14', 'Truck 1800', 'Weight 1800 lbs',

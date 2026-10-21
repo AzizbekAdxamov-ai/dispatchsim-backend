@@ -52,6 +52,8 @@ test('load appointments, terms and market remain data with explicit time and fue
   assert.match(built.record.load.loading, /live load/)
   assert.match(built.systemPrompt, /Central Time/)
   assert.match(built.systemPrompt, /linehaul and fuel/)
+  assert.match(built.systemPrompt, /PAY the carrier/)
+  assert.match(built.systemPrompt, /concession raises your payment offer/)
   assert.match(built.systemPrompt, /Lumper: paid by the broker against a receipt/)
   assert.match(built.systemPrompt, /after \d hours free/)
   assert.ok(built.record.market.ageDays > 0)

@@ -7,6 +7,24 @@ import { makeFakeBrokerRepo, fakePosting, FAKE_IDS } from './helpers/fakeBrokerR
 const carrier = { name: 'Keystone Line Haul', mcNumber: 'MC-741309', email: null }
 const ids = { conversationId: FAKE_IDS.conversation, userId: FAKE_IDS.user }
 
+test('the observed live acknowledgement of a higher carrier ask survives the production guard without fallback', async () => {
+  const fake = makeFakeBrokerRepo({ posting: fakePosting({ rateUsd: 8153, distanceMi: 2180, weightLbs: 26200 }) })
+  const raw = 'I understand you’re looking for $9,000. Our all-in rate for this load is $8,153. Please let me know.'
+  const logs = []
+  let calls = 0
+  const deps = { repo: fake.repo, getCarrier: async () => carrier, findById: async () => null,
+    assertCanSend: async () => {}, chatConfigFor: () => ({ model: 'fake' }), logTurn: async (row) => logs.push(row),
+    chatText: async () => { calls += 1; return raw } }
+  await sendMessage({ ...ids, text: 'brother can you 9000$' }, { deps })
+  fake.deliverAll()
+  assert.equal(calls, 1)
+  assert.equal(fake.state.messages.filter((m) => m.role === 'broker').at(-1).content, raw)
+  assert.equal(logs[0][12], false)
+  assert.equal(logs[0][11], null)
+  assert.equal(fake.state.conversation.agreedRateUsd, null)
+  assert.equal(fake.state.messages.filter((m) => m.kind === 'rate_con').length, 0)
+})
+
 test('a regenerated answer logs the prompt and reference context actually sent on its final attempt', async () => {
   const fake = makeFakeBrokerRepo({ posting: fakePosting() })
   const sent = []

@@ -170,8 +170,8 @@ export function chatReasoningCap(baseUrl) {
   return Math.max(0, chatMaxTokens() - CHAT_REPLY_TOKENS)
 }
 
-// How hard a gpt-oss model thinks. The broker: CHAT_GROQ_REASONING_EFFORT,
-// low unless the .env says medium or high. The driver (`chat` 'driver'): its
+// How hard a gpt-oss model thinks. The broker: CHAT_BROKER_REASONING_EFFORT,
+// else CHAT_GROQ_REASONING_EFFORT, else low. The driver (`chat` 'driver'): its
 // own CHAT_DRIVER_REASONING_EFFORT, else CHAT_GROQ_REASONING_EFFORT, else
 // medium -- a driver weighs hours of service and the clock, and low missed
 // them. A value that is none of low/medium/high is the default. Checked at
@@ -185,6 +185,9 @@ const effortFrom = (name) => {
 }
 
 export function groqReasoningEffort(chat = null) {
+  if (chat === 'broker') {
+    return effortFrom('CHAT_BROKER_REASONING_EFFORT') ?? effortFrom('CHAT_GROQ_REASONING_EFFORT') ?? DEFAULT_REASONING_EFFORT.broker
+  }
   if (chat === 'driver') {
     return effortFrom('CHAT_DRIVER_REASONING_EFFORT') ?? effortFrom('CHAT_GROQ_REASONING_EFFORT') ?? DEFAULT_REASONING_EFFORT.driver
   }
@@ -199,7 +202,8 @@ export function groqReasoningEffort(chat = null) {
 //   gpt-oss  reasoning_effort low/medium/high only (low unless
 //            CHAT_GROQ_REASONING_EFFORT says otherwise); it rejects both
 //            reasoning_format and 'none'. `chat` ('broker' or 'driver') picks
-//            which chat's effort applies; null (the seed generator) is the broker's.
+//            which chat's effort applies; null (the seed generator) retains
+//            the shared setting, independently of the broker override.
 // Anything else on Groq (llama and the like) does not reason: send nothing.
 export function groqReasoningParams(baseUrl, model, chat = null) {
   if (!isGroq(baseUrl)) return {}

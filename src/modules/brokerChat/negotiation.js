@@ -211,15 +211,41 @@ export function negotiationReplyProblem(reply, decision) {
   if (!decision) return null
   const text = asciiPunct(reply)
   const allowed = [decision.state.offer, decision.state.agreed].filter((n) => n !== null)
-  const rates = [...text.matchAll(/\$\s*(\d[\d,]*(?:\.\d+)?)/g)].filter((m) => {
-    const before = text.slice(Math.max(0, m.index - 35), m.index)
-    const after = text.slice(m.index + m[0].length, m.index + m[0].length + 45)
-    return /all[- ]?in|\b(?:rate|offer|do|pay|agreed|confirmed)\b/i.test(`${before} ${after}`) && !/^\s*(?:\/|per |an? |hr\b|hour\b)/i.test(after)
-  }).map((m) => Number(m[1].replaceAll(',', '')))
-  for (const pattern of [/\b(?:offer|rate|pay|can do|agreed at|confirmed at)\s*(?:is|:)?\s*\$?\s*(\d[\d,]{2,})\b/gi, /\b(\d[\d,]{2,})\s+all[- ]?in\b/gi]) {
-    for (const match of text.matchAll(pattern)) rates.push(Number(match[1].replaceAll(',', '')))
+  // Classify individual amounts within their own clause. A carrier's ask
+  // is not our offer, and a later sentence cannot lend its rate words to it.
+  // Never mask an amount globally: a second occurrence may promise payment.
+  const clauses = text.split(/(?<=[.!?;])\s+|\b(?:but|however|and)\b/i)
+  let lastReferencedAmount = null
+  for (const clause of clauses) {
+    const amounts = [...clause.matchAll(/(?<![\w\d])(?:\$\s*(\d[\d,]*(?:\.\d+)?)|(\d{1,3}(?:,\d{3})+|\d{3,5})(?:\.00)?)(?![\w\d])/g)]
+    for (const [index, match] of amounts.entries()) {
+      const amount = Number((match[1] ?? match[2]).replaceAll(',', ''))
+      const before = clause.slice(index ? amounts[index - 1].index + amounts[index - 1][0].length : 0, match.index)
+      const after = clause.slice(match.index + match[0].length, amounts[index + 1]?.index ?? clause.length)
+      const units = /^\s*(?:(?:\/|per\s+|an?\s+)(?:hours?|hrs?|days?|miles?|mi|lbs?|pounds?)\b|hr\b|hours?\b|lbs?\b|pounds?\b|miles?\b|mi\b|ft\b|feet\b)/i.test(after)
+      const accessorial = /\b(?:detention|layover|lumper|tonu|tolls?|driver[- ]?assist)\s*(?:is|:|of|at)?\s*$/i.test(before)
+        || /^\s*(?:for\s+)?(?:detention|layover|lumper|tonu|tolls?|driver[- ]?assist)\b/i.test(after)
+      if (units || accessorial) continue
+      const financial = match[1] !== undefined || /all[- ]?in|\b(?:rate|offer|pay|do|ask|asked|requested|looking for|works|agreed|confirmed)\b/i.test(`${before} ${after}`)
+      if (!financial) continue
+      lastReferencedAmount = amount
+      if (allowed.includes(amount)) continue
+      const attributed = /\byou(?:'re| are)\s+(?:looking|asking|aiming)\s+for\s*$/i.test(before)
+        || /\byou\s+(?:asked(?: for)?|requested|wanted)\s*$/i.test(before)
+        || /\byour\s+(?:(?:requested|asking|target)\s+)?(?:price|rate|ask|request)\s*(?:of|is|:)?\s*$/i.test(before)
+        || (/\byour\s*$/i.test(before) && /^\s*(?:ask|request)\b/i.test(after))
+      const committed = /\b(?:pay|offer|meet|match|accept|approve|agree)\b|\b(?:our|my)\s+(?:offer|rate|payment)\s+(?:is|will be)\b/i.test(before)
+        || /\b(?:approved|accepted|agreed|confirmed)\b/i.test(after)
+        || /^\s*[,;:]?\s*(?:(?:ask|request)\s+)?(?:works|(?:will|would)\s+work|(?:sounds|looks)\s+(?:good|fine)|(?:is|will be)\s+fine|deal)\b/i.test(after)
+      if (!(attributed && !committed && amount === decision.intent.rateUsd)) return 'offered a rate other than the authoritative decision'
+    }
+    // A quoted ask cannot become a payment promise through a later pronoun.
+    // Track the latest monetary referent so a subsequent authorized offer can
+    // still be followed by "I can pay that" without inheriting the old ask.
+    if (lastReferencedAmount !== null && !allowed.includes(lastReferencedAmount)
+      && /\b(?:i|we)(?:'ll|'d)?\s+(?:(?:can|will|would)\s+)?(?:pay|offer|match|meet|accept|approve|agree to)\s+(?:that|it|your (?:ask|rate|request))\b|\b(?:that|it)(?:(?:'s| is| will be)\s+(?:approved|accepted|agreed|confirmed|fine)|\s+(?:works|sounds good))\b/i.test(clause)
+      && !NEGATIVE.test(clause)) return 'offered a rate other than the authoritative decision'
   }
-  if (rates.some((n) => !allowed.includes(n))) return 'offered a rate other than the authoritative decision'
   if (decision.state.agreed === null) {
     const assertions = text.replace(EMAIL, ' ').split(/(?<=[.!?;])\s+|\b(?:but|however)\b/i)
       .filter((clause) => !NEGATIVE.test(clause) && !/\bno\b/i.test(clause) && !HYPOTHETICAL.test(clause) && !clause.includes('?'))
