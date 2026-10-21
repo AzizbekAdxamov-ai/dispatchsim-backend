@@ -215,14 +215,20 @@ export const SAYS_BOOKED = /\b(?:booked|you'?re (?:all )?set|it'?s yours|load is
 // makes it a promise of what happens later, not a statement that it is booked.
 const BOOK_CONDITION = /\b(?:if|once|as soon as|when|after|until|unless|provided)\b/i
 // "send me your MC and we'll get it booked": the MC is asked for, booking follows it.
-const BOOK_AFTER_ASK = /\b(?:get|have)\s+(?:it|you|this|that)\s+(?:all\s+)?$/i
+const BOOK_AFTER_ASK = /\b(?:will|can|could|would|'ll)\s+(?:get|have)\s+(?:it|you|this|that)\s+(?:all\s+)?$/i
 const SAYS_BOOKED_EACH = new RegExp(SAYS_BOOKED.source, 'gi')
 export function saysBooked(reply) {
   return asciiPunct(reply).split(SENTENCE_SPLIT).some((sentence) => {
-    const asks = mcQuestion(sentence)
+    const asks = mcQuestion(sentence) || /\b(?:send|give|provide|share)\b[^.!?]{0,30}\bmc\b/i.test(sentence)
     return [...sentence.matchAll(SAYS_BOOKED_EACH)].some((m) => {
-      const before = sentence.slice(0, m.index)
-      return !BOOK_CONDITION.test(before) && !(asks && BOOK_AFTER_ASK.test(before))
+      const fullBefore = sentence.slice(0, m.index)
+      const before = fullBefore.split(/[,;]|\b(?:but|however|and)\b/i).at(-1)
+      // Availability/passive invitations are not an accomplished booking.
+      // Evaluate each occurrence so a later actual claim is still caught.
+      const invitation = /\b(?:to be|(?:can|could|may) be)\s*$/i.test(before)
+      const denied = /\b(?:(?:not|never|haven't|hasn't|isn't|wasn't|didn't)\s+(?:yet\s+)?|no (?:one|booking)\s+(?:(?:has|is)\s+)?)$/i.test(before)
+      const conditionalFuture = BOOK_AFTER_ASK.test(before) && (asks || BOOK_CONDITION.test(fullBefore))
+      return !invitation && !denied && !BOOK_CONDITION.test(before) && !conditionalFuture
     })
   })
 }

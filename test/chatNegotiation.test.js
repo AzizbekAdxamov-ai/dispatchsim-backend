@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { chatIntent, negotiate, negotiationReplyProblem, bookingTurn } from '../src/modules/brokerChat/negotiation.js'
 import { ceilingFor } from '../src/modules/brokerChat/ratePolicy.js'
-import { bookingFacts } from '../src/modules/brokerChat/bookingTalk.js'
+import { bookingFacts, saysBooked } from '../src/modules/brokerChat/bookingTalk.js'
 import { carrierEmail } from '../src/modules/carrier/carrier.repository.js'
 import { updateCarrierSchema } from '../src/modules/carrier/carrier.schemas.js'
 import { brokerReplyProblem } from '../src/modules/brokerChat/replyProblem.js'
@@ -16,6 +16,68 @@ const saved = (decision) => ({ ...initial, status: decision.state.agreed === nul
   negotiationStage: decision.state.stage, brokerOfferUsd: decision.state.offer,
   agreedRateUsd: decision.state.agreed, recipientEmail: decision.state.recipient,
   ratePushCount: decision.state.pushes, bestCounterUsed: decision.state.bestCounterUsed })
+
+test('street-style meet-me asks remain bounded offers, never implicit acceptance', () => {
+  const exact = '8153 kinda low bro im like 250 miles out can u meet me at 8700?'
+  assert.equal(chatIntent(exact).rateUsd, 8700)
+  assert.equal(chatIntent(exact).kind, 'offer')
+  for (const text of ['could you meet us at $8700?', 'can you meet me at 8,700?']) assert.equal(chatIntent(text).rateUsd, 8700)
+  for (const text of ['If you can u meet me at 8700, I might take it.', 'I cant meet you at 8700.',
+    'He said "can u meet me at 8700".', 'Can u meet me at 8700 miles?', 'Can u meet me at 8700-9000?',
+    'Can u meet me at $8700 or $9000?']) assert.ok(!['offer', 'accept_amount', 'accept'].includes(chatIntent(text).kind), text)
+  const load = { ...posting, id: '4cbdd03f-96f8-4e20-b2f4-14557092473a', rateUsd: 8153, distanceMi: 2180, weightLbs: 26200 }
+  const result = negotiate({ conversation: { brokerOfferUsd: 8153, ratePushCount: 1 }, posting: load, text: exact, booking })
+  assert.equal(result.state.offer, 8353)
+  assert.equal(result.state.agreed, null)
+  assert.equal(result.issuePaper, false)
+  assert.equal(bookingTurn(exact, result), false)
+  assert.equal(chatIntent('8153 kinda low brother').kind, 'push')
+})
+
+test('apostropheless holds and negations stay active without mutating recipient addresses or quoted examples', () => {
+  for (const text of ['hold up bro dont book nothing yet, gotta check with my driver',
+    'dont book anything yet', 'gotta check my driver', 'dont book yet and I cant confirm',
+    'I didnt say book it bro, dont book nothing yet', 'I am not sure, hold up bro',
+    "don't book yet, I'll confirm after checking", 'don’t book yet, I’ll confirm after checking']) assert.equal(chatIntent(text).kind, 'hold', text)
+  for (const text of ['He said "dont book anything yet".', "He said 'dont book anything yet'.", 'If I say dont book, what happens?',
+    'I wont hold off.', 'dont cancel it.', 'didnt say book it bro, just tell me pickup n delivery times',
+    'cant accept $1571', 'wont take it at $1571']) {
+    assert.ok(!['hold', 'accept', 'accept_amount', 'offer'].includes(chatIntent(text).kind), text)
+    assert.equal(bookingTurn(text), false, text)
+  }
+  assert.equal(chatIntent('book it').kind, 'accept')
+  assert.equal(chatIntent('that rate works').kind, 'accept')
+  assert.deepEqual(chatIntent('dont@example.com').emails, ['dont@example.com'])
+  assert.deepEqual(chatIntent('Please send it to cant@example.com.').emails, ['cant@example.com'])
+})
+
+test('availability with a passive booking invitation is safe, accomplished booking claims remain blocked per occurrence', () => {
+  const decision = step('Is the load still open?')
+  for (const reply of ['It is still open and ready to be booked.', 'This load can be booked.',
+    'The load is not booked yet.']) assert.equal(brokerReplyProblem(reply, { posting, booking: { mc: { verdict: null } }, text: 'Is it still open?', negotiation: decision }), null, reply)
+  for (const reply of ['I booked it for you.', 'It is booked for you.', "You're booked.",
+    'You are not far away so I booked it',
+    'It is still open and ready to be booked, and I booked it for you.',
+    'The load is not booked yet, but I booked it for you.']) assert.ok(negotiationReplyProblem(reply, decision), reply)
+})
+
+test('an MC request does not excuse a present booking claim; a future MC-dependent step remains conditional', () => {
+  const decision = step('Deal.', initial, { booking: { mc: { verdict: null } } })
+  for (const reply of ['Send me your MC, we have it booked.', 'Give me your MC and I have it booked for you.',
+    'Send your MC and I have it booked for you.']) {
+    assert.equal(saysBooked(reply), true, reply)
+    assert.ok(negotiationReplyProblem(reply, decision), reply)
+  }
+  for (const reply of ['Send your MC and we will get it booked after that.',
+    'Give me your MC and I will have it booked after that.',
+    'If your MC checks out, we can get it booked.']) {
+    assert.equal(saysBooked(reply), false, reply)
+    assert.equal(negotiationReplyProblem(reply, decision), null, reply)
+  }
+  const mixed = 'Send your MC and we will get it booked after that. I already have it booked for you.'
+  assert.equal(saysBooked(mixed), true)
+  assert.ok(negotiationReplyProblem(mixed, decision))
+})
 
 test('carrier request attribution is occurrence-local and cannot authorize another payment or agreement', () => {
   const load = { ...posting, rateUsd: 8153, distanceMi: 2180 }

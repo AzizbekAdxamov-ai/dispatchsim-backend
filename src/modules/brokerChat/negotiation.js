@@ -2,19 +2,32 @@
 import { asciiPunct } from '../../lib/plainText.js'
 import { ceilingFor } from './ratePolicy.js'
 import { rateReasons, REASON_WORDS } from './rateTalk.js'
+import { saysBooked } from './bookingTalk.js'
 
 const EMAIL = /\b[a-z0-9._%+-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}\b/gi
 const MONEY = '(?:\\$\\s*)?(\\d{1,3}(?:,\\d{3})+|\\d{3,5})(?:\\.00)?(?:\\s*\\$)?'
-const OFFER = new RegExp(`\\b(?:need|want|asking for|(?:can|could) (?:you|u)(?: do)?|how about|what about|offer|pay|take (?:it|this|the load) for|run (?:it|this) for|do (?:it|this) for)\\s+${MONEY}(?![\\d.,])`, 'gi')
+const OFFER = new RegExp(`\\b(?:need|want|asking for|(?:can|could) (?:you|u)(?: meet (?:me|us) at| do)?|how about|what about|offer|pay|take (?:it|this|the load) for|run (?:it|this) for|do (?:it|this) for)\\s+${MONEY}(?![\\d.,])`, 'gi')
 const ACCEPT_AT = new RegExp(`\\b(?:accept|agree (?:on|to)|take (?:it|this|the load) (?:at|for)|book (?:it|this|the load) (?:at|for)|works? (?:at|for))\\s+${MONEY}(?![\\d.,])`, 'gi')
 const AMOUNT_FIRST = new RegExp(`^\\s*${MONEY}\\s*(?:all[- ]?in\\s*)?(?:works(?: for (?:me|us))?|is (?:fine|good)|(?:is )?accepted|(?:is )?agreed)[.!]?\\s*$`, 'i')
-const ACCEPT = /^(?:(?:ok(?:ay)?|yes|great|thanks)[,!. ]+)*(?:i(?:'ll| will)|we(?:'ll| will)) take (?:it|this|the load)[.!]?\s*$|^(?:(?:ok(?:ay)?|yes)[,!. ]+)*(?:deal|agreed|book it|let's do it|(?:that|the rate|your rate|your offer) works(?: for (?:me|us))?|sounds good|i accept(?: your (?:rate|offer))?)[.!]?\s*$/i
-const HOLD = /\b(?:hold off|on hold|not ready|don't (?:book|send|issue|confirm)|do not (?:book|send|issue|confirm)|not (?:book|confirm|accept)(?:ing|ed)? yet|before (?:we|i) (?:book|confirm)|let me (?:check|confirm|verify)|wait for (?:my|our) confirmation|cancel (?:it|this|the load)|release (?:it|this|the load))\b/i
+const ACCEPT = /^(?:(?:ok(?:ay)?|yes|great|thanks)[,!. ]+)*(?:i(?:'ll| will)|we(?:'ll| will)) take (?:it|this|the load)[.!]?\s*$|^(?:(?:ok(?:ay)?|yes)[,!. ]+)*(?:deal|agreed|book it|let's do it|(?:that(?: rate)?|the rate|your rate|your offer) works(?: for (?:me|us))?|sounds good|i accept(?: your (?:rate|offer))?)[.!]?\s*$/i
+const HOLD = /\b(?:hold (?:off|up)|on hold|not ready|don't (?:book|send|issue|confirm)|do not (?:book|send|issue|confirm)|not (?:book|confirm|accept)(?:ing|ed)? yet|before (?:we|i) (?:book|confirm)|let me (?:check|confirm|verify)|gotta check (?:with )?(?:my|our|the) driver|wait for (?:my|our) confirmation|cancel (?:it|this|the load)|release (?:it|this|the load))\b/i
 const WALK = /\b(?:i(?:'ll| will) pass|we(?:'ll| will) pass|pass on (?:it|this)|walk away|find another (?:truck|carrier))\b/i
-const MORE = /\b(?:do better|need more|pay more|to{1,2} low|too cheap|more money|bump (?:it|the rate)|add (?:a )?(?:little|litle)(?: bit)?|what(?:'s| is) your best)\b/i
-const QUOTED = /["“][^"”]*["”]|'[^'\n]{2,}'/g
+const MORE = /\b(?:do better|need more|pay more|(?:to{1,2}|kinda) low|too cheap|more money|bump (?:it|the rate)|add (?:a )?(?:little|litle)(?: bit)?|what(?:'s| is) your best)\b/i
+const QUOTED = /["“][^"”]*["”]|(?<!\w)'[^'\n]{2,}'(?!\w)/g
 const HYPOTHETICAL = /\b(?:if|unless|hypothetically|example|suppose|said|quoted|asks?|asking whether|what if|would you accept)\b/i
-const NEGATIVE = /\b(?:not|never|can't|cannot|won't|don't|do not|isn't|is not|haven't)\b/i
+const NEGATIVE = /\b(?:not|never|can't|cannot|won't|don't|didn't|do not|isn't|is not|haven't)\b/i
+
+function intentText(raw) {
+  const src = asciiPunct(String(raw ?? ''))
+  const normalize = (part) => part.replace(/\b(dont|didnt|cant|wont|isnt|havent|hasnt|wasnt|werent|couldnt|wouldnt|shouldnt)\b/gi,
+    (word) => `${word.slice(0, -1)}'t`)
+  let result = '', position = 0
+  for (const match of src.matchAll(EMAIL)) {
+    result += normalize(src.slice(position, match.index)) + match[0]
+    position = match.index + match[0].length
+  }
+  return result + normalize(src.slice(position))
+}
 
 // Recipient authorization is checked once, per clause, before every intent branch.
 // Mask addresses while splitting so their dots cannot detach a negation or condition.
@@ -50,9 +63,17 @@ function authorizedRecipient(src) {
 }
 
 export function chatIntent(raw) {
-  const src = asciiPunct(String(raw ?? ''))
-  if (HOLD.test(src) || /^\s*(?:cancel|stop|hold|wait)[.!]?\s*$/i.test(src)
-    || /\b(?:reject|decline) (?:your |the )?(?:rate|offer|load)\b/i.test(src)) return { kind: 'hold' }
+  const src = intentText(raw)
+  // Quoted or hypothetical hold examples do not withdraw a real agreement.
+  const activeClauses = src.replace(QUOTED, ' ').split(/[;!?\n]|\.(?!\d)/).filter((clause) => !HYPOTHETICAL.test(clause))
+  if (activeClauses.some((clause) => {
+    const matches = [...clause.matchAll(new RegExp(HOLD.source, 'gi')),
+      ...clause.matchAll(/\b(?:reject|decline) (?:your |the )?(?:rate|offer|load)\b/gi)]
+    // Only a negation governing this instruction cancels it. An earlier
+    // "didn't say book it" or "not sure" cannot erase a later active hold.
+    const denied = /\b(?:don't|do not|didn't|did not|won't|will not|can't|cannot|not|never)\s+(?:(?:want|intend|plan|mean|need)\s+to\s+|(?:say|ask|tell)\s+(?:(?:you|them)\s+)?(?:to\s+)?)?$/i
+    return matches.some((match) => !denied.test(clause.slice(0, match.index))) || /^\s*(?:cancel|stop|hold|wait)[.!]?\s*$/i.test(clause)
+  })) return { kind: 'hold' }
   const { emails, useOwnEmail } = authorizedRecipient(src)
   // Quotes, negated intentions and conditional examples are never a handshake.
   const clauses = src.replace(QUOTED, ' ').replace(EMAIL, ' ').split(/[;!?\n]|\.(?!\d)/)
@@ -91,6 +112,7 @@ const money = (n) => `$${Number(n).toLocaleString('en-US')}`
 // Sharing a truck/driver or asking a price is not a request to book.
 // Use the same intent at the prompt and reply boundary so MC cannot gate haggling.
 export function bookingTurn(text, decision = null) {
+  text = intentText(text)
   const intent = decision?.intent ?? chatIntent(text)
   if (intent.kind === 'accept') return true
   if (['offer', 'accept_amount'].includes(intent.kind)) return decision ? decision.bookingRequested === true : intent.kind === 'accept_amount'
@@ -249,8 +271,8 @@ export function negotiationReplyProblem(reply, decision) {
   if (decision.state.agreed === null) {
     const assertions = text.replace(EMAIL, ' ').split(/(?<=[.!?;])\s+|\b(?:but|however)\b/i)
       .filter((clause) => !NEGATIVE.test(clause) && !/\bno\b/i.test(clause) && !HYPOTHETICAL.test(clause) && !clause.includes('?'))
-    const accepts = /\b(?:deal|done|agreed|confirmed|booked|it'?s yours|you'?re (?:all )?set|i accept (?:your|the) (?:offer|rate))\b/i
-    if (assertions.some((clause) => accepts.test(clause))) return 'invented an agreement without dispatcher acceptance'
+    const accepts = /\b(?:deal|done|agreed|confirmed|it'?s yours|you'?re (?:all )?set|i accept (?:your|the) (?:offer|rate))\b/i
+    if (saysBooked(text) || assertions.some((clause) => accepts.test(clause))) return 'invented an agreement without dispatcher acceptance'
   }
   if (decision.state.stage === 'held' && /\b(?:send (?:me|your)|give me|what(?:'s| is))[^.!?]{0,25}\be-?mail\b/i.test(text)) return 'asked for email despite a booking hold'
   if (decision.line && ['awaiting_email', 'paper_pending'].includes(decision.state.stage) && decision.intent.kind !== 'talk' && !new RegExp(`\\b${decision.state.agreed}\\b`).test(text.replaceAll(',', ''))) return 'omitted the agreed rate from the confirmation'

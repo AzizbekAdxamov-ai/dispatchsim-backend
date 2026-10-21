@@ -168,6 +168,26 @@ test('hold removes pending and delivered documents and prevents accept', async (
   await assert.rejects(() => acceptRateCon(ids, { deps: t.deps }), { code: 'NOT_AGREED_YET' })
 })
 
+test('street-style hold invalidates a pending paper and a later operational question keeps it held', async () => {
+  const t = setup()
+  await t.send("I'll take it at $1571.")
+  await t.send('Use my email.')
+  assert.equal(t.fake.state.conversation.negotiationStage, 'paper_pending')
+  assert.equal(t.fake.state.messages.filter((m) => m.kind === 'rate_con').length, 1)
+  const revision = t.fake.state.conversation.negotiationRevision
+  await t.send('I didnt say book it bro, dont book nothing yet')
+  assert.equal(t.fake.state.conversation.negotiationStage, 'held')
+  assert.equal(t.fake.state.conversation.agreedRateUsd, null)
+  assert.equal(t.fake.state.conversation.recipientEmail, null)
+  assert.equal(t.fake.state.messages.filter((m) => m.kind === 'rate_con').length, 0)
+  assert.ok(t.fake.state.conversation.negotiationRevision > revision)
+  await t.send('didnt say book it bro, just tell me pickup n delivery times')
+  assert.equal(t.fake.state.conversation.negotiationStage, 'held')
+  assert.equal(t.fake.state.conversation.agreedRateUsd, null)
+  assert.equal(t.fake.state.messages.filter((m) => m.kind === 'rate_con').length, 0)
+  await assert.rejects(() => acceptRateCon(ids, { deps: t.deps }), { code: 'NOT_AGREED_YET' })
+})
+
 test('a newer hold supersedes an in-flight acceptance before model completion', async () => {
   const t = setup()
   let resolveOld
@@ -181,7 +201,7 @@ test('a newer hold supersedes an in-flight acceptance before model completion', 
   }
   const pending = t.send("I'll take it at $1571.")
   await started
-  await t.send("Don't book us yet.")
+  await t.send('hold up bro dont book nothing yet, gotta check with my driver')
   resolveOld('$1571 all-in agreed. What email should I put on the rate confirmation?')
   await pending
   assert.equal(t.fake.state.conversation.negotiationStage, 'held')

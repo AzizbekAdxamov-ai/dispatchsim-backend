@@ -895,9 +895,9 @@ test('the daily token status warns at 80% and says nothing it does not know', as
 
 // -- The driver's own reasoning effort --------------------------------------
 
-// Sets the two effort variables (null deletes) for the length of fn.
-async function withEfforts({ groq = null, driver = null }, fn) {
-  const names = { CHAT_GROQ_REASONING_EFFORT: groq, CHAT_DRIVER_REASONING_EFFORT: driver }
+// Isolate all effort variables from local deployment settings for fn.
+async function withEfforts({ groq = null, driver = null, broker = null }, fn) {
+  const names = { CHAT_GROQ_REASONING_EFFORT: groq, CHAT_DRIVER_REASONING_EFFORT: driver, CHAT_BROKER_REASONING_EFFORT: broker }
   const before = Object.fromEntries(Object.keys(names).map((k) => [k, process.env[k]]))
   for (const [k, v] of Object.entries(names)) {
     if (v == null) delete process.env[k]
