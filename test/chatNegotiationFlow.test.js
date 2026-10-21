@@ -7,6 +7,24 @@ import { makeFakeBrokerRepo, fakePosting, FAKE_IDS } from './helpers/fakeBrokerR
 const carrier = { name: 'Keystone Line Haul', mcNumber: 'MC-741309', email: null }
 const ids = { conversationId: FAKE_IDS.conversation, userId: FAKE_IDS.user }
 
+test('a regenerated answer logs the prompt and reference context actually sent on its final attempt', async () => {
+  const fake = makeFakeBrokerRepo({ posting: fakePosting() })
+  const sent = []
+  const logs = []
+  const deps = { repo: fake.repo, getCarrier: async () => carrier,
+    findById: async () => null, assertCanSend: async () => {}, chatConfigFor: () => ({ model: 'fake' }),
+    logTurn: async (row) => logs.push(row), chatText: async ({ messages }) => {
+      sent.push(messages)
+      return sent.length === 1 ? 'Please provide your MC number.' : 'Hey! Still got this load.'
+    } }
+  await sendMessage({ ...ids, text: 'wassap brother' }, { deps })
+  assert.equal(sent.length, 2)
+  assert.notEqual(sent[0][0].content, sent[1][0].content)
+  assert.equal(logs[0][6], sent[1][0].content)
+  assert.deepEqual(JSON.parse(logs[0][7]), [{ role: 'dispatcher', content: sent[1][1].content }])
+  assert.equal(logs[0][12], false)
+})
+
 test('old MC-spam history cannot prescribe the next reply or override the authorized counter', async () => {
   const load = fakePosting({ id: '4cbdd03f-96f8-4e20-b2f4-14557092473a', originCity: 'Toledo', originState: 'OH',
     destinationCity: 'Yakima', destinationState: 'WA', rateUsd: 8153, distanceMi: 2180, weightLbs: 26200 })
@@ -24,11 +42,11 @@ test('old MC-spam history cannot prescribe the next reply or override the author
     chatConfigFor: () => ({ model: 'fake' }), logTurn: async (row) => logs.push(row),
     chatText: async ({ messages }) => {
       assert.equal(messages.at(-1).content, 'Come on, can you do $8,700 all-in?')
-      assert.equal(messages.at(-2).role, 'system')
-      assert.match(messages.at(-2).content, /requested price \$8,700/)
-      assert.match(messages.at(-2).content, /Do not ask for MC, company, email or booking details/)
-      assert.match(messages.at(-2).content, /warmth/)
-      assert.ok(messages.some((m) => m.role === 'assistant' && m.content === originalHistory[0].content))
+      assert.equal(messages.at(-2).role, 'user')
+      assert.match(messages[0].content, /requested price \$8,700/)
+      assert.match(messages[0].content, /Do not ask for MC, company, email/)
+      assert.match(messages[0].content, /warmth/)
+      assert.ok(!messages.some((m) => m.role === 'assistant'))
       const initial = messages[0].content
       assert.doesNotMatch(initial, /Still missing before you can book|Ask ONE missing|absolute ceiling|first time they have asked|Convey this decision in your own character/)
       assert.ok(!messages.some((m) => m.role === 'system' && m.content.includes('I can offer $8,153 all-in. Does that work for you?')))
@@ -47,6 +65,7 @@ test('old MC-spam history cannot prescribe the next reply or override the author
   assert.deepEqual(fake.state.messages.slice(0, originalHistory.length).map(({ deliverAt, ...m }) => m),
     originalHistory.map(({ deliverAt, ...m }) => m))
   assert.ok(logs.every((row) => row[12] === false && row[11] === null))
+  assert.ok(logs.every((row) => !row[7].includes('May I have your MC number?')))
 })
 
 test('live Toledo transcript counters without identity spam, agreement or documents', async () => {
@@ -79,9 +98,8 @@ test('live Toledo transcript counters without identity spam, agreement or docume
   assert.equal(fake.state.conversation.ratePushCount, 2)
   assert.equal(fake.state.conversation.brokerOfferUsd, 8353)
   assert.equal(prompts.length, 10, 'each adversarial identity demand is regenerated once before the safe answer')
-  assert.ok(prompts.every((prompt) => prompt.includes('This is not a booking turn.')))
-  assert.ok(prompts[0].includes('Return a greeting with a short greeting'))
-  assert.ok(prompts[0].includes('Formal, precise, courteous.'))
+  assert.ok(prompts.every((prompt) => prompt.includes('This is conversation or bargaining.')))
+  assert.ok(prompts[0].includes('Return their greeting warmly'))
 })
 
 function setup() {

@@ -19,23 +19,18 @@ import { stripSpeakerLabel } from '../../lib/speakerLabel.js'
 import { getCarrier, carrierEmail } from '../carrier/carrier.repository.js'
 import { findById } from '../auth/users.repository.js'
 import { negotiate } from './negotiation.js'
+import { buildBrokerContext } from './brokerContext.js'
 import * as repo from './brokerChat.repository.js'
 import { talkFacts } from '../../constants/freightTerms.js'
 import { replyDelaySec, rateConAmount } from './replyTiming.js'
 import { bookPosting } from '../loadBoard/loadBoard.service.js'
 import {
-  buildBrokerSystemPrompt,
   buildMessages,
   FALLBACK_REPLY,
 } from './brokerChat.prompt.js'
 
 // Which version of the prompt builder answered (chat_turn_log, 056).
-const PROMPT_VERSION = promptVersionOf(fileURLToPath(new URL('./brokerChat.prompt.js', import.meta.url)))
-
-// Only the last N turns go to the model. The context window is not the
-// constraint (the free models carry 250K+); a broker who still remembers a
-// throwaway line from forty messages ago does not read like a person.
-const HISTORY_TURNS = 20
+const PROMPT_VERSION = `${promptVersionOf(fileURLToPath(new URL('./brokerChat.prompt.js', import.meta.url)))}:${promptVersionOf(fileURLToPath(new URL('./brokerContext.js', import.meta.url)))}`
 
 // A conversation with a deal on it: the broker really has a booking here, so
 // "already booked" from the dispatcher is not a claim to deny.
@@ -156,11 +151,10 @@ export async function sendMessage({ conversationId, userId, text }, { deps = DEF
   const turnConversation = reserved.conversation
 
   const thread = await deps.repo.listMessages(conversationId)
-  const history = thread.slice(-HISTORY_TURNS - 1, -1)
   const carrier = await deps.getCarrier()
   // The dispatcher's own words so far, this one included. Read by code for
-  // market claims and rate pushes (rateTalk.js). History is capped at
-  // HISTORY_TURNS, so a very old push can fall out of the count.
+  // market claims and rate pushes (rateTalk.js). Semantic memory below
+  // reads the whole thread rather than dropping early caller facts.
   const said = dispatcherTexts(thread)
   // One clock for the prompt and for the check below: the verdict on the
   // reply must be the one the prompt's truck block was written from.
@@ -181,12 +175,14 @@ export async function sendMessage({ conversationId, userId, text }, { deps = DEF
     offerVisible: brokerSaid.some((line) => line.replaceAll(',', '').includes(String(turnConversation.brokerOfferUsd ?? posting.rateUsd))),
   })
   const paper = { status: decision.state.agreed === null ? 'open' : 'agreed', delivered: delivered && !decision.invalidatePaper, stage: decision.state.stage }
-  const systemPrompt = buildBrokerSystemPrompt({
+  // Build one semantic context for both attempts and log exactly that context.
+  // Raw assistant history used to teach the model to repeat old MC mistakes.
+  const { systemPrompt, history } = buildBrokerContext({
     carrier,
     broker: { name: posting.name, contactName: posting.contactName, persona: posting.persona },
     posting,
     now,
-    talk: talkFacts(said, posting.equipmentType),
+    thread,
     said,
     paper,
     booking,
@@ -207,6 +203,7 @@ export async function sendMessage({ conversationId, userId, text }, { deps = DEF
   // The model that actually answered, which is the fallback when the
   // primary was throttled; the turn log records that one.
   let answeredModel = config.model
+  let answeredSystemPrompt = systemPrompt
   const onModel = (model) => { answeredModel = model }
   // What each request came to (060): status, 429 reason, tokens. Numbered
   // across the whole turn, the regeneration included.
@@ -246,9 +243,10 @@ export async function sendMessage({ conversationId, userId, text }, { deps = DEF
     if (why) {
       console.warn(`[brokerChat] retrying — reply ${why}`)
       regenerated = why
+      answeredSystemPrompt = brokerRetryPrompt(systemPrompt, problem)
       reply = clean(await deps.chatText({
         messages: buildMessages({
-          systemPrompt: brokerRetryPrompt(systemPrompt, problem),
+          systemPrompt: answeredSystemPrompt,
           history,
           newMessage: text,
           negotiation: decision,
@@ -295,7 +293,7 @@ export async function sendMessage({ conversationId, userId, text }, { deps = DEF
     // above: never replaces the dispatcher's error, never vanishes.
     await deps.logTurn(turnRow({
       chat: 'broker', conversationId, dispatcherMessageId: dispatcherMessage.id, userId,
-      model: answeredModel, promptVersion: PROMPT_VERSION, systemPrompt, history, text,
+      model: answeredModel, promptVersion: PROMPT_VERSION, systemPrompt: answeredSystemPrompt, history, text,
       imageCount: 0, reply, regeneratedBecause: regenerated,
       fellBack: usedFallback, error: failure, providerRequests: spent,
       attempts, onTheRoad: false,

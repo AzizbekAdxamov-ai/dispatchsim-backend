@@ -18,6 +18,8 @@ import { driverReplyProblem, driverRetryPrompt } from '../src/modules/driverChat
 import { serviceReply } from '../scripts/serviceReply.js'
 import { CHAT_REPLY_MAX_CHARS } from '../src/constants/chatBudget.js'
 import { clockDayTime } from '../src/constants/appClock.js'
+import { sendMessage } from '../src/modules/brokerChat/brokerChat.service.js'
+import { makeFakeBrokerRepo, fakePosting, FAKE_IDS } from './helpers/fakeBrokerRepo.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const read = (...p) => readFileSync(join(here, '..', ...p), 'utf8').replace(/\r\n/g, '\n')
@@ -67,7 +69,7 @@ test('the services regenerate on an unreachable pickup through the one existing 
   assert.match(broker, /truckFacts\(\{ texts: said, posting, now \}\)/)
   assert.match(broker, /const checkFacts = \{\s*truck/)
   assert.match(broker, /brokerReplyProblem\(reply, checkFacts\)/)
-  assert.match(broker, /buildBrokerSystemPrompt\(\{[\s\S]*?\bnow\b/)
+  assert.match(broker, /buildBrokerContext\(\{[\s\S]*?\bnow\b/)
   assert.match(broker, /const why = problem\?\.why \?\? null/)
   for (const src of [driver, broker]) {
     assert.equal(src.match(/await (?:deps\.)?chatText\(\{/g).length, 2)
@@ -76,6 +78,33 @@ test('the services regenerate on an unreachable pickup through the one existing 
   assert.match(driverCheck, /ignoresUnreachable\(reply, offer\)/)
   const brokerCheck = read('src', 'modules', 'brokerChat', 'replyProblem.js')
   assert.match(brokerCheck, /ignoresUnreachable\(reply, truck, \{ broker: true \}\)/)
+})
+
+test('broker compact context and retry share the same computed unreachable pickup facts', async () => {
+  const posting = fakePosting({ originCity: 'Seattle', originState: 'WA',
+    pickupAt: new Date(Date.now() + 3600e3).toISOString() })
+  const fake = makeFakeBrokerRepo({ posting, lines: ['Our truck is in Los Angeles, CA, with a 53-foot dry van.'] })
+  const attempts = []
+  const logs = []
+  const deps = { repo: fake.repo, getCarrier: async () => null,
+    findById: async () => null, assertCanSend: async () => {},
+    chatConfigFor: () => ({ model: 'fake' }), logTurn: async (row) => logs.push(row),
+    chatText: async ({ messages }) => {
+      const reference = JSON.parse(messages[1].content.split('\n').slice(1).join('\n'))
+      attempts.push({ messages, reference })
+      return attempts.length === 1 ? 'What equipment are you running?'
+        : "Your truck can't make that pickup from Los Angeles. We need a closer truck."
+    } }
+  await sendMessage({ conversationId: FAKE_IDS.conversation, userId: FAKE_IDS.user,
+    text: 'Can this truck make pickup?' }, { deps })
+  assert.equal(attempts.length, 2)
+  assert.equal(attempts[0].reference.truckReachability.makesIt, false)
+  assert.deepEqual(attempts[0].reference.truckReachability, attempts[1].reference.truckReachability)
+  assert.equal(attempts[0].messages[1].content, attempts[1].messages[1].content)
+  assert.ok(attempts[1].messages[0].content.startsWith(attempts[0].messages[0].content))
+  assert.match(attempts[1].messages[0].content, /gets there after your pickup/)
+  assert.equal(logs[0][6], attempts[1].messages[0].content)
+  assert.equal(logs[0][12], false)
 })
 
 // Kills: the shared check dropping one of its four problems, reporting them

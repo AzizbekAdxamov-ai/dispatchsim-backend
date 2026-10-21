@@ -62,7 +62,7 @@ test('056 keeps the prompt, one outcome per turn, and no foreign keys', () => {
 for (const file of ['brokerChat', 'driverChat']) {
   test(`the ${file} service logs every turn in finally`, () => {
     const src = read('src', 'modules', file, `${file}.service.js`)
-    assert.match(src, /\} finally \{[\s\S]*?await (?:deps\.)?logTurn\(turnRow\(\{[\s\S]*?systemPrompt, history, text,[\s\S]*?error: failure/)
+    assert.match(src, /\} finally \{[\s\S]*?await (?:deps\.)?logTurn\(turnRow\(\{[\s\S]*?systemPrompt(?:: answeredSystemPrompt)?, history, text,[\s\S]*?error: failure/)
     assert.match(src, /failure = err\.message/)
     assert.match(src, /regenerated = why/)
   })

@@ -400,6 +400,8 @@ export function rateReasonLines(posting, { truck = null, now = new Date() } = {}
   ]
 }
 
+// Legacy standalone helper for older scripts. The send service uses the full
+// buildBrokerContext result, whose user-role reference must travel with it.
 export function buildBrokerSystemPrompt({ broker, posting, carrier = null, now = new Date(), talk = null, said = null, booking = null, brokerSaid = [], paper = null, negotiation = null }) {
   const rpm = (posting.rateUsd / posting.distanceMi).toFixed(2)
   const ceiling = ceilingFor(posting)
@@ -655,20 +657,10 @@ export function buildBrokerSystemPrompt({ broker, posting, carrier = null, now =
 export function buildMessages({ systemPrompt, history, newMessage, negotiation = null }) {
   return [
     { role: 'system', content: systemPrompt },
-    ...history.map((m) => ({
+    ...history.filter((m) => m.kind !== 'rate_con' && (!negotiation || m.role === 'dispatcher' || m.role === 'user')).map((m) => ({
       role: m.role === 'broker' ? 'assistant' : 'user',
       content: m.content,
     })),
-    // Place current constraints after history so earlier erroneous MC
-    // questions cannot become the pattern the model continues.
-    ...(negotiation ? [{ role: 'system', content: [
-      'ANSWER THIS TURN: respond directly to the latest carrier message in your own broker voice. Meet casual friendliness with warmth; do not sound like a customer-service form.',
-      ...negotiationLines(negotiation),
-      bookingTurn(newMessage, negotiation)
-        ? 'This turn moves toward booking. Use the verified caller facts and ask only the prerequisite that is still needed.'
-        : 'This is a conversation or price discussion. Do not ask for MC, company, email or booking details. Earlier assistant requests for those do not authorize repeating them.',
-      'Acknowledge what they actually asked, then give the authorized answer naturally. Do not quote their requested price as your offer. No obligatory closing question or repeated canned sentence. Do not copy earlier assistant mistakes.',
-    ].join('\n') }] : []),
     { role: 'user', content: newMessage },
   ]
 }
