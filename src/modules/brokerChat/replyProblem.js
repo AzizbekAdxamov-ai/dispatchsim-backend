@@ -57,9 +57,18 @@ export function brokerReplyProblem(reply, {
   if (trippedBannedWord(reply) !== null) return { why: 'used a forbidden word', hint: '', unusable: true }
   if (leaksReasoning(reply)) return { why: 'showed your own reasoning instead of speaking as the broker', hint: '', unusable: true }
   const rateProblem = negotiationReplyProblem(reply, negotiation)
-  if (rateProblem) return {
-    why: rateProblem, hint: ' Follow AUTHORITATIVE RATE DECISION exactly; change only the voice.',
-    unusable: true, safeReply: negotiation.line ?? `My offer is $${negotiation.state.offer.toLocaleString('en-US')} all-in.`,
+  if (rateProblem) {
+    // A figure-less confirmation is fixed by spelling the number out; every
+    // other rate miss is fixed by rebuilding the sentence from the decision.
+    const hint = rateProblem === 'omitted the agreed rate from the confirmation'
+      ? ` Say the agreed $${negotiation.state.agreed.toLocaleString('en-US')} all-in in the confirmation sentence.`
+      : rateProblem === 'claimed a permanent final rate while authorized bargaining room remains'
+        ? ' State the current authorized offer without calling it final, absolute best, or denying all future movement. Do not raise the amount yourself.'
+      : ' Follow AUTHORITATIVE RATE DECISION exactly; change only the voice.'
+    return {
+      why: rateProblem, hint,
+      unusable: true, safeReply: negotiation.line ?? `My offer is $${negotiation.state.offer.toLocaleString('en-US')} all-in.`,
+    }
   }
   const paperProblem = paperClaimProblem(reply, paper)
   if (paperProblem) {

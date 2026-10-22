@@ -30,22 +30,25 @@ export function paperNextLine(paper) {
 // Match assertions, not questions, negations, or a future/conditional step.
 // Keeping the check clause-local lets a denial coexist with a later false claim.
 export function paperClaimProblem(reply, paper) {
-  const clauses = asciiPunct(reply).split(/(?<=[.!?;])\s+|\b(?:but|however|and)\b/i)
+  const clauses = asciiPunct(reply).split(/(?<=[.!?;])\s+|\b(?:but|however|and)\b|,\s*(?=(?:i|we|the paperwork|the rate confirmation)\b)/i)
   for (const clause of clauses) {
     if (/\?/.test(clause)) continue
-    const document = /\b(?:rate\s*(?:confirmation|con)|ratecon|rc|document|paper)\b/i.test(clause)
-    const claim = /\b(?:sent|attached|issued|emailed|e-mailed|delivered|generated|sending|emailing|available|ready|here in (?:this|the) thread)\b/i.exec(clause)
+    const document = /\b(?:rate\s*(?:confirmation|con)|ratecon|rc|documents?|paper|paperwork)\b/i.test(clause)
+    const claim = /\b(?:(?:i|we)(?:'ll| will| can)?\s+email|send|sent|attach|attached|issued|emailed|e-mailed|delivered|generated|sending|emailing|heading|on (?:its|the) way|available|ready|here in (?:this|the) thread)\b/i.exec(clause)
     if (!claim) continue
     // Only words BEFORE the assertion qualify it. "Sent ... you can review"
     // is already a completed claim, not a conditional one.
     const before = clause.slice(0, claim.index)
     if (/\b(?:not|never|no|haven't|hasn't|didn't|can't|cannot|don't|won't|isn't)\b/i.test(before)) continue
+    // Future promises are just as false as completed delivery: this app only
+    // records a contact address and delivers the document in the thread.
+    const outgoing = /\b(?:send|sent|sending|heading|on (?:its|the) way|delivered)\b/i.test(clause)
+    // An email address listed as the contact is not a delivery destination.
+    const emailDestination = /\b(?:to|into|via|by)\s+(?:(?:your|their|the|an?)\s+)?(?:e-?mail\b|inbox\b|gmail\b|[\w.+-]+@[\w.-]+\.[a-z]{2,})/i.test(clause)
+    const emailVerb = /\b(?:emailed|e-mailed|emailing)\b|\b(?:i|we)(?:'ll| will| can| would)?\s+email\b/i.test(clause)
+    if (emailVerb || (outgoing && emailDestination)) return 'claimed external email delivery of the rate confirmation'
     if (/\b(?:if|once|when|after|until|will|would|can|could)\b/i.test(before)) continue
-    const email = /\b(?:email(?:ed)?|e-mail(?:ed)?|inbox)\b|[\w.+-]+@[\w.-]+\.[a-z]{2,}/i.test(clause)
-    const outgoingEmail = /\b(?:i|we)(?:'ve| have)?\s+(?:just\s+)?(?:sent|emailed|e-mailed)\b|^\s*(?:sent|emailed)\s+(?:it\s+)?to\b/i.test(clause)
-    if (outgoingEmail && email) return 'claimed external email delivery of the rate confirmation'
     if (document) {
-      if (email) return 'claimed external email delivery of the rate confirmation'
       if (paper && !paper.delivered) return 'claimed a rate confirmation that has not arrived'
     }
   }

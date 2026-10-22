@@ -192,7 +192,7 @@ export function marketBlock(posting, now = new Date(), { authoritativeRate = fal
 export function talkBlock(talk) {
   if (!talk) return []
   return [
-    'HOW THIS CARRIER TALKS (counted from this chat so far):',
+    'HOW THIS CARRIER TALKS (from this chat so far):',
     talk.used.length > 0
       ? `  Trade words they have used: ${talk.used.join(', ')}.`
       : '  No trade words yet -- plain language only.',
@@ -247,12 +247,12 @@ export function rateTalkBlock({ posting, said = null, negotiation = null }) {
   const pushes = negotiation ? null : ratePushes(said, posting)
   if (pushes?.count === 1 && pushes.current) {
     out.push(
-      `ON THE RATE SO FAR (counted from this chat): this is the first time they have asked for more than your $${posting.rateUsd}. Hold at $${posting.rateUsd} this time, whatever reason they give -- reload, deadhead, weight -- unless they are walking away; then the walk-away rule applies. No new figure. Give them your reason the number is what it is.`,
+      `ON THE RATE SO FAR (from this chat so far): this is the first time they have asked for more than your $${posting.rateUsd}. Hold at $${posting.rateUsd} this time, whatever reason they give -- reload, deadhead, weight -- unless they are walking away; then the walk-away rule applies. No new figure. Give them your reason the number is what it is.`,
       '',
     )
   } else if (pushes?.count >= 2) {
     out.push(
-      `ON THE RATE SO FAR (counted from this chat): they have asked for more ${pushes.count} times. Follow AUTHORITATIVE RATE DECISION for any counter; ordinary bargaining may earn one small move even without an operational reason.`,
+      `ON THE RATE SO FAR (from this chat so far): they have asked for more ${pushes.count} times. Follow AUTHORITATIVE RATE DECISION for any counter; ordinary bargaining may earn one small move even without an operational reason.`,
       '',
     )
   }
@@ -268,7 +268,7 @@ export function truckBlock({ posting, said = null, now = new Date() }) {
   if (!f) return []
   const place = `${f.city}, ${f.state}`
   const pickup = f.pickupAt ? clockDateTimeDay(f.pickupAt.toISOString(), now.toISOString()) : null
-  const lines = ['WHERE THEY SAID THEIR TRUCK IS (worked out from the miles):']
+  const lines = ['WHERE THEY SAID THEIR TRUCK IS (from the miles they told you):']
   if (f.miles === 0) {
     lines.push(`  They said the truck is in ${place}, which is your pickup city.`)
   } else {
@@ -334,7 +334,7 @@ export function callerBlock(facts, carrier = null, { mcAsked = false, towardBook
   if (facts.truckNumber) told.push(`truck number: ${facts.truckNumber}`)
   if (facts.email) told.push(`email: ${facts.email}`)
 
-  const lines = ['WHO IS CALLING (worked out by code from what they typed; you cannot look anything up yourself):']
+  const lines = ['WHO IS CALLING (what they have told you in this chat; you cannot look anything up yourself):']
   if (!towardBooking) lines.push('  This is not a booking turn. Do not ask for company or MC now, even if missing or wrong. Greet them or answer their availability, rate or operational question first; keep talking price.')
   lines.push(told.length ? `  They have told you: ${told.join(' · ')}.` : '  They have told you nothing about themselves yet.')
   // A booking checklist attracted the model back to MC collection even
@@ -502,6 +502,9 @@ export function buildBrokerSystemPrompt({ broker, posting, carrier = null, now =
     '  weather, traffic or family anecdotes to make a joke work.',
     '- React to what they just said. Do not volunteer',
     '  everything you know.',
+    '- If they are rude, insulting or just being difficult, answer the way a',
+    '  person on the desk would: one dry line, nothing servile, no',
+    '  customer-service apology, then back to the load.',
     '- Then, if you need something, ask ONE thing: whatever matters most for',
     '  THIS load at THIS moment. Not a list, and not the same questions in the',
     '  same order every call. What you might need, depending on the load: the',
@@ -675,7 +678,7 @@ export function trippedBannedWord(text) {
 }
 
 export const FALLBACK_REPLY =
-  "Give me a minute on that one — what equipment are you running for this?"
+  "Hm, that one lost me — say it once more?"
 
 // Chain-of-thought leaking into the reply is fatal for a persona: a broker
 // who narrates their own reasoning is obviously a machine. Observed live on

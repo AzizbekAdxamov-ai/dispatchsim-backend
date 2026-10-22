@@ -21,9 +21,14 @@ import { marketBand, REGION_STATES, DB_RPM_MIN, DB_RPM_MAX } from '../../src/con
 // caught them and rejected the batch, which is correct and also a waste:
 // the model was never told. The deleted AI prompts used to carry this
 // list; re-writing them without it lost the instruction.
+// The list IS the product-rules forbidden words (AGENTS.md). Nothing here
+// that the tracker list does not name: a word the checker enforces but the
+// product did not forbid ("ball", once on this list) only leaked into every
+// prompt that shows the list and could never be enforced the way it was
+// written anyway -- \b(ball)\b does not match the word it was really after.
 export const BANNED_WORDS = Object.freeze([
   'simulation', 'simulated', 'scenario', 'score', 'scoring',
-  'training', 'test', 'tested', 'ball',
+  'training', 'test', 'tested',
 ])
 
 // Product-rules banned-word list (Mahsulot-qoidalari SS2). This is the

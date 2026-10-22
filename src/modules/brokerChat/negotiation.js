@@ -2,13 +2,13 @@
 import { asciiPunct } from '../../lib/plainText.js'
 import { ceilingFor } from './ratePolicy.js'
 import { rateReasons, REASON_WORDS } from './rateTalk.js'
-import { saysBooked } from './bookingTalk.js'
+import { saysBooked, mcQuestion } from './bookingTalk.js'
 
 const EMAIL = /\b[a-z0-9._%+-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}\b/gi
 const MONEY = '(?:\\$\\s*)?(\\d{1,3}(?:,\\d{3})+|\\d{3,5})(?:\\.00)?(?:\\s*\\$)?'
 const OFFER = new RegExp(`\\b(?:need|want|asking for|(?:can|could) (?:you|u)(?: meet (?:me|us) at| do)?|how about|what about|offer|pay|take (?:it|this|the load) for|run (?:it|this) for|do (?:it|this) for)\\s+${MONEY}(?![\\d.,])`, 'gi')
 const ACCEPT_AT = new RegExp(`\\b(?:accept|agree (?:on|to)|take (?:it|this|the load) (?:at|for)|book (?:it|this|the load) (?:at|for)|works? (?:at|for))\\s+${MONEY}(?![\\d.,])`, 'gi')
-const AMOUNT_FIRST = new RegExp(`^\\s*${MONEY}\\s*(?:all[- ]?in\\s*)?(?:works(?: for (?:me|us))?|is (?:fine|good)|(?:is )?accepted|(?:is )?agreed)[.!]?\\s*$`, 'i')
+const AMOUNT_FIRST = new RegExp(`^\\s*(?:(?:aight|alright|all right|okay|ok|yeah|yes)[, ]+)?${MONEY}\\s*(?:all[- ]?in\\s*)?(?:works(?: for (?:me|us))?|is (?:fine|good)|(?:is )?accepted|(?:is )?agreed)(?:[, ]+(?:bro(?:ther)?|man))?(?:[, ]+let'?s run it)?[.!]?\\s*$`, 'i')
 const ACCEPT = /^(?:(?:ok(?:ay)?|yes|great|thanks)[,!. ]+)*(?:i(?:'ll| will)|we(?:'ll| will)) take (?:it|this|the load)[.!]?\s*$|^(?:(?:ok(?:ay)?|yes)[,!. ]+)*(?:deal|agreed|book it|let's do it|(?:that(?: rate)?|the rate|your rate|your offer) works(?: for (?:me|us))?|sounds good|i accept(?: your (?:rate|offer))?)[.!]?\s*$/i
 const HOLD = /\b(?:hold (?:off|up)|on hold|not ready|don't (?:book|send|issue|confirm)|do not (?:book|send|issue|confirm)|not (?:book|confirm|accept)(?:ing|ed)? yet|before (?:we|i) (?:book|confirm)|let me (?:check|confirm|verify)|gotta check (?:with )?(?:my|our|the) driver|wait for (?:my|our) confirmation|cancel (?:it|this|the load)|release (?:it|this|the load))\b/i
 const WALK = /\b(?:i(?:'ll| will) pass|we(?:'ll| will) pass|pass on (?:it|this)|walk away|find another (?:truck|carrier))\b/i
@@ -55,6 +55,7 @@ function authorizedRecipient(src) {
     const instruction = /\b(?:my|our) (?:(?:company|carrier|contact|dispatch) )?e-?mail\s*(?:is|:)?\s+EMAILTOKEN\d+/i.test(clause)
       || /\b(?:send|email)\b[^.!?]{0,65}\bto\s+EMAILTOKEN\d+/i.test(clause)
       || /\b(?:use|recipient(?: is|:)?)\s+EMAILTOKEN\d+/i.test(clause)
+      || /\bput\s+(?:(?:it|the (?:rate confirmation|rate con|ratecon|paperwork))\s+(?:on|to)\s+EMAILTOKEN\d+|EMAILTOKEN\d+\s+on\s+(?:the\s+)?(?:rate confirmation|rate con|ratecon|paperwork))\b/i.test(clause)
     const question = /\?/.test(clause) && !/\b(?:send|email)\b[^.!?]{0,65}\bto\s+EMAILTOKEN\d+/i.test(clause)
     if ((emailOnly || instruction) && !question) authorized.push(addresses[Number(tokens[0][1])])
   }
@@ -65,7 +66,7 @@ function authorizedRecipient(src) {
 export function chatIntent(raw) {
   const src = intentText(raw)
   // Quoted or hypothetical hold examples do not withdraw a real agreement.
-  const activeClauses = src.replace(QUOTED, ' ').split(/[;!?\n]|\.(?!\d)/).filter((clause) => !HYPOTHETICAL.test(clause))
+  const activeClauses = src.replace(QUOTED, ' ').replace(EMAIL, ' ').split(/[;!?\n]|\.(?!\d)/).filter((clause) => !HYPOTHETICAL.test(clause))
   if (activeClauses.some((clause) => {
     const matches = [...clause.matchAll(new RegExp(HOLD.source, 'gi')),
       ...clause.matchAll(/\b(?:reject|decline) (?:your |the )?(?:rate|offer|load)\b/gi)]
@@ -208,7 +209,9 @@ export function negotiate({ conversation, posting, text, booking, truck, effecti
   } else if (intent.kind === 'email' && state.agreed === null) {
     line = `Before I prepare the rate confirmation, can you confirm ${money(state.offer)} all-in?`
   }
-  return { state, intent, changed, issuePaper, invalidatePaper, bookingRequested, line }
+  return { state, intent, changed, issuePaper, invalidatePaper, bookingRequested, line,
+    // Voice must not turn a temporary hold into an absolute economic limit.
+    hasRateRoom: state.offer < ceilingFor(posting), requiresMc: bookingRequested && !verified }
 }
 
 export function negotiationLines(decision) {
@@ -219,12 +222,14 @@ export function negotiationLines(decision) {
     `  Carrier intent: ${decision.intent.kind}${decision.intent.rateUsd ? `; requested price ${money(decision.intent.rateUsd)}` : ''}.`,
     `  Booking requested: ${decision.bookingRequested ? 'yes' : 'no'}. Document authorized this turn: ${decision.issuePaper ? 'yes' : 'no'}.`,
     ...(decision.state.agreed === null ? ['  No handshake exists; a requested price is not an accepted deal.'] : []),
+    ...(decision.hasRateRoom && decision.state.agreed === null ? ['  This is the current offer, not a permanent final or absolute best price. Do not claim there is no room to move.'] : []),
     ...(['offer', 'push', 'accept_amount'].includes(decision.intent.kind) && !decision.bookingRequested
       ? ['  Answer their bargaining request with the current authorized offer; do not present their requested price as accepted.'] : []),
     ...(decision.state.stage === 'awaiting_email' ? ['  Rate is agreed. Request the recipient email unless they have already supplied authorization.'] : []),
     ...(decision.state.stage === 'held' ? ['  Booking is on hold; do not request email or promise a document.'] : []),
     ...(decision.issuePaper ? ['  The authorized document will appear in this chat shortly for review and signature; do not claim an email was sent.'] : []),
     ...(decision.bookingRequested && decision.state.agreed === null ? ['  The rate cannot be confirmed yet. Follow the verified caller and equipment facts for the missing prerequisite.'] : []),
+    ...(decision.requiresMc ? ['  Their rate acceptance is understood, but the MC is missing or unverified: request their correct MC now. Do not say we are set, locked in or sending paper.'] : []),
     '  These are facts, not a script. Use your own words; never change the amount, acceptance, recipient authorization or document state.',
     '  Do not agree to another number or create a handshake through prose. Answer any direct operational question first.', '']
 }
@@ -232,6 +237,13 @@ export function negotiationLines(decision) {
 export function negotiationReplyProblem(reply, decision) {
   if (!decision) return null
   const text = asciiPunct(reply)
+  if (decision.hasRateRoom && decision.state.agreed === null) {
+    const claims = text.split(/(?<=[.!?;])\s+|\b(?:but|however)\b/i)
+    if (claims.some((clause) => !clause.includes('?') && !/\b(?:you said|your|not (?:my|a|the|our)|isn't my|is not my|haven't called|didn't say|never said|right now|at the moment|for now)\b/i.test(clause)
+      && /\b(?:final (?:rate|offer|price)|(?:my |the |our )?(?:absolute )?best (?:rate|offer|price)|best (?:i|we) can (?:do|pay|offer)|(?:can(?:not|'t)|won't|will not|not) (?:go|mov(?:e|ing)|come|pay)(?: any)? (?:higher|above|up)|(?:most|highest|top) (?:i|we) can (?:do|pay|offer))\b/i.test(clause))) {
+      return 'claimed a permanent final rate while authorized bargaining room remains'
+    }
+  }
   const allowed = [decision.state.offer, decision.state.agreed].filter((n) => n !== null)
   // Classify individual amounts within their own clause. A carrier's ask
   // is not our offer, and a later sentence cannot lend its rate words to it.
@@ -271,11 +283,15 @@ export function negotiationReplyProblem(reply, decision) {
   if (decision.state.agreed === null) {
     const assertions = text.replace(EMAIL, ' ').split(/(?<=[.!?;])\s+|\b(?:but|however)\b/i)
       .filter((clause) => !NEGATIVE.test(clause) && !/\bno\b/i.test(clause) && !HYPOTHETICAL.test(clause) && !clause.includes('?'))
-    const accepts = /\b(?:deal|done|agreed|confirmed|it'?s yours|you'?re (?:all )?set|i accept (?:your|the) (?:offer|rate))\b/i
+    const accepts = /\b(?:deal|done|agreed|confirmed|it'?s yours|(?:you|we)(?:'re| are) (?:all )?set|(?:we(?:'re| are)|we have|we've|i have|i've)(?: (?:it|this|the rate))? locked in|locked (?:in|at)\s+(?:at\s+)?\$?\d|i accept (?:your|the) (?:offer|rate))\b/i
     if (saysBooked(text) || assertions.some((clause) => accepts.test(clause))) return 'invented an agreement without dispatcher acceptance'
   }
   if (decision.state.stage === 'held' && /\b(?:send (?:me|your)|give me|what(?:'s| is))[^.!?]{0,25}\be-?mail\b/i.test(text)) return 'asked for email despite a booking hold'
   if (decision.line && ['awaiting_email', 'paper_pending'].includes(decision.state.stage) && decision.intent.kind !== 'talk' && !new RegExp(`\\b${decision.state.agreed}\\b`).test(text.replaceAll(',', ''))) return 'omitted the agreed rate from the confirmation'
-  if (decision.line && decision.state.stage === 'awaiting_email' && !/\b(?:agreed|confirmed|deal|works|can do|okay|ok)\b/i.test(text)) return 'did not convey the confirmed rate decision'
+  if (decision.line && decision.state.stage === 'awaiting_email' && !/\b(?:agreed|confirmed|locked (?:in|at)|deal|works|can do|okay|ok|set)\b/i.test(text)) return 'did not convey the confirmed rate decision'
+  // Only a server-recognized settlement attempt requires identity collection.
+  if (decision.requiresMc && !mcQuestion(text)
+    && !/\b(?:send|give|provide|share)\s+(?:me\s+)?(?:(?:your|the|correct)\s+)?mc\b/i.test(text)
+    && !/\b(?:if|once|when|after)\s+your\s+mc\s+checks out\b/i.test(text)) return 'did not request the MC required before confirming the rate'
   return null
 }

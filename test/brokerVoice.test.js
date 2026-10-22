@@ -248,3 +248,31 @@ test('062 takes "correct?" out of Marcus on both paths and is re-runnable', () =
   }
   assert.equal(run(after061), run(marcus052))
 })
+
+// Kills: 065 whose FROM text drifts from 052 by one character (replace()
+// silently changes nothing and the flat "No." survives), a wrong broker,
+// a guard that re-matches after the fix (not re-runnable), and the new
+// text stating a fact or disobeying the rate rules by ordering a final
+// refusal that ends the conversation.
+test('065 takes the flat "No." out of Ironwood and is re-runnable', () => {
+  const sql = migration('065_ironwood_no_flat_no.sql').replace(/\r\n/g, '\n')
+  const m = /replace\(persona, '((?:[^']|'')+)', '((?:[^']|'')+)'\)/.exec(sql)
+  assert.ok(m, '065 has no replace(persona, FROM, TO)')
+  const from = m[1].replaceAll("''", "'")
+  const to = m[2].replaceAll("''", "'")
+  const ironwood = PERSONAS_052.find((p) => p.name === 'Ironwood Freight Partners').persona.replace(/\r\n/g, '\n')
+  assert.ok(ironwood.includes(from), 'FROM is not in the 052 text of Ironwood')
+  assert.match(sql, /WHERE name = 'Ironwood Freight Partners'/)
+  assert.match(sql, /persona LIKE '%a flat "No\."%'/)
+  const next = ironwood.replace(from, to)
+  assert.doesNotMatch(next, /a flat "No"/i)
+  assert.match(next, /not an explanation|blunt/i)
+  assert.ok(!/final|last offer|never call again|do\s?n['’]t?[a-z ]*call back/i.test(next), 'a refusal that ends the conversation')
+  assert.equal(ironwood.replace(from, to).replace(from, to), next, 'running 065 twice changes nothing')
+  assert.doesNotMatch(next, /paperwork|insurance|W-9|MC number|authority/i)
+  assert.doesNotMatch(next, /\$\d|\d+ ?(mi|miles|days|%)\b|\d+-?foot|dry van|reefer|flatbed/i)
+  const place = new RegExp(`\\b(${[...new Set(CITY_NAMES)].join('|')})\\b`)
+  assert.doesNotMatch(next, place)
+  const others = PERSONAS_052.filter((p) => p.name !== 'Ironwood Freight Partners').map((p) => p.persona)
+  assert.ok(!others.includes(next))
+})
