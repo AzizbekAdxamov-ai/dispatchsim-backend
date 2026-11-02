@@ -287,7 +287,6 @@ async function brokerRun(carrier) {
       config, side: 'broker', systemPrompt,
       messages: (sys) => bp.buildMessages({ systemPrompt: sys, history: [], newMessage: line }),
       clean: (t) => stripSpeakerLabel(t, posting.contactName),
-      ...armRecordFields(config, arm),
       problemOf: (r) => brokerReplyProblem(r, { truck, booking, posting, now, text: line }),
       retryPrompt: brokerRetryPrompt,
       fallback: bp.FALLBACK_REPLY,
@@ -298,6 +297,7 @@ async function brokerRun(carrier) {
     record({
       runId, at: new Date().toISOString(), chat: 'broker', caseId: c.id, style: c.style, terms: c.terms, line, good: c.good,
       model, promptVersion: promptVersion('brokerChat/brokerChat.prompt.js'), reasoningEffort: reasoningEffortOf(config),
+      ...armRecordFields(config, arm),
       data: {
         postingId: posting.id, broker: posting.name, contact: posting.contactName,
         lane: `${posting.originCity}, ${posting.originState} -> ${posting.destinationCity}, ${posting.destinationState}`,
