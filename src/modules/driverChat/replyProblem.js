@@ -14,7 +14,7 @@
 
 import { trippedBannedWord, leaksReasoning } from './driverChat.prompt.js'
 import { tooLongForChat, CHAT_REPLY_MAX_CHARS } from '../../constants/chatBudget.js'
-import { ignoresUnreachable, milesOff, cannotMakeLine, cannotMakeWithoutMiles } from '../../lib/cannotMake.js'
+import { ignoresUnreachable, milesOff, cannotMakeLine, cannotMakeWithoutMiles, saysCannotMake } from '../../lib/cannotMake.js'
 import { refusesWithoutReason } from '../../lib/refusalReason.js'
 import { hosReplyProblem, hosPressureKind } from '../../lib/hosPressure.js'
 import { personaBreak, noWayBack } from '../../lib/personaBreak.js'
@@ -40,6 +40,8 @@ const unreachableLine = (offer, miles) => cannotMakeLine(offer)
 // a clock or a definite pickup verdict; ordinary chat is unaffected.
 function inventedRestEta(reply, text, offer, driver) {
   if (!offer?.restEndUnknown && driver?.dutyStatus !== 'resting') return false
+  // A computed refusal (even a rest ending now cannot reach it) is not an invented ETA.
+  if (offer?.makesIt === false && saysCannotMake(reply)) return false
   const asked = /\b(?:rest\s+(?:end|finish)|(?:end|finish)\s+(?:my|your|the)?\s*rest|eta|arrival|arrive|reach|make\s+(?:it|the\s+pickup)|roll\s+into|(?:be|get)\s+there)\b/i.test(text ?? '')
   if (!asked) return false
   return /\b\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)\b|\b\d{1,2}:\d{2}\b|\b(?:noon|midnight)\b|\b(?:can|cannot|can't|will|won't|could|would|should)\s+(?:\w+\s+){0,2}(?:make\s+(?:it|the\s+pickup)|reach\b|get\s+to\b|be\s+there\b|get\s+there\b)|\b(?:before|after)\s+(?:the\s+)?pickup\b|\b(?:expect|likely|probably|should|will|can|could|would)\b.{0,30}\b(?:tomorrow|tonight|morning|afternoon|evening|dawn|dusk|lunch)\b|\b(?:by|before|after|around)\s+(?:tomorrow\s+)?(?:morning|afternoon|evening|dawn|dusk|lunch)\b|^\s*(?:yes|yeah|yep|sure|I can)\b/i.test(reply)
@@ -129,7 +131,8 @@ export function driverReplyProblem(reply, { offer, text, load = null, driver = n
       why: 'gave an unverified rest end or arrival time',
       hint: ' Your current rest end time is not recorded. Do not give a clock time, legal ETA, or pickup verdict; correct any earlier guess.',
       unusable: true,
-      safeReply: `${miles}I don't have a confirmed end time for this rest, so I can't give you a reliable arrival time yet.`,
+      safeReply: (offer?.makesIt === false ? cannotMakeLine(offer) : null)
+        ?? `${miles}I don't have a confirmed end time for this rest, so I can't give you a reliable arrival time yet.`,
     }
   }
   if (deliveryCommitment(reply, text, offer)) {

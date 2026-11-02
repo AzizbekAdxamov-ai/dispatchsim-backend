@@ -223,6 +223,19 @@ export function offerLines(offer) {
       '  You cannot say yet whether you would make a pickup time, so do not say you can or cannot.',
     ]
   }
+  // Resting, but the pickup is out of reach even if her rest ended right now:
+  // the verdict needs no rest end time, so it is given (ED07).
+  if (offer.restEndUnknown && offer.makesIt === false && offer.earliestAt) {
+    const lines = [
+      ...head,
+      `  Pickup in ${place} is about ${miles} road miles from where you are.`,
+      `  Your current rest end time is not verified, but even if you could start driving right now, driving legally (${DRIVING_LIMIT_HOURS} hours a day, a ${REQUIRED_REST_HOURS}-hour rest between days) the earliest you could be there is ${clockDateTime(offer.earliestAt.toISOString())}.`,
+    ]
+    if (offer.pickupAt) {
+      lines.push(`  The pickup they said is ${clockDateTime(offer.pickupAt.toISOString())} -- you cannot make it. Say so with the miles and ask for a later pickup; do not give a rest end time.`)
+    }
+    return lines
+  }
   // No arrival time without her driving time left: miles only.
   if (!offer.earliestAt) {
     const lines = [...head, `  Pickup in ${place} is about ${miles} road miles from where you are.`]

@@ -21,7 +21,7 @@
 // Pure: text, rows and a clock in, facts out.
 
 import { CITIES, findCity, roadMiles } from '../../../scripts/seed/cities.js'
-import { legalTransitHours } from '../loads/whereabouts.js'
+import { legalTransitHours, exceedsLegalReach } from '../loads/whereabouts.js'
 import { APP_TIMEZONE } from '../../constants/appClock.js'
 import { AVG_HIGHWAY_MPH } from '../../../scripts/seed/facilities.js'
 
@@ -373,8 +373,10 @@ function deliveryForOffer({ list, placeOf, chosen, pickupAt, now }) {
 //               load is priced with); null = the place is not on the list
 //               and no figure is given.
 //   earliestAt  now + legalTransitHours(miles, her driving time left), only
-//               when she is free to start driving now.
-//   makesIt     earliestAt <= pickupAt; null without a pickup time.
+//               when she is free to start driving now. Resting: null, or
+//               (when the pickup is out of reach) the best case from now.
+//   makesIt     earliestAt <= pickupAt; null without a pickup time. Resting:
+//               null, or false when even a rest ending now could not reach.
 //   onLoad      she is on a load: miles are from where it delivers, and
 //               there is no earliestAt / makesIt. A load's eta_at is kept
 //               on a compressed calendar (loads.repository.js) that is not
@@ -413,8 +415,15 @@ export function offerFacts({ driver, load = null, texts, now = new Date() }) {
   if (!from) return { ...base, miles: null, fromCity: null, onLoad: false, earliestAt: null, pickupAt: null, makesIt: null }
   const miles = roadMiles(from, place)
   // While she is resting, HOS remaining does not tell us when her ten ends.
-  // Starting the trip at `now` would invent both a legal ETA and a verdict.
+  // Starting the trip at `now` would invent both a legal ETA and a verdict --
+  // except when the pickup is out of reach even if her rest ended this
+  // minute with a full clock (ED07: 1,982 mi, about 20 hours away). That
+  // verdict does not depend on the unknown rest end, so it is given.
   if (driver.dutyStatus === 'resting') {
+    if (pickupAt && exceedsLegalReach(miles, (pickupAt.getTime() - now.getTime()) / 3600e3)) {
+      return { ...base, miles, fromCity: `${from.city}, ${from.state}`, onLoad: false,
+        earliestAt: new Date(now.getTime() + legalTransitHours(miles) * 3600e3), pickupAt, makesIt: false, restEndUnknown: true }
+    }
     return { ...base, miles, fromCity: `${from.city}, ${from.state}`, onLoad: false,
       earliestAt: null, pickupAt, makesIt: null, restEndUnknown: true }
   }
