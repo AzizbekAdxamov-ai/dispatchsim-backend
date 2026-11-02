@@ -7,6 +7,12 @@
 //   CHAT_DRIVER_BASE_URL / _API_KEY / _MODEL
 //   CHAT_BASE_URL        / _API_KEY / _MODEL      <- what both inherit
 //
+// OpenRouter provider pinning (comma-separated slugs, blank = unset):
+//
+//   CHAT_BROKER_PROVIDER_ORDER   the broker chat's pin
+//   CHAT_DRIVER_PROVIDER_ORDER   the driver chat's pin
+//   CHAT_PROVIDER_ORDER          what either inherits when its own is unset
+//
 // Set only CHAT_* and both chats run on one key, sharing one budget. Set
 // CHAT_DRIVER_API_KEY as well and the driver chat has its own key and its
 // own budget. Nothing in the code chooses between those two arrangements;
@@ -50,12 +56,21 @@ function withFallback(which, config) {
   return config
 }
 
+// Read at call time so a test or the eval's --arm can change env between calls.
+export function providerOrderFor(which) {
+  const own = which === 'driver' ? 'CHAT_DRIVER_PROVIDER_ORDER' : 'CHAT_BROKER_PROVIDER_ORDER'
+  const raw = [process.env[own], process.env.CHAT_PROVIDER_ORDER]
+    .find((v) => typeof v === 'string' && v.trim() !== '') ?? ''
+  const order = raw.split(',').map((s) => s.trim()).filter(Boolean)
+  return order.length > 0 ? order : null
+}
+
 export function chatConfigFor(which) {
   const { config, errors } = read(which)
   if (!config) throw new AppError(FAILURE[which], errors.join('; '))
   // `chat` names whose config this is: the request builder picks the
   // reasoning effort per chat (chatBudget.js groqReasoningEffort).
-  return { ...withFallback(which, config), chat: which }
+  return { ...withFallback(which, config), chat: which, providerOrder: providerOrderFor(which) }
 }
 
 // Do the two chats spend from one allowance or two?
@@ -94,6 +109,7 @@ export function describeChat(which) {
     baseUrl: config.baseUrl,
     model: config.model,
     fallbackModel: config.fallbackModel ?? null,
+    providerOrder: providerOrderFor(which),
     keyFingerprint: `${config.apiKey.slice(0, 4)}…(${config.apiKey.length})`,
     wallet: walletScopeFor(which),
   }

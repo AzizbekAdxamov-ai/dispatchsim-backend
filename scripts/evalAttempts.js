@@ -15,6 +15,7 @@ const part = (v) => (v == null ? 'n/a' : n(v))
 
 function attemptText(a, i) {
   const head = `#${i + 1} ${a.model}${a.cause && a.cause !== 'first' ? ` ${a.cause}` : ''}`
+  const took = a.ms != null ? ` ${a.ms}ms` : ''
   if (a.status === 429 && a.rateLimit) {
     const r = a.rateLimit
     const parts = []
@@ -22,10 +23,10 @@ function attemptText(a, i) {
     if (r.used != null) parts.push(`used ${r.used}`)
     if (r.requested != null) parts.push(`requested ${r.requested}`)
     if (r.retryAfterSec != null) parts.push(`retry ${Math.round(r.retryAfterSec)}s`)
-    return `${head} 429 ${r.code}${parts.length ? ` (${parts.join(', ')})` : ''}`
+    return `${head} 429 ${r.code}${parts.length ? ` (${parts.join(', ')})` : ''}${took}`
   }
-  if (a.outcome === 'ok') return `${head} ok`
-  return `${head} ${a.outcome}${a.status != null && a.status !== 200 ? ` ${a.status}` : ''}`
+  if (a.outcome === 'ok') return `${head} ok${took}`
+  return `${head} ${a.outcome}${a.status != null && a.status !== 200 ? ` ${a.status}` : ''}${took}`
 }
 
 // "2 — #1 model 429 TPM (...) → #2 model fallback ok · tokens 2,410 in / 180 out (reasoning 95, cached 0)"
@@ -42,7 +43,9 @@ export function attemptsLine(attempts) {
 // The three fields a dataset row carries (alongside the reply).
 export function attemptFields(attempts) {
   const list = Array.isArray(attempts) ? attempts : []
-  return { requests: list.length, attempts: list, usage: sumUsage(list) }
+  const timed = list.filter((a) => typeof a.ms === 'number')
+  const latencyMs = timed.length ? timed.reduce((sum, a) => sum + a.ms, 0) : null
+  return { requests: list.length, attempts: list, usage: sumUsage(list), latencyMs }
 }
 
 // Summary over a run's rows: total tokens, and refusals by code.
@@ -59,7 +62,12 @@ export function runTokenSummary(rows) {
     }
   }
   const refused = Object.entries(byCode).map(([code, count]) => `${code} ${count}`).join(', ')
-  return { total, byCode, line: `Tokens: ${n(total)} · 429s: ${refused || 'none'}` }
+  const times = rows.map((r) => r.latencyMs).filter((v) => typeof v === 'number').sort((a, b) => a - b)
+  const mid = times.length >> 1
+  const median = times.length === 0 ? null : times.length % 2 ? times[mid] : Math.round((times[mid - 1] + times[mid]) / 2)
+  const latencyMs = times.reduce((sum, v) => sum + v, 0)
+  const latency = times.length ? ` · latency total ${n(latencyMs)}ms, median ${n(median)}ms` : ''
+  return { total, byCode, latencyMs: times.length ? latencyMs : null, medianMs: median, line: `Tokens: ${n(total)} · 429s: ${refused || 'none'}${latency}` }
 }
 
 // A warning, never a refusal (decision 2026-10-15): the plan may not fit in

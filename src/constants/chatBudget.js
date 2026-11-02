@@ -215,6 +215,39 @@ export function groqReasoningParams(baseUrl, model, chat = null) {
   return {}
 }
 
+// OpenRouter's reasoning control for the model families under A/B test
+// (https://openrouter.ai/docs/use-cases/reasoning-tokens and
+// https://openrouter.ai/deepseek/deepseek-v4-flash/api, checked 2026-11-02).
+// A request may carry reasoning.effort OR reasoning.max_tokens, not both, so a
+// family that gets an effort here must not also get the max_tokens cap: the
+// caller passes reasoningMaxTokens null when this returns an object.
+//   gpt-oss   effort low/medium/high, the same per-chat choice as on Groq.
+//             It reasons always and rejects 'none', so CHAT_REASONING=off is
+//             ignored for it.
+//   deepseek  effort 'high' (V4 Flash page lists high/xhigh only; assumed to
+//             hold for V4.1 -- inferred, not read from a V4.1 page).
+//             CHAT_REASONING=off sends { enabled: false } instead.
+// Any other family, and any other provider: null (the max_tokens cap path).
+export function openRouterReasoningParams(baseUrl, model, chat = null) {
+  if (providerFor(baseUrl).id !== 'openrouter') return null
+  const name = String(model ?? '')
+  if (/gpt-oss/i.test(name)) return { reasoning: { effort: groqReasoningEffort(chat) } }
+  if (/deepseek/i.test(name)) {
+    return { reasoning: chatReasoningMode() === 'off' ? { enabled: false } : { effort: 'high' } }
+  }
+  return null
+}
+
+// Pin a request to named OpenRouter providers, without silent fallback to
+// others (https://openrouter.ai/docs/guides/routing/provider-selection,
+// checked 2026-11-02). Only on OpenRouter and only for a non-empty list;
+// otherwise nothing is added and routing stays the provider's default.
+export function providerRouting(baseUrl, order) {
+  if (providerFor(baseUrl).id !== 'openrouter') return {}
+  if (!Array.isArray(order) || order.length === 0) return {}
+  return { provider: { order, allow_fallbacks: false } }
+}
+
 // The reply's own limit, in characters, because that is what we can
 // actually measure on a string. Four characters per token is the usual
 // rough figure for English; it is an approximation and is named as one.

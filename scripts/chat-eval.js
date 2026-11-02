@@ -10,6 +10,7 @@
 //   npm run chat:eval -- driver --case ED01  # one Grace case
 //   npm run chat:eval -- --case EB04,ED07    # several cases, either side
 //   npm run chat:eval -- --gap 20            # wait 20 s between cases (per-minute token limit)
+//   npm run chat:eval -- --arm B             # run on the CHAT_AB_B_* base URL / key / model / provider pin
 //   npm run chat:eval -- --service           # what the live app would show: the same reply
 //                                            # check and ONE regeneration (up to 2x requests)
 //
@@ -42,8 +43,9 @@ import { chatConfigFor } from '../src/modules/chat/chatProvider.js'
 import { chatText } from './seed/aiClient.js'
 import { sleep } from './seed/config.js'
 import { chatTextRecorded, usedToday, budgetRefusal } from '../src/modules/chat/scriptRequests.js'
-import { dailyBudgetFor, dailyTokenStatus, groqReasoningParams } from '../src/constants/chatBudget.js'
+import { dailyBudgetFor, dailyTokenStatus, groqReasoningParams, openRouterReasoningParams, providerFor } from '../src/constants/chatBudget.js'
 import { DAILY_TOKENS_SQL } from '../src/modules/chat/chatBudget.sql.js'
+import { parseArm, applyArm } from './evalArm.js'
 import { attemptsLine, attemptFields, runTokenSummary, tokenPlanWarning, parseGap, parseIdList, makeRequestPacer, DEFAULT_REPLY_TOKENS } from './evalAttempts.js'
 import appConfig from '../src/config.js'
 import { marketFacts } from '../src/constants/marketRates.js'
@@ -104,6 +106,28 @@ if (gap.error) {
   process.exit(1)
 }
 const gapSec = gap.seconds
+// --arm X: run on the CHAT_AB_X_* settings. Applied to process.env before any
+// chatConfigFor call; only missing variable NAMES are ever printed.
+const armFlag = parseArm(args)
+if (armFlag.error) {
+  console.error(armFlag.error)
+  process.exit(1)
+}
+const arm = armFlag.arm
+if (arm) {
+  const applied = applyArm(process.env, arm)
+  if (applied.errors.length) {
+    console.error(`Arm ${arm} is missing: ${applied.errors.join(', ')}`)
+    process.exit(1)
+  }
+}
+// With an arm only the measured model may answer: no fallback to another model.
+const evalConfig = (which) => {
+  const config = chatConfigFor(which)
+  if (!arm) return config
+  const { fallbackModel, ...rest } = config
+  return rest
+}
 const pauseBeforeRequest = makeRequestPacer({ gapSec, sleep })
 const outDir = join(here, '..', '..', 'reports', 'eval')
 const startedAt = new Date()
@@ -182,12 +206,16 @@ async function answer({ config, side, messages, systemPrompt, clean, problemOf, 
 // Run header: the primary, and the fallback too when one is configured.
 function modelHeader(config) {
   const models = config.fallbackModel ? `primary ${config.model} · fallback ${config.fallbackModel}` : `primary ${config.model}`
-  return `${models} · reasoning_effort ${reasoningEffortOf(config)} · mode ${service ? 'service' : 'raw'}`
+  const armPart = arm ? ` · arm ${arm}` : ''
+  const pin = config.providerOrder ? ` · providers ${config.providerOrder.join(',')}` : ''
+  return `${models}${armPart}${pin} · reasoning_effort ${reasoningEffortOf(config)} · mode ${service ? 'service' : 'raw'}`
 }
 
 // What the request asks for, 'n/a' where the model takes no such field.
 function reasoningEffortOf(config) {
-  return groqReasoningParams(config.baseUrl, config.model, config.chat).reasoning_effort ?? 'n/a'
+  const reasoning = openRouterReasoningParams(config.baseUrl, config.model, config.chat)?.reasoning
+  if (!reasoning) return groqReasoningParams(config.baseUrl, config.model, config.chat).reasoning_effort ?? 'n/a'
+  return reasoning.effort ?? (reasoning.enabled === false ? 'enabled:false' : 'n/a')
 }
 
 function record(fields) {
@@ -218,7 +246,7 @@ function record(fields) {
 // -- Broker ------------------------------------------------------------------
 
 async function brokerRun(carrier) {
-  const config = chatConfigFor('broker')
+  const config = evalConfig('broker')
   say(`## Broker — ${modelHeader(config)} · prompt ${promptVersion('brokerChat/brokerChat.prompt.js')}`)
   say('')
   const open = (await query(`
@@ -271,6 +299,7 @@ async function brokerRun(carrier) {
       config, side: 'broker', systemPrompt,
       messages: (sys) => bp.buildMessages({ systemPrompt: sys, history: [], newMessage: line }),
       clean: (t) => stripSpeakerLabel(t, posting.contactName),
+      arm, provider: providerFor(config.baseUrl).id, providerOrder: config.providerOrder,
       problemOf: (r) => brokerReplyProblem(r, { truck, booking, posting, now, text: line }),
       retryPrompt: brokerRetryPrompt,
       fallback: bp.FALLBACK_REPLY,
@@ -307,7 +336,7 @@ async function brokerRun(carrier) {
 // -- Grace -------------------------------------------------------------------
 
 async function driverRun(carrier) {
-  const config = chatConfigFor('driver')
+  const config = evalConfig('driver')
   say(`## Grace — ${modelHeader(config)} · prompt ${promptVersion('driverChat/driverChat.prompt.js')}`)
   say('')
   const name = process.env.TELEGRAM_DRIVER_NAME || 'Grace Lindqvist'
@@ -340,6 +369,7 @@ async function driverRun(carrier) {
     record({
       runId, at: new Date().toISOString(), chat: 'driver', caseId: c.id, style: c.style, terms: c.terms, line: c.line, good: c.good,
       model, promptVersion: promptVersion('driverChat/driverChat.prompt.js'), reasoningEffort: reasoningEffortOf(config),
+      arm, provider: providerFor(config.baseUrl).id, providerOrder: config.providerOrder,
       data: {
         driver: ctx.driver.name, load: load ? `${load.originCity}, ${load.originState} -> ${load.destinationCity}, ${load.destinationState}${fixture ? ' (not in the database)' : ''}` : null,
         situation, requests: dp.requestLines(ctx.driver, load).map((l) => l.trim()).filter(Boolean),

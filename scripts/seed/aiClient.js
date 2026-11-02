@@ -9,7 +9,7 @@
 // HTTP status and attempt number, nothing from the request or response
 // body that could carry it back out.
 
-import { chatMaxTokens, chatReasoningCap, CHAT_REPLY_TOKENS, dailyCapScope, groqReasoningParams, isDailyCap } from '../../src/constants/chatBudget.js'
+import { chatMaxTokens, chatReasoningCap, CHAT_REPLY_TOKENS, dailyCapScope, groqReasoningParams, isDailyCap, openRouterReasoningParams, providerRouting } from '../../src/constants/chatBudget.js'
 import { sleep } from './config.js'
 import { parseRateLimit } from '../../src/lib/rateLimitReason.js'
 
@@ -136,10 +136,19 @@ async function requestCompletion({ system, user, messages, config, temperature =
     { role: 'system', content: system },
     { role: 'user', content: user },
   ]
+  // A family with its own reasoning control (OpenRouter gpt-oss / deepseek)
+  // takes effort OR max_tokens, never both: drop the cap so completionBody
+  // emits no reasoning of its own and the family object below is the only one.
+  const family = openRouterReasoningParams(config.baseUrl, config.model, config.chat)
   const body = JSON.stringify(completionBody({
-    model: config.model, messages: payloadMessages, temperature, maxTokens, reasoningMaxTokens,
+    model: config.model, messages: payloadMessages, temperature, maxTokens,
+    reasoningMaxTokens: family ? null : reasoningMaxTokens,
     // Per model config, so a fallback from another family gets its own params.
-    providerParams: groqReasoningParams(config.baseUrl, config.model, config.chat),
+    providerParams: {
+      ...groqReasoningParams(config.baseUrl, config.model, config.chat),
+      ...(family ?? {}),
+      ...providerRouting(config.baseUrl, config.providerOrder),
+    },
   }))
 
   let lastNetworkError = null
@@ -147,14 +156,17 @@ async function requestCompletion({ system, user, messages, config, temperature =
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     let response
     const cause = attempt === 1 ? firstCause : 'backoff'
+    let t0 = null
     const report = (status, outcome, extra = {}) => onAttempt?.({
-      n: attempt, model: config.model, cause, status, outcome, rateLimit: null, usage: null, ...extra,
+      n: attempt, model: config.model, cause, status, outcome, rateLimit: null, usage: null,
+      ms: t0 == null ? null : Date.now() - t0, ...extra,
     })
     // Script pacing belongs here: one chatText call can send several HTTP
     // requests through retry, fallback or a larger-token second try.
     await beforeRequest?.()
     onRequest?.()
     try {
+      t0 = Date.now()
       response = await fetch(url, {
         method: 'POST',
         headers: {
@@ -216,7 +228,8 @@ async function requestCompletion({ system, user, messages, config, temperature =
         report(response.status ?? 200, 'cut_off', { usage })
         throw err
       }
-      report(response.status ?? 200, 'ok', { usage })
+      // Which upstream host answered (OpenRouter names it): proof a pin took effect.
+      report(response.status ?? 200, 'ok', { usage, servedBy: typeof data?.provider === 'string' ? data.provider : null })
       return content
     }
 
@@ -384,7 +397,7 @@ export async function chatText({ messages, config, temperature = 0.9, maxTokens 
       fallbackUsed = true
       // A busy fallback cannot become another long retry chain. Primary
       // network and 5xx retries still follow the normal client policy.
-      return complete({ ...config, model: fallbackModel }, tokens, reasoningCap, 'fallback', true, 1)
+      return complete({ ...config, model: fallbackModel, providerOrder: null }, tokens, reasoningCap, 'fallback', true, 1)
     }
   }
   try {
