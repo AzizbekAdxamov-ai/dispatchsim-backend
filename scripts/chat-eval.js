@@ -43,9 +43,9 @@ import { chatConfigFor } from '../src/modules/chat/chatProvider.js'
 import { chatText } from './seed/aiClient.js'
 import { sleep } from './seed/config.js'
 import { chatTextRecorded, usedToday, budgetRefusal } from '../src/modules/chat/scriptRequests.js'
-import { dailyBudgetFor, dailyTokenStatus, groqReasoningParams, openRouterReasoningParams, providerFor } from '../src/constants/chatBudget.js'
+import { dailyBudgetFor, dailyTokenStatus } from '../src/constants/chatBudget.js'
 import { DAILY_TOKENS_SQL } from '../src/modules/chat/chatBudget.sql.js'
-import { parseArm, applyArm } from './evalArm.js'
+import { parseArm, applyArm, armConfig, reasoningEffortOf, armRecordFields } from './evalArm.js'
 import { attemptsLine, attemptFields, runTokenSummary, tokenPlanWarning, parseGap, parseIdList, makeRequestPacer, DEFAULT_REPLY_TOKENS } from './evalAttempts.js'
 import appConfig from '../src/config.js'
 import { marketFacts } from '../src/constants/marketRates.js'
@@ -122,12 +122,7 @@ if (arm) {
   }
 }
 // With an arm only the measured model may answer: no fallback to another model.
-const evalConfig = (which) => {
-  const config = chatConfigFor(which)
-  if (!arm) return config
-  const { fallbackModel, ...rest } = config
-  return rest
-}
+const evalConfig = (which) => armConfig(chatConfigFor(which), arm)
 const pauseBeforeRequest = makeRequestPacer({ gapSec, sleep })
 const outDir = join(here, '..', '..', 'reports', 'eval')
 const startedAt = new Date()
@@ -211,13 +206,6 @@ function modelHeader(config) {
   return `${models}${armPart}${pin} · reasoning_effort ${reasoningEffortOf(config)} · mode ${service ? 'service' : 'raw'}`
 }
 
-// What the request asks for, 'n/a' where the model takes no such field.
-function reasoningEffortOf(config) {
-  const reasoning = openRouterReasoningParams(config.baseUrl, config.model, config.chat)?.reasoning
-  if (!reasoning) return groqReasoningParams(config.baseUrl, config.model, config.chat).reasoning_effort ?? 'n/a'
-  return reasoning.effort ?? (reasoning.enabled === false ? 'enabled:false' : 'n/a')
-}
-
 function record(fields) {
   // id: how a grade finds this row (reports/training/grades.jsonl).
   const row = { id: `eval:${runId}:${fields.caseId}`, source: 'eval', ...fields }
@@ -299,7 +287,7 @@ async function brokerRun(carrier) {
       config, side: 'broker', systemPrompt,
       messages: (sys) => bp.buildMessages({ systemPrompt: sys, history: [], newMessage: line }),
       clean: (t) => stripSpeakerLabel(t, posting.contactName),
-      arm, provider: providerFor(config.baseUrl).id, providerOrder: config.providerOrder,
+      ...armRecordFields(config, arm),
       problemOf: (r) => brokerReplyProblem(r, { truck, booking, posting, now, text: line }),
       retryPrompt: brokerRetryPrompt,
       fallback: bp.FALLBACK_REPLY,
@@ -369,7 +357,7 @@ async function driverRun(carrier) {
     record({
       runId, at: new Date().toISOString(), chat: 'driver', caseId: c.id, style: c.style, terms: c.terms, line: c.line, good: c.good,
       model, promptVersion: promptVersion('driverChat/driverChat.prompt.js'), reasoningEffort: reasoningEffortOf(config),
-      arm, provider: providerFor(config.baseUrl).id, providerOrder: config.providerOrder,
+      ...armRecordFields(config, arm),
       data: {
         driver: ctx.driver.name, load: load ? `${load.originCity}, ${load.originState} -> ${load.destinationCity}, ${load.destinationState}${fixture ? ' (not in the database)' : ''}` : null,
         situation, requests: dp.requestLines(ctx.driver, load).map((l) => l.trim()).filter(Boolean),
