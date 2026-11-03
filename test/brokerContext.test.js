@@ -32,8 +32,9 @@ test('old MC questions are absent from compact messages while whole-thread calle
   assert.ok(!JSON.stringify(messages).includes('Please provide your MC number'))
   assert.equal(built.record.caller.mc.verdict, 'match')
   assert.equal(built.record.caller.truck.city, 'Chicago')
-  assert.equal(built.negotiation.state.offer, 8353)
-  assert.match(built.systemPrompt, /current offer is \$8,353/)
+  // Kills: STEP_1 is now applied to the first grounded push.
+  assert.equal(built.negotiation.state.offer, 8503)
+  assert.match(built.systemPrompt, /current offer is \$8,503/)
   assert.ok(!built.systemPrompt.includes(built.negotiation.line))
 })
 
@@ -138,7 +139,8 @@ test('legacy callers retain full load prompt while negotiated callers receive th
   const compact = context('brother can you 9000$')
   assert.match(legacy, /THE LOAD YOU POSTED/)
   assert.ok(compact.systemPrompt.length < legacy.length * 0.6)
-  assert.equal(compact.negotiation.state.offer, 8153)
+  // Kills: compact callers receive the authoritative first counter, not the posted rate.
+  assert.equal(compact.negotiation.state.offer, 8553)
   assert.match(compact.systemPrompt, /requested price \$9,000/)
 })
 

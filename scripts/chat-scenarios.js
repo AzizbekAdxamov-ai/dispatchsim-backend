@@ -104,7 +104,7 @@ const results = []
 // what --scenario accepts.
 const TURNS = {
   S1: 3, S2: 3, S3: 2, S4: 1, S5: 1, S6: 1, S7: 1, S8: 1,
-  S9a: 6, S9b: 6, S9c: 5,
+  S9a: 6, S9b: 6, S9c: 5, S10: 3, S11: 4,
   G1: 2, G2: 2, G3: 3,
 }
 const sideOf = (key) => (key.startsWith('G') ? 'driver' : 'broker')
@@ -363,6 +363,10 @@ async function planBroker(ours) {
     await add('S9a', 'S9a — booking call, right MC', row, [intro, `MC ${s9Mc(ours)}`, truckLine, price, middle, bookIt])
     await add('S9b', 'S9b — booking call, wrong MC (no booking)', row, [intro, `MC ${s9WrongMc(ours)}`, truckLine, price, middle, bookIt])
     await add('S9c', 'S9c — booking call, no MC said', row, [intro, truckLine, price, middle, 'just book it'])
+    await add('S10', 'S10 — booked then carrier cancels', row, [intro, `MC ${s9Mc(ours)}`, truckLine, price, bookIt,
+      'truck broke down, I can\'t cover it — cancel the load'])
+    await add('S11', 'S11 — booked then no ETA', row, [intro, `MC ${s9Mc(ours)}`, truckLine, price,
+      bookIt, 'truck is not working, can you wait?', 'I have no ETA yet'])
   } else {
     say('_S9 skipped: no carrier row._')
     say('')

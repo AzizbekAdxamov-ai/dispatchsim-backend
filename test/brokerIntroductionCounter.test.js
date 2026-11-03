@@ -62,8 +62,9 @@ test('hyphenated deadhead dimensions do not become unauthorized money', () => {
   const load = fakePosting({ rateUsd: 8153, distanceMi: 2180 })
   const decision = negotiate({ conversation: { brokerOfferUsd: 8153, ratePushCount: 1 }, posting: load,
     text: 'got 230 mile deadhead brother can u add a little?', booking })
-  assert.equal(decision.state.offer, 8353)
-  assert.equal(negotiationReplyProblem('I hear the 230‑mile deadhead—happy to bump the rate to $8,353 all‑in.', decision), null)
+  // Kills: old fixed counter ignoring the current ladder decision.
+  assert.ok(decision.state.offer > load.rateUsd && decision.state.offer <= ceilingFor(load))
+  assert.equal(negotiationReplyProblem(`I hear the 230‑mile deadhead—happy to bump the rate to $${decision.state.offer.toLocaleString('en-US')} all‑in.`, decision), null)
   for (const reply of ['I hear the 230-mile deadhead; my offer is $9,000 all-in.',
     'I can pay $230-mile for this load.', 'My offer is $9000-mile all-in.']) {
     assert.equal(negotiationReplyProblem(reply, decision), 'offered a rate other than the authoritative decision', reply)
@@ -98,7 +99,8 @@ test('the actual valid retry to a 9k total price ask never becomes a weight fall
   const load = fakePosting({ rateUsd: 8153, distanceMi: 2180, weightLbs: 38000 })
   const text = 'bro can you do 9k total?'
   const negotiation = negotiate({ conversation: {}, posting: load, text, booking })
-  const reply = 'I can do $8,153 all‑in for the run. That’s the current offer I have.'
+  // Kills: reply check rejecting the newly authorized first-step counter.
+  const reply = `I can do $${negotiation.state.offer.toLocaleString('en-US')} all‑in for the run. That’s the current offer I have.`
   assert.equal(brokerReplyProblem(reply, { posting: load, text, booking, negotiation }), null)
 })
 
@@ -106,7 +108,8 @@ test('carrier hopes may be acknowledged without accepting the requested price', 
   const load = fakePosting({ rateUsd: 8153, distanceMi: 2180 })
   const text = 'bro can you do 9k total?'
   const negotiation = negotiate({ conversation: {}, posting: load, text, booking })
-  const raw = 'I can do $8,153 all‑in. I get that you were hoping for $9,000, but that’s the rate I have right now.'
+  // Kills: wrongly treating an attributed carrier ask as the broker's counter.
+  const raw = `I can do $${negotiation.state.offer.toLocaleString('en-US')} all‑in. I get that you were hoping for $9,000, but that’s the rate I have right now.`
   assert.equal(brokerReplyProblem(raw, { posting: load, text, booking, negotiation }), null)
   for (const reply of ['You were hoping for $9,500. I can do $8,153.',
     'You were hoping for $9,000, and I can pay that.',
@@ -131,7 +134,8 @@ test('an exact attributed deadhead acknowledgment does not verify a route or ear
 
 test('current turn voice distinguishes a quote from an actual concession', () => {
   const first = negotiate({ conversation: {}, posting, text: 'can you do 4k?', booking })
-  assert.match(turnTask('can you do 4k?', first), /where you are at right now/)
+  // Kills: the old no-concession instruction on the first pressure.
+  assert.match(turnTask('can you do 4k?', first), /offer increased this turn/)
   const second = negotiate({ conversation: { brokerOfferUsd: first.state.offer, ratePushCount: 1 }, posting, text: 'okay lets 4k$', booking })
   assert.match(turnTask('okay lets 4k$', second), /offer increased this turn/)
   assert.equal(negotiationReplyProblem('The best I can do is $3,058 all-in.', first), 'claimed a permanent final rate while authorized bargaining room remains')

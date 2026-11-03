@@ -4,6 +4,7 @@ import { query, withTransaction } from '../../db/pool.js'
 import { AppError } from '../../lib/errors.js'
 import { chatIntent } from './negotiation.js'
 import { rateQuote, ALL_IN } from './rateQuote.js'
+import { blockUntil, BROKER_BLOCK_DAYS, BLOCK_REASON_CARRIER_CANCEL } from './blockPolicy.js'
 
 // rate_con_rate_usd is deliberately ABSENT here.
 //
@@ -286,7 +287,7 @@ export async function setRateCon(conversationId, rateConRateUsd, source = {}) {
 export async function clearRateCon(conversationId) {
   await query('UPDATE broker_conversations SET rate_con_rate_usd = NULL, rate_con_basis = NULL, rate_con_fuel_surcharge_usd = NULL WHERE id = $1', [conversationId])
   const result = await query(
-    `DELETE FROM broker_messages WHERE conversation_id = $1 AND kind = 'rate_con'`,
+    `UPDATE broker_messages SET voided_at = now(), void_reason = 'superseded' WHERE conversation_id = $1 AND kind = 'rate_con' AND voided_at IS NULL`,
     [conversationId],
   )
   return result.rowCount
@@ -336,7 +337,7 @@ export async function beginChatTurn(conversationId, userId, text) {
       negotiation_stage = CASE WHEN $3 THEN $4 ELSE negotiation_stage END, updated_at = now()
       WHERE id = $1 AND user_id = $2 RETURNING negotiation_revision`,
     [conversationId, userId, invalidate, intent.kind === 'hold' ? 'held' : 'negotiating'])
-    if (invalidate) await client.query("DELETE FROM broker_messages WHERE conversation_id = $1 AND kind = 'rate_con'", [conversationId])
+    if (invalidate) await client.query("UPDATE broker_messages SET voided_at = now(), void_reason = 'superseded' WHERE conversation_id = $1 AND kind = 'rate_con' AND voided_at IS NULL", [conversationId])
     // Superseded pending prose must not say a previous rate was accepted after a hold.
     await client.query("DELETE FROM broker_messages WHERE conversation_id = $1 AND role = 'broker' AND kind = 'text' AND deliver_at > now()", [conversationId])
     const message = await client.query(`INSERT INTO broker_messages (conversation_id, role, content)
@@ -351,7 +352,7 @@ export async function completeChatTurn({ conversationId, userId, revision, decis
     if (conversation.negotiationRevision !== revision) return false
     const s = decision.state
     const paperQuote = decision.issuePaper ? rateQuote(decision.rateQuote ?? {}, paperRate) : null
-    if (decision.invalidatePaper) await client.query("DELETE FROM broker_messages WHERE conversation_id = $1 AND kind = 'rate_con'", [conversationId])
+    if (decision.invalidatePaper) await client.query("UPDATE broker_messages SET voided_at = now(), void_reason = 'superseded' WHERE conversation_id = $1 AND kind = 'rate_con' AND voided_at IS NULL", [conversationId])
     await client.query(`UPDATE broker_conversations SET broker_offer_usd = $3,
       agreed_rate_usd = $4, status = CASE WHEN $4::integer IS NULL THEN 'open' ELSE 'agreed' END,
       negotiation_stage = $5, recipient_email = $6, rate_push_count = $7, best_counter_used = $8,
@@ -381,7 +382,7 @@ export async function rateConDelivered(conversationId) {
   const result = await query(
     `SELECT EXISTS (
        SELECT 1 FROM broker_messages
-        WHERE conversation_id = $1 AND kind = 'rate_con' AND deliver_at <= now()
+        WHERE conversation_id = $1 AND kind = 'rate_con' AND voided_at IS NULL AND deliver_at <= now()
      ) AS delivered`,
     [conversationId],
   )
@@ -393,4 +394,51 @@ export async function rateConDelivered(conversationId) {
 // failure -- a failed call that sent three requests still spent three.
 export async function setProviderRequests(messageId, n) {
   await query('UPDATE broker_messages SET provider_requests = $2 WHERE id = $1', [messageId, n])
+}
+
+export async function invalidatePaper(conversationId) {
+  await query(`UPDATE broker_conversations
+    SET agreed_rate_usd = NULL, rate_con_rate_usd = NULL, rate_con_basis = NULL,
+        rate_con_fuel_surcharge_usd = NULL, recipient_email = NULL,
+        negotiation_stage = 'held', status = 'open', updated_at = now()
+    WHERE id = $1`, [conversationId])
+  const result = await query(`DELETE FROM broker_messages
+     WHERE conversation_id = $1 AND kind = 'rate_con' AND voided_at IS NULL`, [conversationId])
+  return result.rowCount
+}
+
+export async function createBrokerBlock({ conversationId, brokerId = null, brokerMc = null, brokerContact = null, reason = BLOCK_REASON_CARRIER_CANCEL } = {}) {
+  const result = await query(`INSERT INTO broker_blocks
+    (broker_id, broker_mc, broker_contact, blocked_until, reason, conversation_id)
+    VALUES ($1, $2, $3, $4, $5, $6)
+    RETURNING id, blocked_until AS "blockedUntil", reason`,
+  [brokerId, brokerMc, brokerContact, blockUntil(new Date(), BROKER_BLOCK_DAYS), reason, conversationId])
+  return result.rows[0]
+}
+
+export async function cancelAndBlock({ conversationId, text, line, brokerId = null, brokerMc = null, brokerContact = null } = {}) {
+  return withTransaction(async (client) => {
+    await client.query(`UPDATE broker_conversations SET agreed_rate_usd = NULL, rate_con_rate_usd = NULL,
+      rate_con_basis = NULL, rate_con_fuel_surcharge_usd = NULL, recipient_email = NULL,
+      negotiation_stage = 'held', status = 'open', updated_at = now() WHERE id = $1`, [conversationId])
+    await client.query(`UPDATE broker_messages SET voided_at = now(), void_reason = 'carrier_cancelled'
+      WHERE conversation_id = $1 AND kind = 'rate_con' AND voided_at IS NULL`, [conversationId])
+    const block = await client.query(`INSERT INTO broker_blocks
+      (broker_id, broker_mc, broker_contact, blocked_until, reason, conversation_id)
+      VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+    [brokerId, brokerMc, brokerContact, blockUntil(new Date(), BROKER_BLOCK_DAYS), BLOCK_REASON_CARRIER_CANCEL, conversationId])
+    const dispatcher = await client.query(`INSERT INTO broker_messages (conversation_id, role, content)
+      VALUES ($1, 'dispatcher', $2) RETURNING id, role, content, kind, created_at AS "createdAt"`, [conversationId, text])
+    await client.query(`INSERT INTO broker_messages (conversation_id, role, content)
+      VALUES ($1, 'broker', $2)`, [conversationId, line])
+    return { ...dispatcher.rows[0], blockId: block.rows[0].id }
+  })
+}
+
+export async function isBrokerBlocked({ brokerId = null, brokerMc = null } = {}) {
+  const result = await query(`SELECT EXISTS (
+    SELECT 1 FROM broker_blocks
+    WHERE blocked_until > now() AND (($1::uuid IS NOT NULL AND broker_id = $1) OR ($2::text IS NOT NULL AND broker_mc = $2))
+  ) AS blocked`, [brokerId, brokerMc])
+  return result.rows[0]?.blocked === true
 }

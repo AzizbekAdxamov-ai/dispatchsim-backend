@@ -32,6 +32,9 @@ import { stopPayInvented, NO_STOP_PAY_LINE } from './termsTalk.js'
 // identity form (live 2026-11-03 #109).
 export const GIVES_MC = /\bMC\s*(?:#|no\.?|number)?\s*:?\s*\d{4,8}\b/i
 export const WRONG_MC_LINE = "That MC isn't showing up on our end. What's your correct MC?"
+const MARKDOWN = /\*\*|__|`/
+const HELP_DESK_CLOSING = /please let me know if you have any other concerns|thank you,?\s*mc\b/i
+const QUESTION_MARK = /\?/g
 
 // "...does not match the carrier MC listed on our rate confirmation" before
 // any paper exists (live #109): a document the broker has not written yet.
@@ -76,6 +79,18 @@ function discussionReply(text, posting, negotiation) {
 export function brokerReplyProblem(reply, {
   truck, booking = null, posting = null, now = new Date(), text = null, said = null, brokerSaid = [], bookedHere = false, paper = null, negotiation = null,
 } = {}) {
+  if (MARKDOWN.test(String(reply ?? ''))) return {
+    why: 'used markdown formatting', hint: 'Use plain desk text with no markdown markers.', unusable: true,
+    safeReply: String(reply).replace(/\*\*|__|`/g, ''),
+  }
+  if (HELP_DESK_CLOSING.test(String(reply ?? ''))) return {
+    why: 'used a canned help-desk closing', hint: 'Keep the broker reply to one or two natural desk sentences.', unusable: true,
+    safeReply: negotiation?.line ?? discussionReply(text ?? '', posting ?? {}, negotiation),
+  }
+  if ((String(reply ?? '').match(QUESTION_MARK) ?? []).length > 1) return {
+    why: 'asked more than one question in one reply', hint: 'Ask only the next single missing question.', unusable: true,
+    safeReply: negotiation?.line ?? discussionReply(text ?? '', posting ?? {}, negotiation),
+  }
   if (agreesRebroker(reply) || (proposesRebroker(text) && !refusesRebroker(reply))) return {
     why: 'accepted or failed to refuse a rebroker proposal', hint: ` ${ONE_CARRIER_RULE}`,
     unusable: true, safeReply: ONE_CARRIER_REPLY,

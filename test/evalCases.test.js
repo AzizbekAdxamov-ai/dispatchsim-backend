@@ -10,15 +10,14 @@ import { BROKER_CASES, DRIVER_CASES, brokerFindings, driverFindings, milesOff, C
 const b = (id) => BROKER_CASES.find((c) => c.id === id)
 const d = (id) => DRIVER_CASES.find((c) => c.id === id)
 
-// Kills: a bank that drifts from twenty-two and twenty-five (the run is sized to the
-// daily budget on that count), or a case without its grading note.
-test('twenty-two broker and twenty-five driver cases, each with words, a check and a right answer', () => {
-  assert.equal(BROKER_CASES.length, 22)
+// Kills: loss of the six broker cases added by Azizbek's 2026-11-04 decision.
+test('twenty-eight broker and twenty-five driver cases have grading notes', () => {
+  assert.equal(BROKER_CASES.length, 28)
   assert.equal(DRIVER_CASES.length, 25)
   for (const c of [...BROKER_CASES, ...DRIVER_CASES]) {
     assert.ok(c.line && c.good && typeof c.expect === 'function', c.id)
   }
-  assert.equal(new Set([...BROKER_CASES, ...DRIVER_CASES].map((c) => c.id)).size, 47)
+  assert.equal(new Set([...BROKER_CASES, ...DRIVER_CASES].map((c) => c.id)).size, 53)
 })
 
 // Kills: "fuel's separate" passing as all-in (heard 2026-10-05).
@@ -471,9 +470,9 @@ test('ED23 wants the owed amount, and no money when nothing is owed', () => {
 })
 
 // Kills: a bank with a gap or a repeated id.
-test('case ids run EB01-EB22 and ED01-ED25 with no gaps', () => {
+test('case ids run EB01-EB28 and ED01-ED25 with no gaps', () => {
   const pad = (n) => String(n).padStart(2, '0')
-  assert.deepEqual(BROKER_CASES.map((c) => c.id), Array.from({ length: 22 }, (_, i) => `EB${pad(i + 1)}`))
+  assert.deepEqual(BROKER_CASES.map((c) => c.id), Array.from({ length: 28 }, (_, i) => `EB${pad(i + 1)}`))
   assert.deepEqual(DRIVER_CASES.map((c) => c.id), Array.from({ length: 25 }, (_, i) => `ED${pad(i + 1)}`))
 })
 

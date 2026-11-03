@@ -30,7 +30,7 @@
 
 import cron from 'node-cron'
 import { pool } from '../db/pool.js'
-import { POSTING_CONFIG } from '../../scripts/seed/postings.js'
+import { POSTING_CONFIG, DEADHEAD_MAX_MI, MIN_NEAR_LOADS } from '../../scripts/seed/postings.js'
 
 let running = false
 
@@ -51,6 +51,20 @@ const RETRY_AFTER_FAILURE_MS = 60 * 60 * 1000
 const RETRY_AFTER_SUCCESS_MS = 20 * 60 * 60 * 1000
 
 const STATE_KEY = 'daily_refresh'
+
+// Azizbek qarori 2026-11-04: inspect only currently visible open postings.
+export async function fleetCoverageHealthy(runner = pool) {
+  const { activeTruckLocations } = await import('../../scripts/refresh-postings.js')
+  const locations = await activeTruckLocations(runner)
+  for (const truck of locations) {
+    const result = await runner.query(`SELECT count(DISTINCT destination_state)::int AS n FROM load_postings
+      WHERE status = 'open' AND posted_at <= now() AND expires_at > now()
+      AND road_miles($1, $2, origin_lat, origin_lon) <= $3`,
+    [truck.current_lat, truck.current_lon, DEADHEAD_MAX_MI])
+    if (Number(result.rows[0].n) < MIN_NEAR_LOADS) return false
+  }
+  return true
+}
 
 async function readState() {
   const result = await pool.query(
@@ -115,7 +129,7 @@ export async function refreshIfNeeded(reason) {
     if (state?.lastAttemptAt) {
       const since = Date.now() - new Date(state.lastAttemptAt).getTime()
       const wait = state.ok ? RETRY_AFTER_SUCCESS_MS : RETRY_AFTER_FAILURE_MS
-      if (since < wait) {
+      if (since < wait && (!state.ok || await fleetCoverageHealthy())) {
         const mins = Math.ceil((wait - since) / 60000)
         console.log(
           `[dailyRefresh] skip — last attempt ${state.ok ? 'succeeded' : 'failed'}` +
@@ -125,7 +139,7 @@ export async function refreshIfNeeded(reason) {
       }
     }
 
-    const needRefresh = await shouldRefresh()
+    const needRefresh = !(await fleetCoverageHealthy()) || await shouldRefresh()
     if (!needRefresh) {
       console.log(`[dailyRefresh] skip — board is healthy (${reason})`)
       return OUTCOME.HEALTHY
@@ -168,4 +182,6 @@ export function startJobs() {
 
   // Daily at 04:00
   cron.schedule('0 4 * * *', () => refreshIfNeeded('cron'))
+  // Azizbek qarori 2026-11-04: recheck expiring/booked nearby postings every 15 minutes.
+  cron.schedule('*/15 * * * *', () => refreshIfNeeded('coverage'))
 }

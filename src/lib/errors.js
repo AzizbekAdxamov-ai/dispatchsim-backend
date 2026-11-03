@@ -47,6 +47,7 @@ export const ERROR_CODES = {
 
   CONVERSATION_NOT_FOUND: { status: 404, message: 'Conversation not found' },
   BROKER_UNAVAILABLE:     { status: 409, message: 'This posting has no broker on file' },
+  BROKER_BLOCKED:         { status: 409, message: 'This broker has blocked this carrier' },
   CHAT_DAILY_LIMIT:       { status: 429, message: 'Daily message limit reached, try again tomorrow' },
   CHAT_PROVIDER_BUSY:     { status: 503, message: 'The chat provider is busy right now. Try again later.' },
   CHAT_UNAVAILABLE:       { status: 503, message: 'The broker cannot be reached right now' },

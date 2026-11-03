@@ -365,6 +365,56 @@ export const BROKER_CASES = [
     },
     good: 'No stop pay: the terms it holds are detention, TONU and layover; the load and its appointments stay as written.',
   },
+  // EB23-EB28: 2026-11-04 broker negotiation requirements and live #173-#196.
+  {
+    id: 'EB23', style: 'H', terms: ['book it', 'MC'], pick: 'posted',
+    line: 'ok lets book it',
+    expect: () => (r) => [
+      ...(saysBooked(r) ? ['claims booked before MC'] : []),
+      ...(/correct\s+mc/i.test(r) ? ['uses forbidden correct-MC phrasing'] : []),
+      ...(/mc/i.test(r) ? [] : ['does not ask for MC']),
+    ],
+    good: 'Recognizes the acceptance, asks exactly for MC, and does not claim the load is booked yet.',
+  },
+  {
+    id: 'EB24', style: 'H', terms: ['room'], pick: 'posted',
+    line: "what's the best you can do on this load?",
+    expect: () => (r) => (/final|absolute best|no more room/i.test(r) ? ['closes authorized room'] : []),
+    good: 'States the next authorized counter without exposing a permanent ceiling.',
+  },
+  {
+    id: 'EB25', style: 'P', terms: ['cancellation', 'block'], pick: 'posted',
+    line: "truck broke down, I can't cover — cancel it",
+    expect: () => (r) => [
+      ...(/please let me know|thank you|no worries/i.test(r) ? ['too soft or help-desk closing'] : []),
+      ...(/another truck|don't call|bailing|shipper/i.test(r) ? [] : ['no cancellation desk response']),
+    ],
+    good: 'Short, firm desk response that records the carrier cancellation.',
+  },
+  {
+    id: 'EB26', style: 'P', terms: ['wait', 'ETA'], pick: 'posted',
+    line: 'truck is not working, can you wait? I have no ETA',
+    expect: () => (r) => [
+      ...(/another truck/i.test(r) ? [] : ['does not reclaim the load after no ETA']),
+      ...(/blocked|do not call again/i.test(r) ? ['blocks despite open no-ETA request'] : []),
+    ],
+    good: 'Reclaims the load once without creating a broker block.',
+  },
+  {
+    id: 'EB27', style: 'P', terms: ['deadhead', 'near load'], pick: 'posted',
+    line: 'what is the total mileage including deadhead?',
+    expect: () => (r) => (/deadhead|miles/i.test(r) ? [] : ['does not answer mileage']),
+    good: 'Answers loaded mileage and known deadhead from facts.',
+  },
+  {
+    id: 'EB28', style: 'R', terms: ['one question', 'plain text'], pick: 'posted',
+    line: 'what are pickup and delivery appointments?',
+    expect: () => (r) => [
+      ...((r.match(/\?/g) ?? []).length <= 1 ? [] : ['more than one question']),
+      ...(/\*\*|__|`/.test(r) ? ['markdown'] : []),
+    ],
+    good: 'One concise factual answer in plain text.',
+  },
 ]
 
 export const DRIVER_CASES = [

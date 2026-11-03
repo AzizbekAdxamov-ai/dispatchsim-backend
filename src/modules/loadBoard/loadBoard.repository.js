@@ -35,6 +35,7 @@ const POSTING_COLUMNS = `
   p.posted_at AS "postedAt", p.expires_at AS "expiresAt",
   p.pickup_at AS "pickupAt", p.delivery_at AS "deliveryAt",
   p.status
+  ,EXISTS (SELECT 1 FROM broker_blocks bb WHERE bb.broker_id = p.broker_id AND bb.blocked_until > now()) AS "blockedByBroker"
 `
 
 // Broker profile columns. Kept SEPARATE from POSTING_COLUMNS on purpose:

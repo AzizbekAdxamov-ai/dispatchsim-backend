@@ -14,6 +14,13 @@ import { drawTransitHours, EQUIP_LENGTHS } from './build.js'
 import { raw } from './render.js'
 import { hash01 } from '../../src/lib/stableHash.js'
 import { fuelPerMile } from '../../src/constants/marketRates.js'
+import { LANES, generateLoad } from './generate.js'
+import { validateLoadItem } from './validate.js'
+
+// Azizbek qarori 2026-11-04 — board coverage target. Frontend DEFAULT_RADIUS_MI
+// uses the same 150-mile search radius; five is the pending default decision.
+export const DEADHEAD_MAX_MI = 150
+export const MIN_NEAR_LOADS = 5
 
 // ---------------------------------------------------------------------
 // Configuration
@@ -58,15 +65,16 @@ const COVERED_EQUIPMENT = new Set(['dry-van', 'reefer', 'flatbed', 'tanker'])
 const STRONG_PCT = 0.30   // closest 30%
 const MARGINAL_PCT = 0.35 // next 35% (30-65)
 // remaining = farthest 35%, split into trap-deadhead (top 20%) + rest
-const TRAP_DH_PCT = 0.20  // farthest 20%
+// Azizbek qarori 2026-11-04 — one in ten postings is a deadhead trap.
+export const TRAP_DH_PCT = 0.10
 
 export const TIER_WEIGHTS = [
   ['strong', 0.30],
   ['marginal', 0.35],
-  ['trap-deadhead', 0.20],
+  ['trap-deadhead', TRAP_DH_PCT],
   ['trap-hos', 0.05],
   ['trap-equipment', 0.05],
-  ['filler', 0.05],
+  ['filler', 0.15],
 ]
 
 const TIER_NAMES = TIER_WEIGHTS.map(([name]) => name)
@@ -77,7 +85,7 @@ const TIER_NAMES = TIER_WEIGHTS.map(([name]) => name)
 
 // Compute deadhead (distance in miles from nearest available driver to
 // the posting's origin). Returns { deadheadMi, nearestDriverId }.
-function computeDeadhead(originCity, drivers) {
+export function computeDeadhead(originCity, drivers) {
   const origin = findCity(originCity.originCity, originCity.originState)
   if (!origin) return { deadheadMi: Infinity, nearestDriverId: null }
 
@@ -93,6 +101,17 @@ function computeDeadhead(originCity, drivers) {
     }
   }
   return { deadheadMi: bestMi, nearestDriverId: bestDriver }
+}
+
+export function nearLoadCoverage(rows, { maxMiles = DEADHEAD_MAX_MI, minimum = MIN_NEAR_LOADS } = {}) {
+  if (!Array.isArray(rows) || rows.length === 0) return false
+  const counts = new Map()
+  for (const row of rows ?? []) {
+    const key = row.nearestDriverId ?? row.driverId
+    if (key == null || row.deadheadMi == null || row.deadheadMi > maxMiles) continue
+    counts.set(key, (counts.get(key) ?? 0) + 1)
+  }
+  return counts.size > 0 && [...counts.entries()].every(([, count]) => count >= minimum)
 }
 
 // Classify items into tiers by deadhead percentile.
@@ -231,5 +250,36 @@ export function buildPostingRows({ rng, postingItems, drivers, trucks, fleetEqui
     }
   })
 
+  return rows
+}
+
+// Create immediately visible rows for every known active driver location.
+// A nearest-driver grouping cannot establish coverage for overlapping trucks.
+export function buildNearCoverageRows({ rng, drivers, brokerIds }) {
+  const active = drivers.filter((d) => d.duty_status !== 'off' && d.current_lat != null && d.current_lon != null)
+  const items = []
+  for (const driver of active) {
+    const nearby = LANES.filter((lane) => roadMiles({ lat: driver.current_lat, lon: driver.current_lon }, lane.origin) <= DEADHEAD_MAX_MI)
+    const destinations = new Set()
+    for (const lane of nearby) {
+      if (destinations.has(lane.destination.state)) continue
+      const base = generateLoad(rng)
+      const [low, high] = rateBandFor(base.equipmentType, lane.distanceMi, lane.origin.state)
+      const candidate = { ...base, originCity: lane.origin.city, originState: lane.origin.state,
+        destinationCity: lane.destination.city, destinationState: lane.destination.state,
+        ratePerMile: Math.round(((low + high) / 2) * 100) / 100 }
+      const checked = validateLoadItem(candidate)
+      if (!checked.ok) continue
+      items.push(checked.item)
+      destinations.add(lane.destination.state)
+      if (destinations.size >= MIN_NEAR_LOADS) break
+    }
+    if (destinations.size < MIN_NEAR_LOADS) throw new Error(`Cannot provide nearby postings for driver ${driver.id}`)
+  }
+  // Each batch is within the immediately visible backfill segment.
+  const rows = []
+  for (let start = 0; start < items.length; start += POSTING_CONFIG.visibleTarget) {
+    rows.push(...buildPostingRows({ rng, postingItems: items.slice(start, start + POSTING_CONFIG.visibleTarget), drivers, brokerIds }))
+  }
   return rows
 }

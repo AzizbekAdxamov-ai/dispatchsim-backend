@@ -84,6 +84,23 @@ export function anyReply(rawReply, rawPrevious) {
   return out
 }
 
+export function brokerCancellationFindings({ replies = [], blocked = false, paperInvalidated = false } = {}) {
+  const text = replies.join(' ')
+  const findings = []
+  if (!/another truck|bailing|don't call/i.test(text)) findings.push('missing firm cancellation response')
+  if (!blocked) findings.push('broker block was not recorded')
+  if (!paperInvalidated) findings.push('rate confirmation was not invalidated')
+  return findings
+}
+
+export function brokerWaitNoEtaFindings({ replies = [], blocked = false } = {}) {
+  const text = replies.join(' ')
+  const findings = []
+  if (!/another truck/i.test(text)) findings.push('load was not reclaimed after no ETA')
+  if (blocked) findings.push('no-ETA wait incorrectly created a block')
+  return findings
+}
+
 // -- Broker ----------------------------------------------------------------------
 
 const CEILING = /\b(ceiling|my limit|room left|room before)\b/i

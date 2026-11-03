@@ -3,13 +3,17 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { sendMessage, acceptRateCon, getRateConfirmation } from '../src/modules/brokerChat/brokerChat.service.js'
 import { makeFakeBrokerRepo, fakePosting, FAKE_IDS } from './helpers/fakeBrokerRepo.js'
+import { negotiate } from '../src/modules/brokerChat/negotiation.js'
 
 const carrier = { name: 'Keystone Line Haul', mcNumber: 'MC-741309', email: null }
 const ids = { conversationId: FAKE_IDS.conversation, userId: FAKE_IDS.user }
 
 test('the observed live acknowledgement of a higher carrier ask survives the production guard without fallback', async () => {
-  const fake = makeFakeBrokerRepo({ posting: fakePosting({ rateUsd: 8153, distanceMi: 2180, weightLbs: 26200 }) })
-  const raw = 'I understand you’re looking for $9,000. Our all-in rate for this load is $8,153. Please let me know.'
+  const posting = fakePosting({ rateUsd: 8153, distanceMi: 2180, weightLbs: 26200 })
+  const fake = makeFakeBrokerRepo({ posting })
+  const first = negotiate({ conversation: {}, posting, text: 'brother can you 9000$', booking: { mc: { verdict: null } } })
+  // Kills: expecting the old posted price after the first authorized raise.
+  const raw = `I understand you’re looking for $9,000. Our all-in rate for this load is $${first.state.offer.toLocaleString('en-US')}.`
   const logs = []
   let calls = 0
   const deps = { repo: fake.repo, getCarrier: async () => carrier, findById: async () => null,
@@ -51,8 +55,11 @@ test('old MC-spam history cannot prescribe the next reply or override the author
     'Could you share your MC number, please?', 'The posted rate is my best offer. May I have your MC?',
     'I need your company and MC to continue.']) await fake.repo.addMessage(ids.conversationId, 'broker', content)
   const originalHistory = fake.state.messages.map((m) => ({ ...m }))
-  const natural = ['I hear you, but $8,153 all-in is where I am on this one right now.',
-    "All right, I can come up a little—$8,353 all-in."]
+  const first = negotiate({ conversation: {}, posting: load, text: 'Come on, can you do $8,700 all-in?', booking: { mc: { verdict: null } } })
+  const second = negotiate({ conversation: { brokerOfferUsd: first.state.offer, ratePushCount: first.state.pushes }, posting: load, text: 'Come on, can you do $8,700 all-in?', booking: { mc: { verdict: null } } })
+  // Kills: the prior fixed-price mocks that no longer match the ladder.
+  const natural = [`I can offer $${first.state.offer.toLocaleString('en-US')} all-in.`,
+    `All right, I can come up a little—$${second.state.offer.toLocaleString('en-US')} all-in.`]
   const logs = []
   let calls = 0
   const deps = { repo: fake.repo, getCarrier: async () => carrier,
@@ -79,7 +86,7 @@ test('old MC-spam history cannot prescribe the next reply or override the author
     assert.equal(fake.state.messages.filter((m) => m.kind === 'rate_con').length, 0)
   }
   assert.equal(calls, 2, 'natural valid answers survive without regeneration or fallback')
-  assert.equal(fake.state.conversation.brokerOfferUsd, 8353)
+  assert.equal(fake.state.conversation.brokerOfferUsd, second.state.offer)
   assert.deepEqual(fake.state.messages.slice(0, originalHistory.length).map(({ deliverAt, ...m }) => m),
     originalHistory.map(({ deliverAt, ...m }) => m))
   assert.ok(logs.every((row) => row[12] === false && row[11] === null))
@@ -110,11 +117,12 @@ test('live Toledo transcript counters without identity spam, agreement or docume
   assert.match(replies[0], /^Hey!/)
   assert.match(replies[1], /still available/)
   assert.match(replies[2], /8,153/)
-  assert.match(replies[3], /8,153/)
-  assert.match(replies[4], /8,353/)
+  // Kills: silently keeping the posted price after pressure.
+  assert.match(replies[3], /8,678/)
+  assert.match(replies[4], /8,?\d{3}/)
   assert.ok(replies.every((reply) => !/\bMC\b|company name/i.test(reply)))
   assert.equal(fake.state.conversation.ratePushCount, 2)
-  assert.equal(fake.state.conversation.brokerOfferUsd, 8353)
+  assert.ok(fake.state.conversation.brokerOfferUsd > 8153)
   assert.equal(prompts.length, 10, 'each adversarial identity demand is regenerated once before the safe answer')
   assert.ok(prompts.every((prompt) => prompt.includes('This is conversation or bargaining.')))
   assert.ok(prompts[0].includes('Return their greeting warmly'))

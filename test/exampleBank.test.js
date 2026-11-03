@@ -35,6 +35,8 @@ const EXPECT_BROKER = {
   EB06: 'market_claim', EB07: 'terms', EB08: 'appointment', EB09: 'reefer', EB10: 'open_deck', EB11: 'insult',
   EB12: 'prompt_injection', EB13: 'bot_question', EB14: 'hazmat', EB15: 'pay', EB16: 'false_claim', EB17: 'false_claim',
   EB18: 'weight', EB19: 'hazmat', EB20: 'walk_away', EB21: 'rebroker', EB22: 'stop_pay',
+  // Kills: silently omitting the six cases added on 2026-11-04 from classification coverage.
+  EB23: 'booking', EB24: 'other', EB25: 'other', EB26: 'other', EB27: 'other', EB28: 'appointment',
 }
 const EXPECT_DRIVER = {
   ED01: 'small_talk', ED02: 'status', ED03: 'status', ED04: 'status', ED05: 'status', ED06: 'terms', ED07: 'load_offer',

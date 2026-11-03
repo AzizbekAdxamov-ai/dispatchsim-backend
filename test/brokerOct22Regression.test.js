@@ -88,9 +88,11 @@ test('holding a current rate cannot claim finality while a later authorized coun
   for (const reply of ['$8,153 all-in is my final rate.', 'My best offer is $8,153 all-in.',
     'I cannot go higher than $8,153 all-in.', 'I am not moving above $8,153 all-in.',
     '$8,153 is the most I can pay.']) assert.match(negotiationReplyProblem(reply, first), /permanent final/, reply)
-  assert.equal(negotiationReplyProblem('I am at $8,153 all-in on this one right now.', first), null)
-  assert.equal(negotiationReplyProblem('My best offer right now is $8,153 all-in.', first), null)
-  assert.equal(negotiationReplyProblem('This is not my final rate. My offer is $8,153.', first), null)
+  // Kills: guarding the old posted amount after the first authorized concession.
+  const current = first.state.offer.toLocaleString('en-US')
+  assert.equal(negotiationReplyProblem(`I am at $${current} all-in on this one right now.`, first), null)
+  assert.equal(negotiationReplyProblem(`My best offer right now is $${current} all-in.`, first), null)
+  assert.equal(negotiationReplyProblem(`This is not my final rate. My offer is $${current}.`, first), null)
   const second = step('Bro add a little bit.', saved(first))
   assert.ok(second.state.offer > first.state.offer)
   const exhausted = step('What is your rate?', { brokerOfferUsd: ceilingFor(posting) })
@@ -218,7 +220,8 @@ test('actual street acceptance is recognized but cannot confirm a rate without t
     assert.equal(fake.state.messages.filter((m) => m.kind === 'rate_con').length, 0)
     const reply = fake.state.messages.filter((m) => m.role === 'broker').at(-1).content
     if (!verified) {
-      assert.match(reply, /need your correct MC/i)
+      // Kills: asking for a correct MC before one was provided.
+      assert.match(reply, /what.s your MC/i)
       assert.equal(logs.at(-1)[12], true)
       assert.doesNotMatch(reply, /we're set|we’re set|paperwork over/)
     }
@@ -248,5 +251,6 @@ test('actual deadhead counter keeps the requested price and best-we-can-do is no
   const reply = 'I get the deadhead, but the best we can do is $8,153 all-in, including linehaul and fuel.'
   assert.equal(negotiationReplyProblem(reply, decision), 'claimed a permanent final rate while authorized bargaining room remains')
   assert.equal(negotiationReplyProblem('The best I can do is $8,153 all-in.', decision), 'claimed a permanent final rate while authorized bargaining room remains')
-  assert.equal(negotiationReplyProblem('The best we can do right now is $8,153 all-in.', decision), null)
+  // Kills: treating the posted rate as the new authorized counter.
+  assert.equal(negotiationReplyProblem(`The best we can do right now is $${decision.state.offer.toLocaleString('en-US')} all-in.`, decision), null)
 })

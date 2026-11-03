@@ -79,7 +79,10 @@ test('reply validation binds every component to its label and cannot approve ano
     '$3,058 plus $500 fuel.', '$3,058 all-in plus $500 fuel.', '$3,058 total, plus $500 fuel.',
     '$3,058 total and $500 fuel on top.']) assert.ok(negotiationReplyProblem(reply, decision), reply)
   const ask = negotiate({ posting, conversation: {}, booking, text: 'Can you do $4000 linehaul?' })
-  assert.equal(negotiationReplyProblem('You asked for $4,000 linehaul. My offer is $2,558 linehaul plus $500 fuel ($3,058 total).', ask), null)
+  // Kills: validating a stale total after the first authorized rate step.
+  const total = ask.state.offer.toLocaleString('en-US')
+  const linehaul = (ask.state.offer - posting.fuelSurchargeUsd).toLocaleString('en-US')
+  assert.equal(negotiationReplyProblem(`You asked for $4,000 linehaul. My offer is $${linehaul} linehaul plus $500 fuel ($${total} total).`, ask), null)
 })
 
 test('the actual live basis clarification may repeat the unresolved ask without authorizing it', () => {

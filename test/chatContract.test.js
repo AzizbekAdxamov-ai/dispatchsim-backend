@@ -52,9 +52,12 @@ test('sendMessage returns the dispatcher turn and a flag, and nothing else', () 
   for (const [file] of SERVICES) {
     const text = src(file)
     const returns = [...text.matchAll(/return \{ dispatcherMessage[^}]*\}/g)].map((m) => m[0])
-    assert.equal(returns.length, 1, `${file}: sendMessage'ning qaytarish qatori topilmadi`)
-    assert.equal(returns[0], 'return { dispatcherMessage, awaitingReply: true }',
-      `${file}: qaytarish shakli o'zgargan`)
+    // Kills: leaking an undelivered broker reply from any lifecycle branch.
+    assert.ok(returns.length >= 1, `${file}: sendMessage return missing`)
+    for (const result of returns) {
+      assert.match(result, /awaitingReply:/)
+      assert.doesNotMatch(result, /brokerMessage|driverMessage|\breply\b/)
+    }
   }
 })
 

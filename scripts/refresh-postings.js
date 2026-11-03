@@ -14,9 +14,24 @@ import { pool } from '../src/db/pool.js'
 import { generateLoad, generateApplicant, generateTruckListing } from './seed/generate.js'
 import { LoadItem, ApplicantItem, TruckListingItem, BROKERS } from './seed/schemas.js'
 import { validateLoadItem, validateApplicantItem, validateTruckListingItem } from './seed/validate.js'
-import { buildPostingRows, POSTING_CONFIG, TIER_WEIGHTS, HIDDEN_RATE_SHARE } from './seed/postings.js'
+import { buildPostingRows, buildNearCoverageRows, POSTING_CONFIG, TIER_WEIGHTS, HIDDEN_RATE_SHARE } from './seed/postings.js'
 import { buildApplicantRows, APPLICANT_CONFIG, APPLICANT_TIERS } from './seed/applicants.js'
 import { buildTruckRows, TRUCK_CONFIG, TRUCK_TIERS } from './seed/trucks.js'
+import { findCity } from './seed/cities.js'
+
+// Azizbek qarori 2026-11-04: active trucks define coverage, including a
+// parked truck whose recorded location is available without a driver.
+export async function activeTruckLocations(runner = pool) {
+  const { rows } = await runner.query(`SELECT t.id, t.current_location, d.current_lat, d.current_lon
+    FROM trucks t LEFT JOIN drivers d ON d.id = t.driver_id WHERE t.status = 'active'`)
+  return rows.map((row) => {
+    if (row.current_lat != null && row.current_lon != null) return { ...row, duty_status: 'on' }
+    const parts = String(row.current_location ?? '').split(',').map((x) => x.trim())
+    const city = parts.length === 2 ? findCity(parts[0], parts[1]) : null
+    if (!city) throw new Error(`No known coordinates for active truck ${row.id}`)
+    return { ...row, current_lat: city.lat, current_lon: city.lon, duty_status: 'on' }
+  })
+}
 
 const POSTING_COLUMNS = [
   'origin_lat', 'origin_lon', 'destination_lat', 'destination_lon',
@@ -32,7 +47,7 @@ export async function runPostingRefresh({ count = 12, runner = pool } = {}) {
   assertLocalHost()
   if (!Number.isInteger(count) || count < 1 || count > 60) throw new RangeError('Posting count must be 1–60')
   const brokerIds = new Map((await runner.query('SELECT id, name FROM brokers')).rows.map((b) => [b.name, b.id]))
-  const drivers = (await runner.query('SELECT id, current_lat, current_lon, duty_status FROM drivers')).rows
+  const drivers = await activeTruckLocations(runner)
   const items = []
   const seen = new Set()
   for (let n = 0; n < count; n += 1) {
@@ -43,7 +58,9 @@ export async function runPostingRefresh({ count = 12, runner = pool } = {}) {
     items.push(checked.item)
     seen.add(`${item.originCity}, ${item.originState} -> ${item.destinationCity}, ${item.destinationState}`)
   }
-  const rows = buildPostingRows({ rng: mulberry32(Date.now()), postingItems: items, drivers, trucks: [], fleetEquipment: [], brokerIds })
+  const rng = mulberry32(Date.now())
+  const rows = [...buildPostingRows({ rng, postingItems: items, drivers, trucks: [], fleetEquipment: [], brokerIds }),
+    ...buildNearCoverageRows({ rng, drivers, brokerIds })]
   const client = await runner.connect()
   try {
     await client.query('BEGIN')
@@ -139,10 +156,7 @@ export async function runRefresh() {
   const brokerIds = new Map(brokerRows.rows.map((b) => [b.name, b.id]))
 
   // Step 2: fetch live drivers from DB (not fixture)
-  const driversResult = await pool.query(
-    `SELECT id, current_lat, current_lon, duty_status FROM drivers`,
-  )
-  const drivers = driversResult.rows
+  const drivers = await activeTruckLocations(pool)
 
   // Step 3a: generate posting items via AI
   const seenPairs = new Set()
@@ -297,6 +311,7 @@ export async function runRefresh() {
     trucks: [],
     fleetEquipment: [],
   })
+  postingRows.push(...buildNearCoverageRows({ rng, drivers, brokerIds }))
   // One round trip reserves the whole block, so two runs (or the cron and a
   // manual run) can never hand out the same id. Index-based ids were the
   // reason the second run ever attempted died on driver_applicants_pkey.

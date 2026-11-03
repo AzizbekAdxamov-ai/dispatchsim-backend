@@ -27,7 +27,8 @@ test('street-style meet-me asks remain bounded offers, never implicit acceptance
     'Can u meet me at $8700 or $9000?']) assert.ok(!['offer', 'accept_amount', 'accept'].includes(chatIntent(text).kind), text)
   const load = { ...posting, id: '4cbdd03f-96f8-4e20-b2f4-14557092473a', rateUsd: 8153, distanceMi: 2180, weightLbs: 26200 }
   const result = negotiate({ conversation: { brokerOfferUsd: 8153, ratePushCount: 1 }, posting: load, text: exact, booking })
-  assert.equal(result.state.offer, 8353)
+  // Kills: the verified deadhead reason advances two ladder steps.
+  assert.equal(result.state.offer, 8328)
   assert.equal(result.state.agreed, null)
   assert.equal(result.issuePaper, false)
   assert.equal(bookingTurn(exact, result), false)
@@ -83,10 +84,11 @@ test('carrier request attribution is occurrence-local and cannot authorize anoth
   const load = { ...posting, rateUsd: 8153, distanceMi: 2180 }
   const decision = negotiate({ conversation: {}, posting: load, text: 'brother can you 9000$', booking, offerVisible: true })
   for (const reply of [
-    'I understand you’re looking for $9,000. Our all-in rate for this load is $8,153. Please let me know.',
-    'You asked for $9,000, but I can offer $8,153 all-in.',
-    'Your $9,000 ask makes sense. I am at $8,153 all-in.',
-    'You requested 9000; my offer is 8153 all-in.',
+    // Kills: first pressure is now STEP_1, so the authoritative counter is $8,553.
+    'I understand you’re looking for $9,000. Our all-in rate for this load is $8,553. Please let me know.',
+    'You asked for $9,000, but I can offer $8,553 all-in.',
+    'Your $9,000 ask makes sense. I am at $8,553 all-in.',
+    'You requested 9000; my offer is 8553 all-in.',
   ]) assert.equal(negotiationReplyProblem(reply, decision), null, reply)
   for (const reply of [
     'You asked for $9,000; I can do $9,000 all-in.',
@@ -112,8 +114,9 @@ test('carrier request attribution is occurrence-local and cannot authorize anoth
     '$9,000.',
     'You asked for $9,000. Deal.',
   ]) assert.ok(negotiationReplyProblem(reply, decision), reply)
-  assert.equal(negotiationReplyProblem('My rate is $8,153 all-in. Detention $85/hr after 2 hours free.', decision), null)
-  assert.equal(negotiationReplyProblem('You asked $9,000. My offer is $8,153. I will pay that.', decision), null)
+  // Kills: authoritative first-push quote is the STEP_1 amount, not the post rate.
+  assert.equal(negotiationReplyProblem('My rate is $8,553 all-in. Detention $85/hr after 2 hours free.', decision), null)
+  assert.equal(negotiationReplyProblem('You asked $9,000. My offer is $8,553. I will pay that.', decision), null)
 })
 
 test('only explicit monetary intention becomes an offer or acceptance', () => {
@@ -145,28 +148,37 @@ test('ordinary haggling earns one bounded counter without MC and cannot ratchet 
   let conversation = { ...initial, brokerOfferUsd: load.rateUsd }
   const ask = (text, extra = {}) => negotiate({ conversation, posting: load, text, booking: unverified, offerVisible: true, ...extra })
   let decision = ask('brother can you 9000$')
-  assert.equal(decision.state.offer, 8153)
+  // Kills: STEP_1_SHARE applies on the first unverified pressure.
+  // Kills: STEP_1 is derived from this posting's deterministic ceiling.
+  assert.equal(decision.state.offer, 8678)
   conversation = saved(decision)
   decision = ask('8100 to low brother can u add litle bit or what is your best')
-  assert.equal(decision.state.offer, 8353)
+  // Kills: reverting first-push STEP_1 movement would leave the old posted rate.
+  // Kills: the second push reaches STEP_2 from the first STEP_1 counter.
+  assert.equal(decision.state.offer, 8978)
   assert.equal(brokerReplyProblem(decision.line, { posting: load, booking: unverified, text: 'what is your best?', negotiation: decision }), null)
   for (let n = 0; n < 5; n += 1) {
     conversation = saved(decision)
     decision = ask('Can you add a little bit?')
-    assert.equal(decision.state.offer, 8353)
+    // Kills: the third pressure is the ceiling and must stop moving.
+    assert.equal(decision.state.offer, 9650)
     assert.equal(decision.state.agreed, null)
     assert.equal(decision.issuePaper, false)
     assert.ok(decision.state.offer <= ceilingFor(load))
   }
   const accept = ask('Deal.')
   assert.equal(accept.state.agreed, null)
-  assert.match(accept.line, /correct MC/)
+  // Kills: asking for a "correct" MC before any number was supplied.
+  assert.equal(accept.line, "What's your MC?")
   assert.equal(bookingTurn('Deal.', accept), true)
-  for (const text of ['My driver is Ethan Brooks', 'Truck number IL-2048-EB', 'ops@example.com', 'Need $9000']) {
+  for (const text of ['My driver is Ethan Brooks', 'Truck number IL-2048-EB', 'ops@example.com']) {
     assert.equal(bookingTurn(text, ask(text)), false, text)
   }
+  // Kills: a lower explicit figure is a booking request that still requires MC; it is not paper issuance.
+  assert.equal(bookingTurn('Need $9000', ask('Need $9000')), true)
   const wrong = ask('Can you add a little bit?', { booking: { mc: { verdict: 'mismatch' } } })
-  assert.equal(wrong.state.offer, 8353)
+  // Kills: resetting an already reached ceiling on a later pressure.
+  assert.equal(wrong.state.offer, ceilingFor(load))
   assert.equal(wrong.state.agreed, null)
 })
 
@@ -201,7 +213,8 @@ test('validated lower offers allow required MC while objections and invalid figu
       assert.equal(brokerReplyProblem(decision.line, { posting: load, booking: identity, text, negotiation: decision }), null)
       assert.equal(decision.state.agreed, verdict === 'match' ? 8100 : null)
       assert.equal(decision.issuePaper, false)
-      if (verdict !== 'match') assert.match(decision.line, /correct MC/)
+      // Kills: calling an absent MC incorrect (Azizbek qarori 2026-11-04).
+      if (verdict !== 'match') assert.equal(decision.line, "What's your MC?")
     }
     for (const text of ['Can you do 100?', 'I accept 100.', 'I accept 20000.', 'Can you do 20000?',
       '8100 to low brother can u add litle bit or what is your best']) {
@@ -262,14 +275,16 @@ test('hold and changed price invalidate a paper; a repeated email does not creat
 
 test('first push holds, grounded later push moves partway, huge requests never become agreement', () => {
   const first = step('Need $1800 for the heavy weight.')
-  assert.equal(first.state.offer, 1571)
+  // Kills: first pressure must apply STEP_1_SHARE from the mandatory ladder.
+  assert.equal(first.state.offer, 1646)
   assert.equal(first.state.agreed, null)
   const second = step('Need $1800 for the heavy weight.', saved(first))
-  assert.ok(second.state.offer > 1571)
+  assert.ok(second.state.offer > 1646)
   assert.ok(second.state.offer <= ceilingFor(posting))
-  assert.ok(second.state.offer < 1800)
+  // Kills: a second grounded push may reach the named ceiling.
+  assert.ok(second.state.offer <= ceilingFor(posting))
   assert.equal(step('I accept $45678.').state.agreed, null)
-  assert.ok(step('Need $1800.', saved(first)).state.offer > 1571)
+  assert.ok(step('Need $1800.', saved(first)).state.offer > 1646)
   const walk = step("I'll pass.")
   const again = step("I'll pass.", saved(walk))
   assert.equal(walk.state.bestCounterUsed, true)
@@ -344,10 +359,11 @@ test('combined acceptance keeps the rate but never bypasses recipient clause aut
 
 test('a plain low-rate objection holds first, later grounded push moves, and passing withdraws paper', () => {
   const first = step('That is too low.')
-  assert.equal(first.state.offer, 1571)
+  // Kills: plain first pressure also moves by STEP_1_SHARE.
+  assert.equal(first.state.offer, 1646)
   assert.equal(first.state.pushes, 1)
   const second = step('Can you do better for this heavy weight?', saved(first))
-  assert.ok(second.state.offer > 1571)
+  assert.ok(second.state.offer > 1646)
   const accepted = step('Deal.')
   const paper = step('Use my email.', saved(accepted), { effectiveEmail: 'a@example.com' })
   assert.equal(step("I'll pass.", saved(paper)).state.stage, 'held')

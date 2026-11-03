@@ -6,6 +6,7 @@
 // separate budgets, keys and models.
 import { chatText } from '../../../scripts/seed/aiClient.js'
 import { brokerReplyProblem, brokerRetryPrompt } from './replyProblem.js'
+import { cancellationIntent, cancellationResponse, shouldBlock } from './blockPolicy.js'
 import { truckFacts } from './truckTalk.js'
 import { bookingFacts, carrierNotVerified } from './bookingTalk.js'
 import { stopsForRow } from './stops.js'
@@ -70,6 +71,7 @@ async function assertCarrierVerified(conversationId, posting, deps = DEFAULT_DEP
 export async function openConversation({ postingId, userId }) {
   const posting = await repo.getPostingWithBroker(postingId)
   assertPostingOpen(posting)
+  if (await repo.isBrokerBlocked({ brokerId: posting.brokerId, brokerMc: posting.mcNumber })) throw new AppError('BROKER_BLOCKED')
 
   const conversation = await repo.openConversation(postingId, userId)
   const messages = await repo.listMessages(conversation.id)
@@ -111,6 +113,7 @@ export async function getThread({ conversationId, userId }) {
   if (!conversation) throw new AppError('CONVERSATION_NOT_FOUND')
 
   const posting = await repo.getPostingWithBroker(conversation.postingId)
+  if (await repo.isBrokerBlocked({ brokerId: posting?.brokerId, brokerMc: posting?.mcNumber })) throw new AppError('BROKER_BLOCKED')
 
   const messages = await repo.listMessages(conversationId)
   return {
@@ -134,6 +137,27 @@ export async function sendMessage({ conversationId, userId, text }, { deps = DEF
   if (!conversation) throw new AppError('CONVERSATION_NOT_FOUND')
 
   const posting = await deps.repo.getPostingWithBroker(conversation.postingId)
+  if (await deps.repo.isBrokerBlocked?.({ brokerId: posting?.brokerId, brokerMc: posting?.mcNumber })) throw new AppError('BROKER_BLOCKED')
+  const cancellation = cancellationIntent(text)
+  if (cancellation.kind === 'cancel' && shouldBlock({ status: conversation.status, cancellationText: text })) {
+    const line = cancellationResponse({ brokerName: posting?.contactName ?? posting?.name })
+    const dispatcherMessage = deps.repo.cancelAndBlock
+      ? await deps.repo.cancelAndBlock({ conversationId, text, line, brokerId: posting?.brokerId, brokerMc: posting?.mcNumber, brokerContact: posting?.contactName })
+      : await deps.repo.addMessage(conversationId, 'dispatcher', text)
+    return { dispatcherMessage, awaitingReply: false, blocked: true }
+  }
+  if (cancellation.kind === 'wait' && cancellation.explicit && conversation.status === 'booked') {
+    const dispatcherMessage = await deps.repo.addMessage(conversationId, 'dispatcher', text)
+    const line = cancellationResponse({ brokerName: posting?.contactName ?? posting?.name, noEta: true })
+    await deps.repo.addMessage(conversationId, 'broker', line)
+    return { dispatcherMessage, awaitingReply: false, blocked: false, recovered: true }
+  }
+  if (cancellation.kind === 'wait' && conversation.status === 'booked') {
+    const dispatcherMessage = await deps.repo.addMessage(conversationId, 'dispatcher', text)
+    const line = `${posting?.contactName ?? posting?.name}: I can hold it briefly. What is the truck's ETA?`
+    await deps.repo.addMessage(conversationId, 'broker', line)
+    return { dispatcherMessage, awaitingReply: false, blocked: false, waitingForEta: true }
+  }
   assertPostingOpen(posting)
 
   // Shared with the driver chat and derived from the provider's published
