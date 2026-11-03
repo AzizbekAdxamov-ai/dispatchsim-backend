@@ -201,7 +201,8 @@ export async function bookPosting({ postingId, userId, driverId, agreement = nul
         throw new AppError('POSTING_NOT_FOUND')
       }
 
-      const agreedRate = await getAgreedRate(client, postingId, userId, agreement)
+      const agreedQuote = await getAgreedRate(client, postingId, userId, agreement, { withQuote: true })
+      const agreedRate = agreedQuote?.rateUsd ?? null
       // A held or renegotiated chat cannot race a signature into a posted-price booking.
       if (agreement && agreedRate === null) throw new AppError('NOT_AGREED_YET')
 
@@ -227,6 +228,8 @@ export async function bookPosting({ postingId, userId, driverId, agreement = nul
         // booking, THAT is what the load is worth — not the posted number.
         // Without this the whole conversation would be theatre.
         rateUsd: agreedRate ?? posting.rateUsd,
+        rateBasis: agreedQuote?.rateBasis ?? posting.rateBasis ?? 'all-in',
+        fuelSurchargeUsd: agreedQuote?.fuelSurchargeUsd ?? posting.fuelSurchargeUsd ?? 0,
         distanceMi: posting.distanceMi,
         weightLbs: posting.weightLbs,
         equipmentType: posting.equipmentType,

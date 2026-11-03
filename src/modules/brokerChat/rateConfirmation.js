@@ -10,6 +10,8 @@
 
 import PDFDocument from 'pdfkit'
 import { brokerTerms, termsLines } from '../../constants/accessorials.js'
+import { rateQuote, SPLIT_RATE } from './rateQuote.js'
+import { APP_TIMEZONE } from '../../constants/appClock.js'
 
 const DISCLAIMER = 'Sample document'
 
@@ -17,17 +19,17 @@ function formatCurrency(amount) {
   return '$' + Number(amount).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })
 }
 
-function formatDate(dateStr) {
+export function formatDate(dateStr) {
   if (!dateStr) return '—'
   const d = new Date(dateStr)
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+  return d.toLocaleDateString('en-US', { timeZone: APP_TIMEZONE, month: 'short', day: 'numeric', year: 'numeric' })
 }
 
-function formatDateTime(dateStr) {
+export function formatDateTime(dateStr) {
   if (!dateStr) return '—'
   const d = new Date(dateStr)
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) +
-    ' ' + d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+  return d.toLocaleDateString('en-US', { timeZone: APP_TIMEZONE, month: 'short', day: 'numeric', year: 'numeric' }) +
+    ' ' + d.toLocaleTimeString('en-US', { timeZone: APP_TIMEZONE, hour: '2-digit', minute: '2-digit' })
 }
 
 /**
@@ -202,6 +204,13 @@ export function generateRateConfirmation({ conversation, posting, broker, carrie
     y += 18
     doc.fontSize(10).font('Helvetica').fillColor('#444444')
     doc.text(`($${perMile}/mi)`, leftCol, y)
+
+    const quote = rateQuote(conversation, conversation.agreedRateUsd)
+    if (quote.rateBasis === SPLIT_RATE) {
+      // Print the frozen paper breakdown, not a later posting's components.
+      y += 15
+      doc.text(`Linehaul ${formatCurrency(quote.linehaulUsd)} + Fuel ${formatCurrency(quote.fuelSurchargeUsd)}`, leftCol, y)
+    }
 
     y += 20
     doc.fontSize(10).font('Helvetica').fillColor('#000000')

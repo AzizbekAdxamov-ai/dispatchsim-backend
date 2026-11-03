@@ -33,7 +33,7 @@ test('a regenerated answer logs the prompt and reference context actually sent o
     findById: async () => null, assertCanSend: async () => {}, chatConfigFor: () => ({ model: 'fake' }),
     logTurn: async (row) => logs.push(row), chatText: async ({ messages }) => {
       sent.push(messages)
-      return sent.length === 1 ? 'Please provide your MC number.' : 'Hey! Still got this load.'
+      return sent.length === 1 ? 'Please provide your MC number.' : 'Hey! Good to hear from you.'
     } }
   await sendMessage({ ...ids, text: 'wassap brother' }, { deps })
   assert.equal(sent.length, 2)

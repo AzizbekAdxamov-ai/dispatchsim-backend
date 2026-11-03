@@ -297,9 +297,13 @@ export const unnegated = (r) => r.split(/(?<=[.!?])\s+|\b(?:but|however|though)\
 // The dispatcher says the load is already booked, or that someone on the
 // broker's side gave it to them ("i already booked this with ur guy mike",
 // EB17). The chat has no such booking and no such person.
-const CLAIMS_EARLIER_BOOKING = /\b(?:already|just)\s+(?:booked\s+(?:it|this|that|with|w|through|thru)|got (?:it|this|that) booked|had (?:it|this) booked|locked (?:it|this) in)\b|\bbooked (?:it|this|that) (?:with|through)\b|\b(?:ur|your) (?:guy|girl|colleague|coworker|partner|buddy|rep|other (?:guy|broker|rep))\b[^.!?]{0,30}\b(?:booked|gave|promised|locked)\b/i
+// Exported for the compact prompt's CURRENT TASK (brokerContext.js): the
+// dispatcher's claim that the load is already booked steers the reply task.
+export const CLAIMS_EARLIER_BOOKING = /\b(?:already|just)\s+(?:booked\s+(?:it|this|that|with|w|through|thru)|got (?:it|this|that) booked|had (?:it|this) booked|locked (?:it|this) in)\b|\bbooked (?:it|this|that) (?:with|through)\b|\b(?:ur|your) (?:guy|girl|colleague|coworker|partner|buddy|rep|other (?:guy|broker|rep))\b[^.!?]{0,30}\b(?:booked|gave|promised|locked)\b/i
 // The reply takes that as settled.
-const CONFIRMS_BOOKING = /\b(?:good|glad|great) to hear\b|\blocked in\b|\byou'?re (?:all )?set\b|\ball set\b|\bconfirmed\b|^\s*(?:yes|yeah|yep|right|correct|perfect)\b/i
+// "We'll keep everything set" (EB17, 2026-10-29) rides the claim to a
+// settlement without saying booked: it goes along like "all set" does.
+const CONFIRMS_BOOKING = /\b(?:good|glad|great) to hear\b|\blocked in\b|\byou'?re (?:all )?set\b|\ball set\b|\b(?:keep|keeping) (?:everything|it all|it|this) (?:as )?set\b|\beverything(?:'s| is| as)? set\b|\bconfirmed\b|^\s*(?:yes|yeah|yep|right|correct|perfect)\b/i
 // Other ways to say "I have no record" that NEGATION does not carry.
 const NO_RECORD = /\b(?:can'?t|cannot|couldn'?t|doesn'?t|does not|unaware)\b/i
 // A reply that is one of the other safe lines (holdRateLine, PAYMENT_TERMS_LINE)

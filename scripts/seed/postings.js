@@ -12,6 +12,8 @@ import { findCity, roadMiles } from './cities.js'
 import { rateBandFor } from './validate.js'
 import { drawTransitHours, EQUIP_LENGTHS } from './build.js'
 import { raw } from './render.js'
+import { hash01 } from '../../src/lib/stableHash.js'
+import { fuelPerMile } from '../../src/constants/marketRates.js'
 
 // ---------------------------------------------------------------------
 // Configuration
@@ -184,6 +186,11 @@ export function buildPostingRows({ rng, postingItems, drivers, trucks, fleetEqui
     const upperBound = Math.min(20000, item.distanceMi * 5)
     const rawRate = Math.round(item.distanceMi * item.ratePerMile)
     const rateUsd = Math.min(upperBound, Math.max(lowerBound, rawRate))
+    // This is a declared seed allocation, not a live DAT fuel surcharge.
+    // Stable lane hashing adds variety without changing totals or RNG draws.
+    const split = hash01(`${item.broker}:${item.originCity}:${item.destinationCity}`) < 0.25
+      && fuelPerMile(item.equipmentType) !== null
+    const fuelUsd = split ? Math.min(rateUsd - 1, Math.max(1, Math.round(item.distanceMi * fuelPerMile(item.equipmentType)))) : 0
 
     // Equipment length: pick from valid lengths for this equipment type
     const equipLengths = EQUIP_LENGTHS[item.equipmentType] || [53]
@@ -206,6 +213,8 @@ export function buildPostingRows({ rng, postingItems, drivers, trucks, fleetEqui
       broker_id: brokerIds?.get(item.broker) ?? null,
       commodity: item.commodity,
       rate_usd: rateUsd,
+      rate_basis: split ? 'linehaul-plus-fuel' : 'all-in',
+      fuel_surcharge_usd: fuelUsd,
       // The broker's number either way. rate_hidden decides whether the
       // board prints it; see migration 030.
       rate_hidden: item.rateHidden === true,

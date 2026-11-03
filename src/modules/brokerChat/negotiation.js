@@ -3,12 +3,14 @@ import { asciiPunct } from '../../lib/plainText.js'
 import { ceilingFor } from './ratePolicy.js'
 import { rateReasons, REASON_WORDS } from './rateTalk.js'
 import { saysBooked, mcQuestion } from './bookingTalk.js'
+import { rateQuote, quoteText, SPLIT_RATE } from './rateQuote.js'
+import { proposesRebroker, ONE_CARRIER_REPLY } from './carrierPolicy.js'
 
 const EMAIL = /\b[a-z0-9._%+-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}\b/gi
-const MONEY = '(?:\\$\\s*)?(\\d{1,3}(?:,\\d{3})+|\\d{3,5})(?:\\.00)?(?:\\s*\\$)?'
+const MONEY = '(?:\\$\\s*)?(\\d+(?:\\.\\d+)?[kK]|(?:\\d{1,3}(?:,\\d{3})+|\\d{3,5})(?:\\.00)?)(?:\\s*\\$)?'
 const OFFER = new RegExp(`\\b(?:need|want|asking for|(?:can|could) (?:you|u)(?: meet (?:me|us) at| do)?|how about|what about|offer|pay|take (?:it|this|the load) for|run (?:it|this) for|do (?:it|this) for)\\s+${MONEY}(?![\\d.,])`, 'gi')
 const ACCEPT_AT = new RegExp(`\\b(?:accept|agree (?:on|to)|take (?:it|this|the load) (?:at|for)|book (?:it|this|the load) (?:at|for)|works? (?:at|for))\\s+${MONEY}(?![\\d.,])`, 'gi')
-const AMOUNT_FIRST = new RegExp(`^\\s*(?:(?:aight|alright|all right|okay|ok|yeah|yes)[, ]+)?${MONEY}\\s*(?:all[- ]?in\\s*)?(?:works(?: for (?:me|us))?|is (?:fine|good)|(?:is )?accepted|(?:is )?agreed)(?:[, ]+(?:bro(?:ther)?|man))?(?:[, ]+let'?s run it)?[.!]?\\s*$`, 'i')
+const AMOUNT_FIRST = new RegExp(`^\\s*(?:(?:aight|alright|all right|okay|ok|yeah|yes)[, ]+)?${MONEY}\\s*(?:(?:all[- ]?in|total(?: including fuel)?|linehaul(?: plus fuel)?)\\s*)?(?:works(?: for (?:me|us))?|is (?:fine|good)|(?:is )?accepted|(?:is )?agreed)(?:[, ]+(?:bro(?:ther)?|man))?(?:[, ]+let'?s run it)?[.!]?\\s*$`, 'i')
 const ACCEPT = /^(?:(?:ok(?:ay)?|yes|great|thanks)[,!. ]+)*(?:i(?:'ll| will)|we(?:'ll| will)) take (?:it|this|the load)[.!]?\s*$|^(?:(?:ok(?:ay)?|yes)[,!. ]+)*(?:deal|agreed|book it|let's do it|(?:that(?: rate)?|the rate|your rate|your offer) works(?: for (?:me|us))?|sounds good|i accept(?: your (?:rate|offer))?)[.!]?\s*$/i
 const HOLD = /\b(?:hold (?:off|up)|on hold|not ready|don't (?:book|send|issue|confirm)|do not (?:book|send|issue|confirm)|not (?:book|confirm|accept)(?:ing|ed)? yet|before (?:we|i) (?:book|confirm)|let me (?:check|confirm|verify)|gotta check (?:with )?(?:my|our|the) driver|wait for (?:my|our) confirmation|cancel (?:it|this|the load)|release (?:it|this|the load))\b/i
 const WALK = /\b(?:i(?:'ll| will) pass|we(?:'ll| will) pass|pass on (?:it|this)|walk away|find another (?:truck|carrier))\b/i
@@ -16,6 +18,61 @@ const MORE = /\b(?:do better|need more|pay more|(?:to{1,2}|kinda) low|too cheap|
 const QUOTED = /["“][^"”]*["”]|(?<!\w)'[^'\n]{2,}'(?!\w)/g
 const HYPOTHETICAL = /\b(?:if|unless|hypothetically|example|suppose|said|quoted|asks?|asking whether|what if|would you accept)\b/i
 const NEGATIVE = /\b(?:not|never|can't|cannot|won't|don't|didn't|do not|isn't|is not|haven't)\b/i
+const amountValue = (token) => {
+  const value = Number(token.replaceAll(',', '').replace(/k$/i, '')) * (/k$/i.test(token) ? 1000 : 1)
+  return Math.abs(value - Math.round(value)) < 1e-8 ? Math.round(value) : value
+}
+const LETS_OFFER = new RegExp(`^\\s*(?:(?:okay|ok|alright|aight)[, ]+)?let'?s\\s+${MONEY}\\s*$`, 'i')
+const EXAMPLE_OFFER = new RegExp(`\\b(?:can|could) (?:you|u) add more[^;!?]*?\\bfor (?:example|exaple)\\s+${MONEY}(?![\\w.,])`, 'gi')
+const REPLY_MONEY = /(?<![\w\d])(?:\$\s*(\d+(?:,\d{3})*(?:\.\d+)?k?)|(\d+(?:\.\d+)?k|\d{1,3}(?:,\d{3})+|\d{3,5})(?:\.00)?)(?![\w\d])/gi
+
+function addsFuelToTotal(text, totals) {
+  // Read the relation between monetary references before splitting "and".
+  // The same component values are safe in a sum from linehaul, but not
+  // when the base of that sum is already the complete freight payment.
+  for (const sentence of text.split(/(?<=[.!?;])\s+/)) {
+    const amounts = [...sentence.matchAll(REPLY_MONEY)]
+    for (let index = 0; index < amounts.length; index += 1) {
+      const current = amounts[index]
+      if (!totals.includes(amountValue(current[1] ?? current[2]))) continue
+      const next = amounts[index + 1]
+      const relation = sentence.slice(current.index + current[0].length, next?.index ?? sentence.length)
+      const component = next ? sentence.slice(next.index + next[0].length, amounts[index + 2]?.index ?? sentence.length) : ''
+      const negated = /\b(?:no|not|never|without|isn't|is not)\b/i.test(relation)
+      const sum = /\b(?:plus|additional|extra|excluding|before)\b|\+/i.test(relation)
+        || (/\band\b/i.test(relation) && /\bon top\b|\bextra\b|\badditional\b/i.test(component))
+      const fuel = /\bfuel(?: surcharge)?\b/i.test(`${relation} ${component}`)
+      if (!negated && sum && fuel) return true
+    }
+  }
+  return false
+}
+
+function clarifiesRequestedBasis(text, decision) {
+  const requested = decision.intent.requestedAmountUsd
+  const fuel = decision.rateQuote?.fuelSurchargeUsd
+  // A confirmation preface can introduce a question, not an acceptance.
+  // Strip only that fixed discourse marker before validating the whole question.
+  const question = text.trim().replace(/^just to (?:confirm|clarify),?\s*/i, '')
+  if (decision.intent.kind !== 'ambiguous_rate' || !Number.isSafeInteger(requested) || !Number.isSafeInteger(fuel)
+    // Whole interrogative, attributed to the carrier, comparing the two bases.
+    // This checks structure and financial references, not one exact phrasing.
+    || !/^(?:do|does|did|are|is|was|were|can|could|would|what|which)\b[^.!?;]*\?\s*$/i.test(question)
+    || !/\b(?:you|your|that)\b/i.test(question) || !/\bor\b/i.test(question)
+    || /\b(?:confirm|book|accept|agree|agreed|deal|send|issue|pay|offer|approved|locked)\b/i.test(question)
+    || /\b(?:i|we|my|our|us)\b/i.test(question)
+    || !/\b(?:total|all[- ]?in)\b/i.test(question) || !/\blinehaul\b/i.test(question)) return false
+  const amounts = [...text.matchAll(REPLY_MONEY)]
+  return amounts.every((match, index) => {
+    const amount = amountValue(match[1] ?? match[2])
+    if (amount === requested) return true
+    const before = text.slice(index ? amounts[index - 1].index + amounts[index - 1][0].length : 0, match.index)
+    const after = text.slice(match.index + match[0].length, amounts[index + 1]?.index ?? text.length)
+    if (amount === fuel) return /^\s*(?:for\s+)?fuel(?: surcharge)?\b/i.test(after)
+      || /\bfuel(?: surcharge)?\s*(?:is|:|of|at)?\s*$/i.test(before)
+    return amount === requested + fuel && (/^\s*total\b/i.test(after) || /\btotal\s*(?:is|:|of|at)?\s*$/i.test(before))
+  })
+}
 
 function intentText(raw) {
   const src = asciiPunct(String(raw ?? ''))
@@ -63,8 +120,10 @@ function authorizedRecipient(src) {
   return emails.length > 1 ? { emails: [], useOwnEmail: false } : { emails, useOwnEmail }
 }
 
-export function chatIntent(raw) {
-  const src = intentText(raw)
+export function chatIntent(raw, rateSource = null) {
+  const src = intentText(raw).replace(/(\b(?:can|could) (?:you|u) add more)\.\s*(?=for (?:example|exaple)\b)/gi, '$1, ')
+  // A mixed price acceptance/email cannot authorize a prohibited handoff.
+  if (proposesRebroker(src)) return { kind: 'rebroker' }
   // Quoted or hypothetical hold examples do not withdraw a real agreement.
   const activeClauses = src.replace(QUOTED, ' ').replace(EMAIL, ' ').split(/[;!?\n]|\.(?!\d)/).filter((clause) => !HYPOTHETICAL.test(clause))
   if (activeClauses.some((clause) => {
@@ -79,26 +138,47 @@ export function chatIntent(raw) {
   // Quotes, negated intentions and conditional examples are never a handshake.
   const clauses = src.replace(QUOTED, ' ').replace(EMAIL, ' ').split(/[;!?\n]|\.(?!\d)/)
   const amounts = []
+  const basisHints = []
+  const addAmount = (token, clause) => {
+    amounts.push(amountValue(token))
+    basisHints.push({ total: /\b(?:all[- ]?in|total|including fuel|fuel included)\b/i.test(clause),
+      linehaul: /\blinehaul\b|\bplus (?:the )?fuel\b|\+\s*fuel\b/i.test(clause) })
+  }
   let acceptsAmount = false
   for (const clause of clauses) {
-    if (HYPOTHETICAL.test(clause) || NEGATIVE.test(clause)) continue
+    // A concrete counter introduced with "for example" is a request, not a
+    // hypothetical story. Preserve every other conditional/quotation veto.
+    const concreteExample = [...clause.matchAll(EXAMPLE_OFFER)].length > 0
+    const hypotheticalText = concreteExample ? clause.replace(/\bfor (?:example|exaple)\b/gi, '') : clause
+    if (HYPOTHETICAL.test(hypotheticalText) || NEGATIVE.test(clause)) continue
     // An accessorial charge is not the load's linehaul. A mixed financial
     // sentence is clarified rather than guessing which amount is the deal.
     if (/\b(?:detention|layover|lumper|tonu|tolls?|driver[- ]?assist|accessorial|per hour|\/hr)\b/i.test(clause)) continue
-    for (const pattern of [OFFER, ACCEPT_AT]) {
+    for (const pattern of [OFFER, ACCEPT_AT, EXAMPLE_OFFER]) {
       for (const m of clause.matchAll(pattern)) {
         const tail = clause.slice(m.index + m[0].length)
         if (/^\s*(?:[-/]\s*\d|(?:lbs?|pounds?|miles?|mi|ft|feet|gal|hours?|hrs?|per|\/|%|am|pm)\b)/i.test(tail)) continue
-        amounts.push(Number(m[1].replaceAll(',', '')))
+        addAmount(m[1], clause)
         if (pattern === ACCEPT_AT) acceptsAmount = true
       }
     }
     const first = AMOUNT_FIRST.exec(clause)
-    if (first) { amounts.push(Number(first[1].replaceAll(',', ''))); acceptsAmount = true }
+    if (first) { addAmount(first[1], clause); acceptsAmount = true }
+    const lets = LETS_OFFER.exec(clause)
+    if (lets) addAmount(lets[1], clause)
   }
   const unique = [...new Set(amounts)]
-  if (unique.length > 0 && new Set([...src.replace(EMAIL, '').matchAll(/\$\s*(\d[\d,]*(?:\.\d+)?)/g)].map((m) => m[1])).size > 1) return { kind: 'ambiguous' }
-  if (unique.length === 1) return { kind: acceptsAmount ? 'accept_amount' : 'offer', rateUsd: unique[0], emails, useOwnEmail }
+  if (unique.some((amount) => !Number.isSafeInteger(amount))) return { kind: 'ambiguous_rate', emails, useOwnEmail }
+  const explicitMoney = [...src.replace(EMAIL, '').matchAll(/(?<!\w)(?:\$\s*(\d[\d,]*(?:\.\d+)?k?)|(\d+(?:\.\d+)?k)|(\d[\d,]*)\s*\$)(?!\w)/gi)]
+    .map((m) => amountValue(m[1] ?? m[2] ?? m[3]))
+  if (unique.length > 0 && new Set(explicitMoney).size > 1) return { kind: 'ambiguous' }
+  if (unique.length === 1) {
+    const split = rateSource?.rateBasis === SPLIT_RATE
+    const totalSpecified = basisHints.some((hint) => hint.total)
+    const linehaulSpecified = basisHints.some((hint) => hint.linehaul)
+    if (split && totalSpecified === linehaulSpecified) return { kind: 'ambiguous_rate', requestedAmountUsd: unique[0], emails, useOwnEmail }
+    return { kind: acceptsAmount ? 'accept_amount' : 'offer', rateUsd: unique[0] + (split && linehaulSpecified ? rateSource.fuelSurchargeUsd : 0), emails, useOwnEmail }
+  }
   if (unique.length > 1) return { kind: 'ambiguous' }
   // Permit an explicit acceptance followed by an email instruction, but no conditional price.
   const acceptance = src.split(/(?<=[.!])\s+/)[0]
@@ -136,7 +216,8 @@ export function negotiationState(conversation, posting) {
 export function negotiate({ conversation, posting, text, booking, truck, effectiveEmail = null, now = new Date(), offerVisible = false }) {
   const previous = negotiationState(conversation, posting)
   const state = { ...previous }
-  const intent = chatIntent(text)
+  const intent = chatIntent(text, posting)
+  const quote = (amount) => quoteText(posting, amount)
   let changed = false
   let issuePaper = false
   let invalidatePaper = false
@@ -150,18 +231,22 @@ export function negotiate({ conversation, posting, text, booking, truck, effecti
     if (truck?.makesIt === false || booking?.trailer?.fits === false) { line = 'We need a truck that can meet the pickup and equipment requirements before confirming.'; return }
     if (state.agreed !== amount || state.stage === 'held') clear()
     state.offer = amount; state.agreed = amount; state.stage = 'awaiting_email'; changed = true
-    line = `${money(amount)} all-in agreed. What email should I put on the rate confirmation?`
+    line = `${quote(amount)} agreed. What email should I put on the rate confirmation?`
   }
   if (state.stage === 'booked' || conversation.status === 'booked') return { state, intent, changed, issuePaper, invalidatePaper, bookingRequested, line: null }
-  if (intent.kind === 'hold') {
+  if (intent.kind === 'rebroker') {
+    line = ONE_CARRIER_REPLY
+  } else if (intent.kind === 'ambiguous_rate') {
+    line = 'Do you mean the total including fuel, or linehaul plus the listed fuel amount?'
+  } else if (intent.kind === 'hold') {
     clear(); state.stage = 'held'; line = 'Understood. I will hold off on the rate confirmation until you confirm.'
   } else if (['offer', 'accept_amount', 'push'].includes(intent.kind)) {
     const amount = intent.kind === 'push' ? ceilingFor(posting) : intent.rateUsd
-    const min = Math.max(100, posting.distanceMi)
+    const min = Math.max(100, posting.distanceMi, posting.rateBasis === SPLIT_RATE ? posting.fuelSurchargeUsd + 1 : 0)
     const max = Math.min(20000, posting.distanceMi * 5)
     if (state.agreed !== null && (amount !== state.agreed || intent.kind === 'push')) clear()
     if (amount < min || amount > max) {
-      line = `I cannot do that figure. My offer is ${money(state.offer)} all-in.`
+      line = `I cannot do that figure. My offer is ${quote(state.offer)}.`
     } else if (amount <= state.offer && intent.kind !== 'push') {
       // Record the validated settlement attempt even when MC verification
       // prevents agreement. Prompt and guard must allow that required question.
@@ -182,10 +267,10 @@ export function negotiate({ conversation, posting, text, booking, truck, effecti
         const counter = Math.min(ceilingFor(posting), posting.rateUsd + allowance, amount)
         state.offer = Math.max(state.offer, counter)
       }
-      line = `I can offer ${money(state.offer)} all-in. Does that work for you?`
+      line = `I can offer ${quote(state.offer)}. Does that work for you?`
     }
   } else if (intent.kind === 'accept') {
-    if (!offerVisible) line = `My offer is ${money(state.offer)} all-in. Can you confirm that rate?`
+    if (!offerVisible) line = `My offer is ${quote(state.offer)}. Can you confirm that rate?`
     else if (state.agreed === state.offer && ['paper_pending', 'paper_delivered'].includes(state.stage)) line = 'The rate confirmation is already in this thread or on its way.'
     else agree(state.offer)
   } else if (intent.kind === 'walk' && state.agreed !== null) {
@@ -193,7 +278,7 @@ export function negotiate({ conversation, posting, text, booking, truck, effecti
   } else if (intent.kind === 'walk' && state.agreed === null && !state.bestCounterUsed) {
     clear(); state.bestCounterUsed = true
     state.offer = Math.max(state.offer, ceilingFor(posting))
-    line = `Before you go, I can do ${money(state.offer)} all-in. Would that work?`
+    line = `Before you go, I can do ${quote(state.offer)}. Would that work?`
   }
   // Sharing an email is authorization only after a handshake; never from profile alone.
   if (state.stage === 'awaiting_email' && ['email', 'accept', 'accept_amount', 'offer'].includes(intent.kind)) {
@@ -204,25 +289,28 @@ export function negotiate({ conversation, posting, text, booking, truck, effecti
       line = 'We need a truck that meets the pickup and equipment requirements before I prepare the rate confirmation.'
     } else if (email) {
       state.recipient = email; state.stage = 'paper_pending'; issuePaper = true; changed = true
-      line = `${money(state.agreed)} all-in confirmed. The rate confirmation will appear here shortly for you to review and sign.`
+      line = `${quote(state.agreed)} confirmed. The rate confirmation will appear here shortly for you to review and sign.`
     } else if (intent.kind === 'email') line = 'Please provide the email address you want on the rate confirmation.'
   } else if (intent.kind === 'email' && state.agreed === null) {
-    line = `Before I prepare the rate confirmation, can you confirm ${money(state.offer)} all-in?`
+    line = `Before I prepare the rate confirmation, can you confirm ${quote(state.offer)}?`
   }
   return { state, intent, changed, issuePaper, invalidatePaper, bookingRequested, line,
+    previousOfferUsd: previous.offer,
     // Voice must not turn a temporary hold into an absolute economic limit.
+    rateQuote: rateQuote(posting, state.offer),
     hasRateRoom: state.offer < ceilingFor(posting), requiresMc: bookingRequested && !verified }
 }
 
 export function negotiationLines(decision) {
   if (!decision) return []
   return ['AUTHORITATIVE RATE DECISION FOR THIS TURN:',
-    `  Your current offer is ${money(decision.state.offer)} all-in. Agreed rate: ${decision.state.agreed === null ? 'none' : money(decision.state.agreed)}.`,
+    `  Your current offer is ${quoteText(decision.rateQuote ?? { rateUsd: decision.state.offer })}. Agreed total: ${decision.state.agreed === null ? 'none' : money(decision.state.agreed)}.`,
+    ...(decision.rateQuote?.rateBasis === SPLIT_RATE ? ['  Fuel is the fixed quoted component; any authorized change in total changes linehaul only. Never add fuel to the total again.'] : []),
     `  Stage: ${decision.state.stage}.`,
     `  Carrier intent: ${decision.intent.kind}${decision.intent.rateUsd ? `; requested price ${money(decision.intent.rateUsd)}` : ''}.`,
     `  Booking requested: ${decision.bookingRequested ? 'yes' : 'no'}. Document authorized this turn: ${decision.issuePaper ? 'yes' : 'no'}.`,
     ...(decision.state.agreed === null ? ['  No handshake exists; a requested price is not an accepted deal.'] : []),
-    ...(decision.hasRateRoom && decision.state.agreed === null ? ['  This is the current offer, not a permanent final or absolute best price. Do not claim there is no room to move.'] : []),
+    ...(decision.hasRateRoom && decision.state.agreed === null ? ['  Describe this turn as a current quote. A later financial decision remains separate; make no claim about future movement.'] : []),
     ...(['offer', 'push', 'accept_amount'].includes(decision.intent.kind) && !decision.bookingRequested
       ? ['  Answer their bargaining request with the current authorized offer; do not present their requested price as accepted.'] : []),
     ...(decision.state.stage === 'awaiting_email' ? ['  Rate is agreed. Request the recipient email unless they have already supplied authorization.'] : []),
@@ -237,6 +325,10 @@ export function negotiationLines(decision) {
 export function negotiationReplyProblem(reply, decision) {
   if (!decision) return null
   const text = asciiPunct(reply)
+  // Repeating an unresolved carrier amount while explicitly asking its
+  // basis is not our offer. The narrow question grammar excludes booking
+  // or payment promises and validates all other amounts against fixed fuel.
+  if (clarifiesRequestedBasis(text, decision)) return null
   if (decision.hasRateRoom && decision.state.agreed === null) {
     const claims = text.split(/(?<=[.!?;])\s+|\b(?:but|however)\b/i)
     if (claims.some((clause) => !clause.includes('?') && !/\b(?:you said|your|not (?:my|a|the|our)|isn't my|is not my|haven't called|didn't say|never said|right now|at the moment|for now)\b/i.test(clause)
@@ -245,33 +337,44 @@ export function negotiationReplyProblem(reply, decision) {
     }
   }
   const allowed = [decision.state.offer, decision.state.agreed].filter((n) => n !== null)
+  const splitQuote = decision.rateQuote?.rateBasis === SPLIT_RATE ? decision.rateQuote : null
+  if (addsFuelToTotal(text, allowed)) return 'added fuel on top of the authoritative total'
   // Classify individual amounts within their own clause. A carrier's ask
   // is not our offer, and a later sentence cannot lend its rate words to it.
   // Never mask an amount globally: a second occurrence may promise payment.
   const clauses = text.split(/(?<=[.!?;])\s+|\b(?:but|however|and)\b/i)
   let lastReferencedAmount = null
   for (const clause of clauses) {
-    const amounts = [...clause.matchAll(/(?<![\w\d])(?:\$\s*(\d[\d,]*(?:\.\d+)?)|(\d{1,3}(?:,\d{3})+|\d{3,5})(?:\.00)?)(?![\w\d])/g)]
+    const amounts = [...clause.matchAll(REPLY_MONEY)]
     for (const [index, match] of amounts.entries()) {
-      const amount = Number((match[1] ?? match[2]).replaceAll(',', ''))
+      const amount = amountValue(match[1] ?? match[2])
       const before = clause.slice(index ? amounts[index - 1].index + amounts[index - 1][0].length : 0, match.index)
       const after = clause.slice(match.index + match[0].length, amounts[index + 1]?.index ?? clause.length)
       const units = /^\s*(?:(?:\/|per\s+|an?\s+)(?:hours?|hrs?|days?|miles?|mi|lbs?|pounds?)\b|hr\b|hours?\b|lbs?\b|pounds?\b|miles?\b|mi\b|ft\b|feet\b)/i.test(after)
+        || (match[1] === undefined && /^\s*-\s*(?:miles?|mi|hours?|hrs?|days?|lbs?|pounds?|ft|feet|foot)\b/i.test(after))
       const accessorial = /\b(?:detention|layover|lumper|tonu|tolls?|driver[- ]?assist)\s*(?:is|:|of|at)?\s*$/i.test(before)
         || /^\s*(?:for\s+)?(?:detention|layover|lumper|tonu|tolls?|driver[- ]?assist)\b/i.test(after)
       if (units || accessorial) continue
       const financial = match[1] !== undefined || /all[- ]?in|\b(?:rate|offer|pay|do|ask|asked|requested|looking for|works|agreed|confirmed)\b/i.test(`${before} ${after}`)
       if (!financial) continue
       lastReferencedAmount = amount
-      if (allowed.includes(amount)) continue
-      const attributed = /\byou(?:'re| are)\s+(?:looking|asking|aiming)\s+for\s*$/i.test(before)
+      // A component is valid only under its own label; equal numeric values
+      // do not turn fuel into total or an unapproved total into linehaul.
+      const fuelLabel = /^\s*(?:for\s+)?fuel(?: surcharge)?\b/i.test(after) || /\bfuel(?: surcharge)?\s*(?:is|:|of|at)?\s*$/i.test(before)
+      const linehaulLabel = /^\s*linehaul\b/i.test(after) || /\blinehaul\s*(?:is|:|of|at)?\s*$/i.test(before)
+      if (splitQuote && (fuelLabel || linehaulLabel)) {
+        const expected = fuelLabel ? [splitQuote.fuelSurchargeUsd] : allowed.map((total) => total - splitQuote.fuelSurchargeUsd)
+        if (expected.includes(amount)) continue
+      } else if (allowed.includes(amount)) continue
+      const attributed = /\byou(?:'re| are| were)\s+(?:looking|asking|aiming|hoping)\s+for\s*$/i.test(before)
         || /\byou\s+(?:asked(?: for)?|requested|wanted)\s*$/i.test(before)
         || /\byour\s+(?:(?:requested|asking|target)\s+)?(?:price|rate|ask|request)\s*(?:of|is|:)?\s*$/i.test(before)
         || (/\byour\s*$/i.test(before) && /^\s*(?:ask|request)\b/i.test(after))
       const committed = /\b(?:pay|offer|meet|match|accept|approve|agree)\b|\b(?:our|my)\s+(?:offer|rate|payment)\s+(?:is|will be)\b/i.test(before)
         || /\b(?:approved|accepted|agreed|confirmed)\b/i.test(after)
         || /^\s*[,;:]?\s*(?:(?:ask|request)\s+)?(?:works|(?:will|would)\s+work|(?:sounds|looks)\s+(?:good|fine)|(?:is|will be)\s+fine|deal)\b/i.test(after)
-      if (!(attributed && !committed && amount === decision.intent.rateUsd)) return 'offered a rate other than the authoritative decision'
+      const requestedAmount = splitQuote && linehaulLabel ? decision.intent.rateUsd - splitQuote.fuelSurchargeUsd : decision.intent.rateUsd
+      if (!(attributed && !committed && amount === requestedAmount)) return 'offered a rate other than the authoritative decision'
     }
     // A quoted ask cannot become a payment promise through a later pronoun.
     // Track the latest monetary referent so a subsequent authorized offer can

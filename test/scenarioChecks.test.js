@@ -15,8 +15,29 @@ import { FALLBACK_REPLY as DRIVER_FALLBACK } from '../src/modules/driverChat/dri
 import { FALLBACK_REPLY as BROKER_FALLBACK } from '../src/modules/brokerChat/brokerChat.prompt.js'
 import {
   PROMISE, anyReply, brokerReply, driverReply, repeatsQuestion, dollars, summarize, BROKER_EXPECT, DRIVER_EXPECT,
-  agreesWithClaim, correctCount,
+  agreesWithClaim, correctCount, relaysTheLoad, offeredFigures,
 } from '../scripts/scenarioChecks.js'
+import { NO_BOOKING_LINE, confirmsUnknownBooking } from '../src/modules/brokerChat/bookingTalk.js'
+
+// Kills: the live booking guard missing the ride-along confirmation the eval
+// check caught after it -- "keep everything set" (EB17 live, 2026-10-29) went
+// along with a booking nobody made, and only NO_BOOKING_LINE-style wording
+// saves it.
+test('a ride-along booking confirmation is flagged; the no-record line is not', () => {
+  for (const reply of ["Great, thanks for the heads-up. We'll keep everything set for the pickup tonight.",
+    'I will keep it all set for first thing in the morning then.',
+    "Perfect, everything's set on our end too.",
+    "Yes, you're all set."]) {
+    assert.equal(confirmsUnknownBooking(reply, { text: 'i already booked this with ur guy mike' }), true, reply)
+  }
+  for (const reply of [NO_BOOKING_LINE,
+    "I don't see any booking on this one. Mike is not somebody I know here.",
+    'Nothing was set with anyone here; neither name is in this thread.']) {
+    assert.equal(confirmsUnknownBooking(reply, { text: 'i already booked this with ur guy mike' }), false, reply)
+  }
+  // A claimed booking that really exists (agreed in this thread) is not denied.
+  assert.equal(confirmsUnknownBooking("Great, everything's set then.", { text: 'i already booked this with ur guy mike', bookedHere: true }), false)
+})
 
 // Kills: a promise pattern that misses "let me look at the paperwork"
 // (G2, fourth run) or "give me a sec", or one that flags a plain "I do not know" (G3).
@@ -50,6 +71,24 @@ test('dollar amounts are read with or without commas', () => {
 test('a broker naming room or a ceiling is flagged; "my best" is not', () => {
   assert.deepEqual(brokerReply('Still got room before I hit my ceiling.'), ['names a ceiling or room'])
   assert.deepEqual(brokerReply("That's my best on this one."), [])
+})
+
+// Kills: the re-broker check missing the indirect yes it was built for
+// (EB21, 2026-10-28 live: "stays the same no matter who moves it"), or
+// flagging the refusal that cites the same words against the offer.
+test('a broker agreeing to re-broker, directly or through a yes without the word, is flagged', () => {
+  assert.deepEqual(brokerReply('Yeah, rebroker it on your mc, no problem.'), ['agrees to re-broker'])
+  assert.deepEqual(brokerReply('Yes, the posted $3,966 all-in stays the same no matter who moves it.'), ['agrees to re-broker'])
+  assert.deepEqual(brokerReply('Put it on my other mc, that works.'), ['agrees to re-broker'])
+  assert.equal(relaysTheLoad('Go ahead on your own other mc.'), true)
+  assert.equal(relaysTheLoad('Whoever hauls it is fine by me.'), true)
+})
+
+test('refusing the re-broker, including in its own words, is not flagged', () => {
+  assert.deepEqual(brokerReply("We don't rebroker, no matter who moves it."), [])
+  assert.deepEqual(brokerReply('Nothing rides under another mc for us.'), [])
+  assert.equal(relaysTheLoad('The paper goes to the carrier whose mc is on it, whoever they picked.'), false)
+  assert.equal(relaysTheLoad('I can do $3,750.'), false)
 })
 
 // Kills: S4 passing the fourth run's agreement, or failing the third
@@ -187,6 +226,24 @@ test('S3 does not count an echo of the ask; S4 still flags "I hear you on X"', (
   assert.deepEqual(s3[0](echo), [])
   assert.deepEqual(s3[1](echo), [])
   assert.equal(agreesWithClaim('I hear you on the reload. This lane is already above it.'), true)
+})
+
+// Kills: a figure the broker turns down read as an offer (chat:eval EB11
+// 2026-10-29: "...but $8,500 is beyond what we can do" was counted both as
+// above the ceiling and as the whole ask; the human graded yes).
+test('a turn-down figure is not an offer; a yes still is', () => {
+  const ask = 8500
+  for (const r of [
+    'The current quote is $7,395 all‑in. I can see if we can bump it a bit, but $8,500 is beyond what we can do.',
+    "I can't do $8,500.",
+    "I won't go to $8,500 -- it stays $7,395.",
+    '$8,500 won’t work here, the lane pays $7,395.',
+    '$8,500 is not something we can cover.',
+    '$8,500, no deal on that number.',
+  ]) assert.ok(!offeredFigures(r, [ask]).includes(ask), r)
+  for (const r of ['I can do $8,500.', 'I can do $8,500, no problem.', 'You asked for $8,500; I can do $8,500 all‑in.', 'Give me $8,500 and it moves.']) {
+    assert.ok(offeredFigures(r, [ask]).includes(ask), r)
+  }
 })
 
 // Kills: the same hole in S3 -- agreement worded around the carrier's ask

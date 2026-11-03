@@ -32,6 +32,7 @@ import { offerFacts } from './offerTalk.js'
 import {
   buildDriverSystemPrompt,
   buildMessages,
+  repetitionHint,
   FALLBACK_REPLY,
 } from './driverChat.prompt.js'
 
@@ -120,12 +121,19 @@ export async function sendMessage({ conversationId, userId, text, images }) {
     load: context.load,
     texts: [...history.filter((m) => m.role === 'dispatcher').slice(-4).map((m) => m.content), text],
   })
+  // What the driver's own recent replies keep coming back to -- a bit
+  // repeated across turns is named for this one turn only (prompt above).
+  // Computed from the same history the model is sent; no extra request.
+  const echoes = repetitionHint(history, text)
   const systemPrompt = buildDriverSystemPrompt({
     driver: context.driver,
     standing,
     load: context.load,
     carrier,
     offer,
+    echoes,
+    text,
+    history,
   })
 
   // Every request this turn sends to the provider, counted where they are
@@ -167,7 +175,7 @@ export async function sendMessage({ conversationId, userId, text, images }) {
     // computed "can't make it" line). Other content problems are
     // regenerated once, with one more request from the daily budget, and
     // logged if they persist.
-    const problem = driverReplyProblem(reply, { offer, text, load: context.load, driver: context.driver, standing })
+    const problem = driverReplyProblem(reply, { offer, text, load: context.load, driver: context.driver, standing, history })
     const why = problem?.why ?? null
 
     if (why) {
@@ -186,7 +194,7 @@ export async function sendMessage({ conversationId, userId, text, images }) {
         onAttempt,
         cause: 'regenerate',
       }))
-      const remaining = driverReplyProblem(reply, { offer, text, load: context.load, driver: context.driver, standing })
+      const remaining = driverReplyProblem(reply, { offer, text, load: context.load, driver: context.driver, standing, history })
       if (remaining?.unusable) {
         reply = remaining.safeReply ?? FALLBACK_REPLY
         usedFallback = true

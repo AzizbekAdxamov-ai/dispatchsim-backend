@@ -31,8 +31,8 @@ import { isHumanGrader, parseGradeId } from './exampleSources.js'
 
 export const SITUATION_TYPES = Object.freeze([
   'prompt_injection', 'bot_question', 'hos_pressure', 'insult', 'walk_away', 'false_claim',
-  'mc', 'booking', 'market_claim', 'rate_push', 'unreachable', 'load_offer',
-  'reefer', 'open_deck', 'appointment', 'terms', 'hazmat', 'address', 'weight',
+  'mc', 'booking', 'market_claim', 'rate_push', 'rebroker', 'unreachable', 'load_offer',
+  'reefer', 'open_deck', 'appointment', 'terms', 'stop_pay', 'hazmat', 'address', 'weight',
   'pay', 'rate_question', 'truck_info', 'intro', 'status', 'small_talk', 'greeting', 'other',
 ])
 
@@ -53,9 +53,17 @@ const RATE_Q = /\ball[- ]?in\b|\bfsc\b|\bfuel surcharge\b|\brpm\b|\bline ?haul\b
 const INTRO_CLAUSE = /\bthis is \w+ (?:with|from|at) [^,.?!]+/i
 const INTRO = /\bthis is \w+ (?:with|from|at)\b|\bi want this load\b|\bstill available\b|\bstill open\b|\bcalling (?:about|on|from)\b/i
 const STATUS = /\beta\b|\bwhere (?:u|you|r u|are you) at\b|\bfuel\b|\b(?:hrs?|hours?)\b[^.?!]{0,15}\bleft\b|\bbroke(?:n)? down\b|\bbreak ?down\b|\b(?:issues?|problems?) with (?:the |ur |your )?truck\b/i
-const SMALL = /\bhow(?:'s| is| are| r)?\s+(?:u|you|ur|your)\b|\bhow r u\b|\bfamily\b/i
+// ED25 (2026-10-11 live): a question the /status answer settles.
+const STATUS_LATE = /\brunning late\b|\bgonna be late\b|\bgoing to be late\b/i
+// ED24: weather is small talk the position lines answer (the truck's place),
+// not a fact the chat has.
+const SMALL = /\bhow(?:'s| is| are| r)?\s+(?:u|you|ur|your)\b|\bhow r u\b|\bfamily\b|\bweather\b/i
 const GREETING = /^\s*(?:hi|hey|hello|yo|sup|good (?:morning|afternoon|evening))\b[\s!.,]*(?:there|bro|man|dude|boss)?[\s!.?]*$/i
 const APPT_EXTRA = /\bwhen'?s (?:the )?(?:pu|pickup)\b|\bwhat time\b[^.?!]*\b(?:pu|pickup|del|delivery)\b|\breceiver open\b|\bdelivery on\b|\bpush (?:the )?(?:pu|pickup)\b|\breschedule\b/i
+// EB21 (2026-10-11 live): offering to resell the load on their own authority.
+const REBROK = /\bre\s?brok\w*\b|\bdouble\s?brok\w*\b|\bco\s?brok\w*\b|\bon (?:my|ur|their) (?:own )?mc\b|\bto another carrier\b|\bunder (?:my|ur|another|your) (?:own )?(?:mc|authority)\b/i
+// EB22: a fee for added pickup/drop stops. Belongs to the broker's terms review.
+const STOP_PAY = /\b(stop|extra)\s+(?:pay|charge|fee)s?\b|\b\d\s+extra\s+stops?\b|\btwo\s+extra\s+stops?\b/i
 const OFFER_EXTRA = /\b(?:two|2) loads\b|\bboth loads\b|\bloads? same time\b|\bload (?:out of|from)\b|\bgot an? (?:[a-z]+ )?loads?\b/i
 const DEADHEAD_N = /\bdead ?head(?:ing)?\s+([\d,]+)\s*(?:miles?|mi)\b/i
 // hosPressureKind wants "your 10"; people type "ur 10".
@@ -87,6 +95,7 @@ const DETECTORS = [
   }],
   ['insult', ({ text }) => INSULT.test(text)],
   ['walk_away', ({ text }) => WALK.test(text)],
+  ['rebroker', ({ side, text }) => side === 'broker' && REBROK.test(text)],
   ['false_claim', ({ text }) => FALSE_CLAIM.test(text)],
   ['mc', ({ side, booking }) => side === 'broker' && booking.mc.said != null],
   ['booking', ({ side, text, booking }) => side === 'broker'
@@ -114,6 +123,7 @@ const DETECTORS = [
   ['open_deck', ({ keys }) => has(keys, ['tarps', 'securement'])],
   ['appointment', ({ keys, text }) => has(keys, ['appointment', 'fcfs', 'drop-and-hook', 'live-load']) || APPT_EXTRA.test(text)],
   ['terms', ({ keys }) => has(keys, ['detention', 'layover', 'tonu', 'lumper', 'tolls'])],
+  ['stop_pay', ({ side, text }) => side === 'broker' && STOP_PAY.test(text)],
   ['hazmat', ({ text }) => HAZMAT.test(text)],
   ['address', ({ text }) => ADDRESS.test(text)],
   ['weight', ({ text }) => WEIGHT.test(text)],
@@ -121,7 +131,7 @@ const DETECTORS = [
   ['rate_question', ({ side, text }) => side === 'broker' && RATE_Q.test(text)],
   ['truck_info', ({ side, text, booking }) => side === 'broker' && Boolean(truckCity([text]) || booking.emptyAt)],
   ['intro', ({ full }) => INTRO.test(full)],
-  ['status', ({ side, text }) => side === 'driver' && STATUS.test(text)],
+  ['status', ({ side, text }) => side === 'driver' && (STATUS.test(text) || STATUS_LATE.test(text))],
   ['small_talk', ({ text }) => SMALL.test(text)],
   ['greeting', ({ text }) => GREETING.test(text)],
 ]

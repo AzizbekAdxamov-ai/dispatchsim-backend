@@ -51,7 +51,7 @@ export function makeFakeBrokerRepo({
   const messages = lines.map((content) => ({ id: `m${++seq}`, role: 'dispatcher', content, kind: 'text' }))
   // What a caller sees, like the real CONVERSATION_COLUMNS: no rate con rate.
   const publicRow = () => {
-    const { rateConRateUsd, ...rest } = conversation
+    const { rateConRateUsd, rateConBasis, rateConFuelSurchargeUsd, ...rest } = conversation
     return { ...rest }
   }
 
@@ -75,7 +75,7 @@ export function makeFakeBrokerRepo({
       if (new Date(posting.expiresAt) <= new Date()) throw new AppError('POSTING_EXPIRED')
       conversation.negotiationRevision += 1
       const before = publicRow()
-      const intent = chatIntent(text)
+      const intent = chatIntent(text, posting)
       if (['hold', 'walk', 'push'].includes(intent.kind) || (['offer', 'accept_amount'].includes(intent.kind) && conversation.agreedRateUsd !== null && intent.rateUsd !== conversation.agreedRateUsd)) {
         await repo.clearRateCon()
         conversation.agreedRateUsd = null
@@ -96,6 +96,8 @@ export function makeFakeBrokerRepo({
       await repo.addMessage(conversation.id, 'broker', reply, { delaySec })
       if (decision.issuePaper && !messages.some((m) => m.kind === 'rate_con')) {
         conversation.rateConRateUsd = paperRate
+        conversation.rateConBasis = decision.rateQuote?.rateBasis ?? 'all-in'
+        conversation.rateConFuelSurchargeUsd = decision.rateQuote?.fuelSurchargeUsd ?? 0
         await repo.addMessage(conversation.id, 'broker', 'Rate confirmation attached.', { kind: 'rate_con', delaySec: delaySec + paperDelaySec })
       }
       return true
@@ -109,6 +111,8 @@ export function makeFakeBrokerRepo({
     },
     async clearRateCon() {
       conversation.rateConRateUsd = null
+      conversation.rateConBasis = null
+      conversation.rateConFuelSurchargeUsd = null
       const before = messages.length
       for (let i = messages.length - 1; i >= 0; i -= 1) if (messages[i].kind === 'rate_con') messages.splice(i, 1)
       return before - messages.length
@@ -137,6 +141,7 @@ export function makeFakeBrokerRepo({
       return {
         id: conversation.id, agreedRateUsd: conversation.agreedRateUsd,
         rateConRateUsd: conversation.rateConRateUsd, status: conversation.status,
+        rateConBasis: conversation.rateConBasis, rateConFuelSurchargeUsd: conversation.rateConFuelSurchargeUsd,
         recipientEmail: conversation.recipientEmail,
         updatedAt: conversation.updatedAt,
         postingId: posting.id,

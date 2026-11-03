@@ -1,3 +1,4 @@
+import { claimClauses } from '../../lib/claimClauses.js'
 // What a reply says about the broker's accessorial terms, checked against
 // the terms themselves (src/constants/accessorials.js).
 //
@@ -9,6 +10,19 @@
 // broker is the payer.
 
 import { asciiPunct } from '../../lib/plainText.js'
+
+export const NO_STOP_PAY_LINE = 'There is no separate stop-pay term on this load; the listed stops and appointments stay as posted.'
+export function stopPayInvented(reply) {
+  return claimClauses(reply).some((clause) => {
+    if (clause.trim().endsWith('?')) return false
+    if (!/\bstop[- ]?(?:pay|fee|charge|rate)|\bper (?:extra )?stop\b|\b(?:pay|cover|offer)\b[^.!?;]{0,35}\bstops?\b/i.test(clause)) return false
+    const assertion = clause.split(/\$\s*\d/)[0]
+    if (/\b(?:no(?!t? (?:a )?problem)|not(?! (?:a )?problem)|don'?t|do not|can'?t|cannot|won'?t|will not|unapproved|not agreed)\b/i.test(assertion)) return false
+    if (/\byou (?:asked|requested|want)|\byour (?:request|ask)/i.test(clause)
+      && !/\b(?:we|i)\s+(?:can |will |do )?(?:pay|offer|cover|agree)|\b(?:works|approved|agreed|confirmed)\b/i.test(clause)) return false
+    return /\$\s*\d|\b\d+(?:\.\d+)?\s*(?:dollars?|per stop)|\b(?:we|i)\s+(?:can |will |do )?(?:pay|offer|cover)|\bstop[- ]?pay\s+(?:is|will be|at)\b/i.test(clause)
+  })
+}
 
 const OTHER_PAYS = /\b(shipper|receiver|consignee|you|your driver|carrier)\b[^.!?]{0,30}\b(pay|pays|cover|covers|handles?|is on)\b|\b(paid|covered) by (the )?(shipper|receiver|consignee|you|carrier)\b/i
 const BROKER_PAYS = /\b(we|us|our|I|I'll|I'd|me|broker|reimburs\w*|repay\w*|pay you back)\b/i

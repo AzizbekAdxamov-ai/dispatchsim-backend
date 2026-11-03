@@ -34,13 +34,13 @@ const EXPECT_BROKER = {
   EB01: 'rate_question', EB02: 'rate_question', EB03: 'rate_question', EB04: 'market_claim', EB05: 'market_claim',
   EB06: 'market_claim', EB07: 'terms', EB08: 'appointment', EB09: 'reefer', EB10: 'open_deck', EB11: 'insult',
   EB12: 'prompt_injection', EB13: 'bot_question', EB14: 'hazmat', EB15: 'pay', EB16: 'false_claim', EB17: 'false_claim',
-  EB18: 'weight', EB19: 'hazmat', EB20: 'walk_away',
+  EB18: 'weight', EB19: 'hazmat', EB20: 'walk_away', EB21: 'rebroker', EB22: 'stop_pay',
 }
 const EXPECT_DRIVER = {
   ED01: 'small_talk', ED02: 'status', ED03: 'status', ED04: 'status', ED05: 'status', ED06: 'terms', ED07: 'load_offer',
   ED08: 'load_offer', ED09: 'pay', ED10: 'bot_question', ED11: 'load_offer', ED12: 'load_offer', ED13: 'load_offer',
   ED14: 'hos_pressure', ED15: 'hos_pressure', ED16: 'hos_pressure', ED17: 'status', ED18: 'insult', ED19: 'load_offer',
-  ED20: 'load_offer', ED21: 'small_talk', ED22: 'prompt_injection', ED23: 'pay',
+  ED20: 'load_offer', ED21: 'small_talk', ED22: 'prompt_injection', ED23: 'pay', ED24: 'small_talk', ED25: 'status',
 }
 
 test('every broker evaluation line lands in its situation', () => {

@@ -14,6 +14,9 @@
 // still the record.
 
 import { asciiPunct } from '../src/lib/plainText.js'
+import { agreesRebroker, AGREES_REBROKER } from '../src/modules/brokerChat/carrierPolicy.js'
+import { inventsEnvironment } from '../src/lib/environmentClaims.js'
+import { stopPayInvented } from '../src/modules/brokerChat/termsTalk.js'
 import { dollars, offeredFigures, raiseWithoutReason, unsupportedRateReasons } from '../src/modules/brokerChat/rateTalk.js'
 import { lumperPayerWrong, PAYMENT_INVENTED_RE } from '../src/modules/brokerChat/termsTalk.js'
 import { MC_REJECT, saysBooked, asksMc } from '../src/modules/brokerChat/bookingTalk.js'
@@ -142,6 +145,10 @@ export const PHONE = /\(?\d{3}\)?[-. ]\d{3}[-. ]\d{4}/
 export { PAYMENT_INVENTED_RE }
 export const PAYMENT_INVENTED = PAYMENT_INVENTED_RE
 
+// Runtime and evaluation share the same clause-local carrier policy.
+export { AGREES_REBROKER }
+export const relaysTheLoad = agreesRebroker
+
 // Terms the carrier did not write themselves. Echoing their own words ("7
 // days to pay is accounting's call") and denying ("I can't speak to net 30")
 // are not inventing: a sentence with a denial is skipped, and a match whose
@@ -169,6 +176,9 @@ export function brokerReply(rawReply, rawPrevious, said = null) {
   if (lumperPayerWrong(reply)) out.push('lumper payer wrong')
   if (correctWithoutReadBack(reply)) out.push('correct? without a read-back')
   if (paymentInvented(reply, said)) out.push('payment terms invented')
+  if (relaysTheLoad(reply)) out.push('agrees to re-broker')
+  if (inventsEnvironment(reply)) out.push('invents weather or traffic')
+  if (stopPayInvented(reply)) out.push('stop pay invented')
   return out
 }
 
@@ -344,6 +354,7 @@ export function driverReply(rawReply, rawPrevious, { onTheRoad }) {
   const reply = asciiPunct(rawReply)
   const previousReply = rawPrevious ? asciiPunct(rawPrevious) : rawPrevious
   const out = anyReply(reply, previousReply)
+  if (inventsEnvironment(reply)) out.push('invents weather or traffic')
   if (onTheRoad && AT_A_DOCK.test(reply)) out.push('at a dock while on the road')
   return out
 }

@@ -18,6 +18,48 @@ import { buildPostingRows, POSTING_CONFIG, TIER_WEIGHTS, HIDDEN_RATE_SHARE } fro
 import { buildApplicantRows, APPLICANT_CONFIG, APPLICANT_TIERS } from './seed/applicants.js'
 import { buildTruckRows, TRUCK_CONFIG, TRUCK_TIERS } from './seed/trucks.js'
 
+const POSTING_COLUMNS = [
+  'origin_lat', 'origin_lon', 'destination_lat', 'destination_lon',
+  'origin_city', 'origin_state', 'destination_city', 'destination_state',
+  'broker', 'broker_id', 'commodity', 'rate_usd', 'distance_mi', 'weight_lbs',
+  'equipment_type', 'equipment_length_ft', 'posted_at', 'expires_at', 'pickup_at', 'delivery_at', 'status',
+  'rate_hidden', 'rate_basis', 'fuel_surcharge_usd',
+]
+
+// A bounded additive market update: no cleanup, applicants, trucks or edits
+// to existing freight. The ordinary daily refresh below keeps its behavior.
+export async function runPostingRefresh({ count = 12, runner = pool } = {}) {
+  assertLocalHost()
+  if (!Number.isInteger(count) || count < 1 || count > 60) throw new RangeError('Posting count must be 1–60')
+  const brokerIds = new Map((await runner.query('SELECT id, name FROM brokers')).rows.map((b) => [b.name, b.id]))
+  const drivers = (await runner.query('SELECT id, current_lat, current_lon, duty_status FROM drivers')).rows
+  const items = []
+  const seen = new Set()
+  for (let n = 0; n < count; n += 1) {
+    const item = generateLoad(Math.random, { avoid: seen, hiddenRateShare: HIDDEN_RATE_SHARE })
+    const parsed = LoadItem.parse(item)
+    const checked = validateLoadItem(parsed)
+    if (!checked.ok) throw new Error(`Posting rejected: ${checked.reason}`)
+    items.push(checked.item)
+    seen.add(`${item.originCity}, ${item.originState} -> ${item.destinationCity}, ${item.destinationState}`)
+  }
+  const rows = buildPostingRows({ rng: mulberry32(Date.now()), postingItems: items, drivers, trucks: [], fleetEquipment: [], brokerIds })
+  const client = await runner.connect()
+  try {
+    await client.query('BEGIN')
+    for (const row of rows) {
+      const values = []
+      const parts = POSTING_COLUMNS.map((column) => row[column]?.__raw ? row[column].value : `$${values.push(row[column])}`)
+      await client.query(`INSERT INTO load_postings (${POSTING_COLUMNS.join(', ')}) VALUES (${parts.join(', ')})`, values)
+    }
+    await client.query('COMMIT')
+  } catch (error) {
+    await client.query('ROLLBACK')
+    throw error
+  } finally { client.release() }
+  return { ok: true, postingsInserted: rows.length, splitPostings: rows.filter((r) => r.rate_basis === 'linehaul-plus-fuel').length }
+}
+
 // The prompt builders that lived here are gone with the model calls they
 // fed. Six of them -- loads, applicants and truck listings, a system and a
 // user prompt each -- existed to paste a city list, a broker list and an
@@ -276,16 +318,7 @@ export async function runRefresh() {
   const truckListingRows = buildTruckRows({ truckIds: truckListingIds, rng, truckItems: truckListingAccepted })
 
   // Step 5: parameterized INSERT — all categories in one transaction
-  const postingColumns = [
-    'origin_lat', 'origin_lon', 'destination_lat', 'destination_lon',
-    'origin_city', 'origin_state', 'destination_city', 'destination_state',
-    'broker', 'broker_id', 'commodity', 'rate_usd', 'distance_mi', 'weight_lbs',
-    'equipment_type', 'equipment_length_ft', 'posted_at', 'expires_at', 'pickup_at', 'delivery_at', 'status',
-    // Migration 030. rate_usd is still written for every posting -- the
-    // broker knows what the load is worth; this only decides whether the
-    // board prints it.
-    'rate_hidden',
-  ]
+  const postingColumns = POSTING_COLUMNS
   const truckListingColumns = [
     'id', 'make', 'model', 'year', 'odometer_mi', 'price_usd', 'trailer_type',
     'fuel_capacity_gal', 'tire_front_pct', 'tire_rear_pct', 'service_notes',
@@ -429,8 +462,12 @@ const isMainModule = process.argv[1] &&
    process.argv[1].endsWith('\\refresh-postings.js'))
 
 if (isMainModule) {
-  runRefresh()
+  const postingOnly = process.argv.includes('--postings-only')
+  const countArg = process.argv.find((arg) => arg.startsWith('--count='))
+  const run = postingOnly ? runPostingRefresh({ count: countArg ? Number(countArg.slice(8)) : 12 }) : runRefresh()
+  run
     .then((result) => {
+      if (postingOnly) console.log(JSON.stringify(result))
       if (!result.ok) process.exitCode = 1
       return pool.end()
     })

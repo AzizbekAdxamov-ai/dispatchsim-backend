@@ -88,7 +88,13 @@ test('a driver who has left does not negotiate the Great Falls pickup', () => {
 
 test('the live service checks both initial and regenerated replies against duty and pay stance', () => {
   const source = readFileSync(new URL('../src/modules/driverChat/driverChat.service.js', import.meta.url), 'utf8')
-  assert.equal([...source.matchAll(/driverReplyProblem\(reply, \{ offer, text, load: context\.load, driver: context\.driver, standing \}\)/g)].length, 2)
+  const checks = [...source.matchAll(/driverReplyProblem\(reply,\s*\{([^}]+)\}\)/g)]
+  assert.equal(checks.length, 2)
+  for (const [, facts] of checks) {
+    for (const field of ['offer', 'text', 'standing', 'history']) assert.match(facts, new RegExp(`\\b${field}\\b`))
+    assert.match(facts, /load:\s*context\.load/)
+    assert.match(facts, /driver:\s*context\.driver/)
+  }
 })
 
 test('natural be-there questions cannot draw a guessed ETA or a bare yes', () => {

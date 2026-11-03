@@ -399,13 +399,14 @@ async function driverConversation({ key, title, load, lines }, base, config, run
       load,
       texts: [...history.filter((h) => h.role === 'dispatcher').slice(-4).map((h) => h.content), text],
     })
-    const systemPrompt = dp.buildDriverSystemPrompt({ driver: base.driver, standing: base.standing, load, carrier: base.carrier, offer })
+    const systemPrompt = dp.buildDriverSystemPrompt({ driver: base.driver, standing: base.standing, load, carrier: base.carrier, offer,
+      text, history, echoes: dp.repetitionHint(history, text) })
     say(`- **D:** \`${text}\``)
     const out = await answer({
       config, side: 'driver', systemPrompt,
       messages: (sys) => dp.buildMessages({ systemPrompt: sys, history, newMessage: text }),
       clean: (t) => stripSpeakerLabel(t, base.driver.name),
-      problemOf: (r) => driverReplyProblem(r, { offer, text, load }),
+      problemOf: (r) => driverReplyProblem(r, { offer, text, load, driver: base.driver, standing: base.standing, history }),
       retryPrompt: driverRetryPrompt,
       fallback: dp.FALLBACK_REPLY,
     })

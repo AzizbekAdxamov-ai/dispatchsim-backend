@@ -39,6 +39,7 @@ export const INVOICE_CTE = `
   WITH invoice_base AS (
     SELECT
       l.id AS "loadId", l.broker, l.rate_usd AS "rateUsd", l.accessorials,
+      l.rate_basis AS "rateBasis", l.fuel_surcharge_usd AS "fuelSurchargeUsd",
       l.payment_terms AS "paymentTerms", l.booked_at AS "bookedAt",
       l.delivered_at AS "deliveredAt", l.invoice_paid_at AS "invoicePaidAt",
       -- invoice_due_at is what the TICK will actually pay against, on the
@@ -102,7 +103,7 @@ export async function listInvoiceRows({ status, search, limit, offset }) {
 
   const result = await query(
     `${INVOICE_CTE}
-     SELECT "loadId", broker, "rateUsd", accessorials, "paymentTerms",
+     SELECT "loadId", broker, "rateUsd", "rateBasis", "fuelSurchargeUsd", accessorials, "paymentTerms",
        "bookedAt", "deliveredAt", "invoicePaidAt", "dueAt", status, "daysPastDue"
      FROM invoice_status
      ${whereClause}
@@ -133,7 +134,7 @@ export async function countInvoiceStatuses({ search }) {
 export async function getInvoiceRowByLoadId(loadId) {
   const result = await query(
     `${INVOICE_CTE}
-     SELECT "loadId", broker, "rateUsd", accessorials, "paymentTerms",
+     SELECT "loadId", broker, "rateUsd", "rateBasis", "fuelSurchargeUsd", accessorials, "paymentTerms",
        "bookedAt", "deliveredAt", "invoicePaidAt", "dueAt", status, "daysPastDue"
      FROM invoice_status
      WHERE "loadId" = $1`,

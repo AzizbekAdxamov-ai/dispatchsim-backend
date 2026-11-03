@@ -34,6 +34,7 @@ export const LOAD_COLUMNS = `
   l.destination_city AS "destinationCity", l.destination_state AS "destinationState",
   l.broker, l.commodity,
   l.rate_usd AS "rateUsd", l.distance_mi AS "distanceMi", l.weight_lbs AS "weightLbs",
+  l.rate_basis AS "rateBasis", l.fuel_surcharge_usd AS "fuelSurchargeUsd",
   l.equipment_type AS "equipmentType", l.equipment_length_ft AS "equipmentLengthFt",
   l.status, l.driver_id AS "driverId", l.truck_id AS "truckId",
   l.booked_at AS "bookedAt", l.pickup_at AS "pickupAt", l.delivery_at AS "deliveryAt",
@@ -256,7 +257,7 @@ export async function getOnTimeTrend(days = 7) {
 // file that INSERTs INTO loads.
 export async function createLoad(client, {
   id, originCity, originState, destinationCity, destinationState,
-  broker, commodity, rateUsd, distanceMi, weightLbs,
+  broker, commodity, rateUsd, distanceMi, weightLbs, rateBasis = 'all-in', fuelSurchargeUsd = 0,
   equipmentType, equipmentLengthFt, driverId, truckId,
   pickupAt, deliveryAt, bookedAt, paymentTerms,
 }) {
@@ -267,14 +268,14 @@ export async function createLoad(client, {
        equipment_type, equipment_length_ft,
        status, driver_id, truck_id,
        booked_at, pickup_at, delivery_at,
-       payment_terms, accessorials
+       payment_terms, accessorials, rate_basis, fuel_surcharge_usd
      ) VALUES (
        $1, $2, $3, $4, $5,
        $6, $7, $8, $9, $10,
        $11, $12,
        $13, $14, $15,
        $16, $17, $18,
-       $19, '[]'::jsonb
+       $19, '[]'::jsonb, $20, $21
      )
      RETURNING id`,
     [
@@ -286,6 +287,7 @@ export async function createLoad(client, {
       // Derived from the broker's stated days-to-pay (constants/paymentTerms.js).
       // Defaults to net30 when the posting has no broker on file.
       paymentTerms || 'net30',
+      rateBasis, fuelSurchargeUsd,
     ],
   )
   return result.rows[0]

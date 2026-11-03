@@ -24,6 +24,19 @@ test('statedWeights reads pounds and k', () => {
   assert.deepEqual(statedWeights('no weight here'), [])
 })
 
+test('explicit monetary shorthand is not weight, while actual pounds and mixed requests stay guarded', () => {
+  for (const text of ['$9k', '9k$', '9k total', '9k all-in', '9k linehaul', '9k dollars', '9k USD']) {
+    assert.deepEqual(statedWeights(text), [], text)
+    assert.equal(check('I can do $2,400 all-in.', `can you do ${text}?`), false, text)
+    assert.equal(check('Yes, no problem.', `can you add ${text} more?`), false, text)
+  }
+  for (const text of ['can you do $9k total and add 10k lbs more?', 'can you do 9k total, with 10k lbs more?', 'can you add $9k lbs more?']) {
+    assert.equal(check('Yes, no problem.', text), true, text)
+  }
+  assert.deepEqual(statedWeights('$9k total and 43.5k'), [43500])
+  assert.deepEqual(statedWeights('$9k lbs'), [9000])
+})
+
 // Kills: "agrees" read only from a literal "yes" -- EB18's own wording,
 // "extra weight isn't an issue", is how the broker said yes.
 test('weightChangeAgreed: EB18 "extra weight isn\'t an issue" is flagged', () => {

@@ -19,6 +19,81 @@ import { refusesWithoutReason } from '../../lib/refusalReason.js'
 import { hosReplyProblem, hosPressureKind } from '../../lib/hosPressure.js'
 import { personaBreak, noWayBack } from '../../lib/personaBreak.js'
 import { willAcceptWork } from '../../constants/driverPay.js'
+import { asciiPunct } from '../../lib/plainText.js'
+import { driverReplyTask } from './driverConversation.js'
+import { inventsEnvironment, NO_ENVIRONMENT_LINE } from '../../lib/environmentClaims.js'
+import { latenessProblem, latenessLine } from '../../lib/lateness.js'
+import { clockDateTime } from '../../constants/appClock.js'
+
+function unsupportedHealthClaim(reply, driver, text, history) {
+  const answer = asciiPunct(reply)
+  const bio = asciiPunct(driver?.bio ?? '')
+  const name = asciiPunct(driver?.name ?? '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const firstName = name.split(/\s+/)[0]
+  const subject = `(?:he|she|driver${name ? `|${name}|${firstName}` : ''})`
+  const task = driverReplyTask({ text, history })
+  const healthContext = ['personal-health', 'health-help'].includes(task) || /\b(?:drugs?|alcohol|sober)\b/i.test(answer)
+  const hygiene = /\bclean(?:[-\s]+shaven|\s+(?:after|from)\s+(?:a\s+)?(?:shower|bath|wash))\b|\b(?:washed|washing)\s+my\s+hands\b/i.test(answer)
+  const claims = ['clean', 'sober'].filter((word) => word !== 'clean' || (healthContext && !hygiene)).map((word) => [
+    new RegExp(`\\bI(?:(?:'m| am| stay| remain)\\s+${word}\\b(?![-\\s]+(?:shav\\w*|ing\\b|the\\b|my\\b|out\\b|up\\b))|(?:'ve| have)\\s+been\\s+${word}\\b)`, 'i'),
+    new RegExp(`\\b${subject}\\s+(?:is|has been|stays|remains)\\s+${word}\\b(?![-\\s]+(?:shav\\w*|ing\\b|the\\b|out\\b|up\\b))`, 'i'),
+  ])
+  for (const substance of ['drugs?', 'alcohol']) claims.push([
+    new RegExp(`\\b(?:no\\s+(?:drugs?\\s+or\\s+)?${substance}\\s+on\\s+my\\s+end|I(?:(?:'ve| have)\\s+never\\s+used|\\s+never\\s+(?:used?|drank|drink)|\\s+(?:don't|do not)\\s+(?:use|drink))\\s+(?:drugs?\\s+or\\s+)?${substance})\\b`, 'i'),
+    new RegExp(`\\b${subject}\\s+(?:never\\s+(?:used?|drank|drinks?)|(?:doesn't|does not)\\s+(?:use|drink))\\s+${substance}\\b`, 'i'),
+  ])
+  return claims.some(([claim, grounded]) => claim.test(answer) && !grounded.test(bio))
+}
+
+// These are driver-only conversational failures, not forbidden topics. Work
+// questions and real requests for help must retain their substantive answer.
+function conversationProblem(reply, text, driver, history) {
+  const line = asciiPunct(text ?? '')
+  const answer = asciiPunct(reply)
+  const workAsk = /\b(?:truck|trailer|hours?|hos|eld|fuel|pay|settlement|pickup|delivery|eta|miles?|load|where|location)\b/i.test(line)
+  const problem = (why, hint, safeReply) => ({ why, hint, safeReply, unusable: true })
+  if (unsupportedHealthClaim(reply, driver, text, history)) {
+    return problem('invented personal sobriety or substance-use history',
+      ' Your profile does not establish that personal health claim. Do not repeat it or treat a dispatcher allegation as your medical history. Keep personal history private, while addressing any real safety question seriously.',
+      "I'd rather keep my personal history private.")
+  }
+  if (/\b(?:anything(?:\s+else)?\s+(?:I\s+can\s+help|work-related\s+you\s+need)|(?:how|what)\s+can\s+I\s+help\s+(?:you\s+)?with|let\s+me\s+know\s+if\s+(?:you\s+need|I\s+can\s+help))\b/i.test(answer)) {
+    return problem('offered generic help instead of answering as a driver',
+      ' Answer this message in your own voice. Do not add a customer-service offer or an automatic work redirect.',
+      "What do you mean?")
+  }
+  const medicalHelp = /\b(?:help|advice|assistance|medical|emergency|counsel\w*|overdos\w*|withdrawal|addict\w*|drunk|impaired|intoxicat\w*|took|taken|used|using)\b/i.test(line)
+  if (!medicalHelp && /\b(?:medical\s+professional|counselor|counsellor|seek\s+(?:medical|professional)\s+help)\b/i.test(answer)) {
+    return problem('gave unsolicited clinical advice during casual conversation',
+      ' No medical help was requested. Respond to the actual personal comment briefly, without inventing medical or substance-use history.',
+      "Not sure what you're getting at. What did you mean?")
+  }
+  const social = /^\s*(?:bro|hey|hi|hello|yo|wass?up|what'?s\s+up)[.!?\s]*$/i.test(line)
+    || /\b(?:r\s*u|are\s+you|you\s+a)\s+(?:a\s+)?(?:bot|robot|ai)\b/i.test(line)
+  if (social && !workAsk) {
+    const knownTruck = driver?.truckId && answer.toLowerCase().includes(String(driver.truckId).toLowerCase())
+    if (knownTruck || /\b\d+\s*(?:hours?\s+(?:left|remaining)|[- ]?foot\s+(?:dry|trailer|reefer))\b/i.test(answer)) {
+      return problem('recited unasked equipment or hours during small talk',
+        ' Keep this social answer short. No truck identifier, trailer specification or remaining-hours report was requested.',
+        /\b(?:bot|robot|ai)\b/i.test(line) ? "No, it's me." : 'Hey, what\'s up?')
+    }
+  }
+  // Only standalone arithmetic/trivia. Never classify a dispatch calculation
+  // by the presence of digits alone, or attempt to compute a result here.
+  const randomSum = !workAsk && /^\s*[\d\s,+*/().=?-]+(?:\s*(?:can\s+(?:you|u)\s+gues\w*|what\s+is\s+it))?\s*[?!.]*\s*$/i.test(line)
+    && /\d\s*[-+*/]\s*\d/.test(line)
+  const basicNumber = driverReplyTask({ text, history }) === 'number-banter' && !randomSum
+  if ((randomSum && /^\s*(?:the\s+(?:answer|result)\s+is\s*)?[-+]?\d[\d,.]*\s*[.!]?\s*$/i.test(answer))
+    // "comes right after 1" slipped the bare "comes after" on the live
+    // retry of 2026-10-23, so adverbs between the verb and the direction
+    // are allowed through in a bounded way.
+    || (basicNumber && /\b(?:integer|comes\s+(?:\w+\s+){0,2}(?:after|before))\b/i.test(answer))) {
+    return problem('switched into a calculator or encyclopedia for unrelated banter',
+      ' Treat the unrelated number question as banter. Do not guess an exact result or give a textbook definition; keep your own voice.',
+      randomSum ? "I'd need a calculator for that one." : "What's with the number quiz?")
+  }
+  return null
+}
 
 // What she says when asked for "the prompt": a person who does not know what
 // that means, back on the lane when there is one.
@@ -38,13 +113,45 @@ const unreachableLine = (offer, miles) => cannotMakeLine(offer)
 // Falls exchange), then built a false legal verdict on that invented time.
 // Limit this guard to a direct rest/arrival question and a reply that gives
 // a clock or a definite pickup verdict; ordinary chat is unaffected.
-function inventedRestEta(reply, text, offer, driver) {
+function inventedRestEta(reply, text, offer, driver, load = null) {
   if (!offer?.restEndUnknown && driver?.dutyStatus !== 'resting') return false
   // A computed refusal (even a rest ending now cannot reach it) is not an invented ETA.
   if (offer?.makesIt === false && saysCannotMake(reply)) return false
+  // Her own load's recorded ETA is a fact she was given, not a guess (ED02).
+  if (!offer && quotesRecordedEta(reply, load)) return false
   const asked = /\b(?:rest\s+(?:end|finish)|(?:end|finish)\s+(?:my|your|the)?\s*rest|eta|arrival|arrive|reach|make\s+(?:it|the\s+pickup)|roll\s+into|(?:be|get)\s+there)\b/i.test(text ?? '')
   if (!asked) return false
   return /\b\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)\b|\b\d{1,2}:\d{2}\b|\b(?:noon|midnight)\b|\b(?:can|cannot|can't|will|won't|could|would|should)\s+(?:\w+\s+){0,2}(?:make\s+(?:it|the\s+pickup)|reach\b|get\s+to\b|be\s+there\b|get\s+there\b)|\b(?:before|after)\s+(?:the\s+)?pickup\b|\b(?:expect|likely|probably|should|will|can|could|would)\b.{0,30}\b(?:tomorrow|tonight|morning|afternoon|evening|dawn|dusk|lunch)\b|\b(?:by|before|after|around)\s+(?:tomorrow\s+)?(?:morning|afternoon|evening|dawn|dusk|lunch)\b|^\s*(?:yes|yeah|yep|sure|I can)\b/i.test(reply)
+}
+
+// The load's recorded ETA, as the prompt states it ("You are due into ...
+// around Fri, Nov 6, 9:45 AM", driverChat.prompt.js). A reply whose every
+// clock time is that one quotes a fact. ED02 (eval 2026-11-02, both models):
+// "whats ur eta" was answered with this time and regenerated as invented.
+function recordedEtaClock(load) {
+  const m = /(\d{1,2}):(\d{2})\s*([AP])M\b/.exec(clockDateTime(load?.etaAt) ?? '')
+  return m ? { hour: Number(m[1]), minute: Number(m[2]), half: m[3] } : null
+}
+function quotesRecordedEta(reply, load) {
+  const eta = recordedEtaClock(load)
+  if (!eta) return false
+  const times = [...asciiPunct(String(reply ?? '')).matchAll(/\b(\d{1,2})(?::(\d{2}))?\s*([ap])\.?\s*m\b/gi)]
+  return times.length > 0 && times.every((t) => Number(t[1]) === eta.hour
+    && t[3].toUpperCase() === eta.half && (t[2] == null || Number(t[2]) === eta.minute))
+}
+
+// Offer checks answer the offer. A turn about HOS, a bot question, small
+// talk or the weather is not a turn about that pickup: live 2026-11-03 #116
+// ("skip ur 10 and roll now") and #121 ("r u a bot lol") were both replaced
+// by the Atlanta "can't make" line. With no dispatcher text (older callers),
+// the reply is still checked against the offer.
+function talksAboutOffer(text, offer) {
+  if (text == null) return true
+  if (hosPressureKind(text) !== null) return false
+  const line = asciiPunct(String(text))
+  const city = offer?.city ? String(offer.city).replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : null
+  if (city && new RegExp(`\\b${city}\\b`, 'i').test(line)) return true
+  return /\b(?:pu|p\/u|pickup|pick\s*up|loads?|eta|arriv\w*|make\s+it|get\s+there|be\s+there|how\s+far|miles?|earliest|later|reschedul\w*|appt|appointment|take\s+(?:it|that|this))\b/i.test(line)
 }
 
 // The offer block is intentionally hidden from a driver who refuses work
@@ -55,7 +162,7 @@ function ignoresWorkStance(reply, text, standing) {
   // "What load am I on?" and "What time is the pickup?" ask for facts,
   // not a commitment. Only a prospective assignment or arrival ask needs
   // the payroll refusal in this reply.
-  const asksAboutWork = /\b(?:can|could|will|would|should)\s+you(?:\s+\w+){0,2}\s+(?:take|accept|book|run|haul|reach|make|be|get|cover)\b|\bavailable\s+for\b.{0,80}\b(?:run|haul|freight|load|pickup)\b|\b(?:what\s+time|when|earliest|eta|arrival)\b.{0,80}\b(?:arriv\w*|be\s+there|get\s+there|reach|roll\s+into)\b|\b(?:sending|assigning|dispatching)\s+you\b|\b(?:new|next|another)\s+load\b/i.test(text ?? '')
+  const asksAboutWork = /\b(?:can|could|will|would|should)\s+you(?:\s+\w+){0,2}\s+(?:take|accept|book|run|haul|reach|make|be|get|cover)\b|\bavailable\s+for\b.{0,80}\b(?:run|haul|freight|load|pickup)\b|\b(?:what\s+time|when|earliest|eta|arrival)\b.{0,80}\b(?:arriv\w*|be\s+there|get\s+there|reach|roll\s+into)\b|\b(?:sending|assigning|dispatching)\s+you\b|\b(?:new|next|another)\s+load\b|\bloads?\s+next\b|\bgot\s+(?:a|an|the|another)\b.{0,40}\bloads?\b|\btake\s+the\b.{0,60}\bloads?\b|\b(?:what'?s|whats|wats)\s+(?:ur|your)\s+eta\b/i.test(text ?? '')
   if (!asksAboutWork) return false
   const refuses = /\b(?:not\s+taking|won't\s+take|cannot\s+take|can't\s+take|do\s+not\s+run|don't\s+run|no\s+longer\s+(?:tak(?:e|ing)|run(?:ning)?|driv(?:e|ing)|work(?:ing)?)|left\s+(?:the\s+company|your\s+roster)|quit|moved\s+on)\b/i.test(reply)
   const stillGivesEta = /\b\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)\b|\b\d{1,2}:\d{2}\b|\b(?:noon|midnight)\b|\b(?:can|will|could|would|should)\s+(?:\w+\s+){0,2}(?:take\b|accept\b|make\b|reach\b|get\b|be\b|arrive\b|cover\b)|\b(?:expect|likely|probably)\b.{0,30}\b(?:tomorrow|tonight|morning|afternoon|evening|dawn|dusk)\b|^\s*(?:yes|yeah|yep|sure|I can)\b/i.test(reply)
@@ -81,7 +188,7 @@ function deliveryCommitment(reply, text, offer) {
   })
 }
 
-export function driverReplyProblem(reply, { offer, text, load = null, driver = null, standing = null } = {}) {
+export function driverReplyProblem(reply, { offer, text, load = null, driver = null, standing = null, history = [] } = {}) {
   // HOS is a safety rule and wins when both fire. A correct HOS refusal
   // makes hosReplyProblem return null, so persona is skipped whenever the ask
   // itself is an HOS ask (hosPressureKind), not only when the reply is wrong.
@@ -113,6 +220,15 @@ export function driverReplyProblem(reply, { offer, text, load = null, driver = n
   // A driving/log violation needs a plain no. A statement of remaining
   // hours, or "Copy that", leaves the dangerous request standing.
   if (hos) return hos
+  if (inventsEnvironment(reply)) return {
+    why: 'invented weather or traffic information', hint: ' No weather or traffic feed is available. Say what is unknown without guessing conditions.',
+    unusable: true, safeReply: NO_ENVIRONMENT_LINE,
+  }
+  const lateProblem = latenessProblem(reply, { load, text })
+  if (lateProblem) return {
+    why: lateProblem, hint: ' Compare only the recorded ETA and delivery appointment. Use their exact lateness duration, or say it is unknown.',
+    unusable: true, safeReply: latenessLine(load),
+  }
   if (ignoresWorkStance(reply, text, standing)) {
     const safeReply = standing.stage === 'quits'
       ? "I'm no longer running loads for your company."
@@ -124,14 +240,18 @@ export function driverReplyProblem(reply, { offer, text, load = null, driver = n
       safeReply,
     }
   }
-  if (inventedRestEta(reply, text, offer, driver)) {
+  if (inventedRestEta(reply, text, offer, driver, load)) {
     const place = offer?.state ? `${offer.city}, ${offer.state}` : offer?.city
     const miles = offer?.miles == null ? '' : `I'm about ${offer.miles.toLocaleString('en-US')} road miles from ${place}, but `
+    const recorded = !offer && load?.etaAt && clockDateTime(load.etaAt)
     return {
       why: 'gave an unverified rest end or arrival time',
-      hint: ' Your current rest end time is not recorded. Do not give a clock time, legal ETA, or pickup verdict; correct any earlier guess.',
+      hint: recorded
+        ? ` Your recorded ETA is ${recorded}. Give that time and nothing else; do not invent a rest end time.`
+        : ' Your current rest end time is not recorded. Do not give a clock time, legal ETA, or pickup verdict; correct any earlier guess.',
       unusable: true,
       safeReply: (offer?.makesIt === false ? cannotMakeLine(offer) : null)
+        ?? (recorded ? `I'm due into ${load.destinationCity} around ${recorded}.` : null)
         ?? `${miles}I don't have a confirmed end time for this rest, so I can't give you a reliable arrival time yet.`,
     }
   }
@@ -145,9 +265,13 @@ export function driverReplyProblem(reply, { offer, text, load = null, driver = n
         : `${offer.makesIt === true ? 'I can reach the pickup. ' : ''}I can't confirm delivery until the loading time, duty window and rest timing are clear.`,
     }
   }
+  // A driver who is not taking work was never shown the offer (prompt hides
+  // it): its checks would ask her to discuss a load she has refused.
+  const takesWork = !standing?.stage || willAcceptWork(standing.stage)
+  const offerTurn = takesWork && talksAboutOffer(text, offer)
   // The model may say "can't make it" but change the computed distance.
   // Correct it on retry; never show the wrong number after a second miss.
-  if (milesOff(reply, offer)) {
+  if (takesWork && milesOff(reply, offer)) {
     const miles = offer.miles.toLocaleString('en-US')
     const safeReply = offer.makesIt === false
       ? unreachableLine(offer, miles)
@@ -158,7 +282,7 @@ export function driverReplyProblem(reply, { offer, text, load = null, driver = n
   }
   // The facts say she cannot make the pickup (computed from her position
   // and the clock) and the reply never says so.
-  if (ignoresUnreachable(reply, offer)) {
+  if (offerTurn && ignoresUnreachable(reply, offer)) {
     return {
       why: 'did not say you cannot make that pickup',
       hint: ' The facts above say you cannot make that pickup: say so plainly, with the miles, and ask for a later pickup time.',
@@ -168,7 +292,7 @@ export function driverReplyProblem(reply, { offer, text, load = null, driver = n
     }
   }
   // "Can't make it" with no distance: the dispatcher has nothing to plan around.
-  if (cannotMakeWithoutMiles(reply, offer)) {
+  if (offerTurn && cannotMakeWithoutMiles(reply, offer)) {
     const miles = offer.miles.toLocaleString('en-US')
     return {
       why: 'did not give the miles to that pickup',
@@ -182,13 +306,26 @@ export function driverReplyProblem(reply, { offer, text, load = null, driver = n
     && /\b(?:delivery|deliver)\b/i.test(reply)
     && /\b(?:until|depends|depending|provided|assuming|if)\b/i.test(reply)
     && /\b(?:loading|duty|rest)\b/i.test(reply)
-  if (!qualifiedDelivery && refusesWithoutReason(reply, text)) {
+  // A refusal grounded in the computed facts IS a reasoned one: the offer
+  // says the truck cannot make the pickup and the reply says so too. By
+  // the time the shared word list runs, a wrong distance has already been
+  // rejected (milesOff above) and a distance-free "can't" has been sent
+  // back for its miles (cannotMakeWithoutMiles above), so what survives
+  // to this line says cannot-make with the computed distance -- a reason
+  // words alone cannot see. The recognition lives here, in the driver
+  // layer; the shared regex is not loosened for the broker and eval
+  // streams. (Live 2026-10-23: a correct 2,056-mile LA refusal was
+  // regenerated as "reasonless" and the retry cost 2,675 tokens.)
+  const computedRefusal = offer?.makesIt === false && saysCannotMake(reply)
+  if (!qualifiedDelivery && !computedRefusal && refusesWithoutReason(reply, text)) {
     return {
       why: 'turned it down without a reason',
       hint: ' Give the reason in a few words from what is written above (the miles, your hours, the rule, the empty run) -- never a bare no.',
       unusable: false,
     }
   }
+  // Style must never hide the operational correction the dispatcher needs.
+  if (!hosAsk) return conversationProblem(reply, text, driver, history)
   return null
 }
 

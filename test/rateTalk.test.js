@@ -109,6 +109,21 @@ test('the prompt tells the broker the real figure and the push count', () => {
   assert.doesNotMatch(second, /first time they have asked/)
 })
 
+// Kills: the correction stated but the figure never demanded into the reply
+// (EB06 2026-10-28 full-bank run: the broker waved the claim off with no
+// number at all -- "lower-mountain rates don't apply here"), and any
+// wording that lets a wave-off without the figure stand in for a correction.
+test('a wrong DAT claim must be corrected with the real figure in the same reply, never waved off', () => {
+  const p = promptWith(['DAT shows carolinas flatbed at 4.75 linehaul this week so ur way under'])
+  assert.match(p, /Correct them in this same reply, with the real figure said out loud/)
+  assert.match(p, /DAT has carolinas flatbed at \$2\.95 right now/)
+  assert.match(p, /never wave the claim off/)
+  assert.match(p, /a number left unanswered is the number they walk away believing/)
+  // The example sentence carries the figure verbatim, so the check
+  // ("real figure not given") and the prompt cannot drift apart.
+  assert.doesNotMatch(p, /naming your[\s\S]{0,80}\$4\.75/)
+})
+
 // Kills: lines added when nothing was said
 test('nothing said, nothing added', () => {
   assert.deepEqual(rateTalkBlock({ posting: flatbed, said: null }), [])

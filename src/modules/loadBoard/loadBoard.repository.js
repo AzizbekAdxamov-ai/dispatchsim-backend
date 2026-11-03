@@ -26,6 +26,9 @@ const POSTING_COLUMNS = `
   -- and the whole point of this posting is that the student has to ask.
   -- The broker still knows it -- brokerChat reads the column directly.
   CASE WHEN p.rate_hidden THEN NULL ELSE p.rate_usd END AS "rateUsd",
+  CASE WHEN p.rate_hidden THEN NULL ELSE p.rate_basis END AS "rateBasis",
+  CASE WHEN p.rate_hidden THEN NULL ELSE p.fuel_surcharge_usd END AS "fuelSurchargeUsd",
+  CASE WHEN p.rate_hidden OR p.rate_basis = 'all-in' THEN NULL ELSE p.rate_usd - p.fuel_surcharge_usd END AS "linehaulUsd",
   p.rate_hidden AS "rateHidden",
   p.distance_mi AS "distanceMi", p.weight_lbs AS "weightLbs",
   p.equipment_type AS "equipmentType", p.equipment_length_ft AS "equipmentLengthFt",
@@ -426,7 +429,7 @@ export async function bookPostingAtomically(client, postingId, userId) {
        AND p.status = 'open'
        AND p.posted_at <= now()
        AND p.expires_at > now()
-     RETURNING ${POSTING_COLUMNS}`,
+     RETURNING ${POSTING_COLUMNS}, p.rate_usd AS "rateUsd", p.rate_basis AS "rateBasis", p.fuel_surcharge_usd AS "fuelSurchargeUsd"`,
     [postingId, userId],
   )
   return result.rows[0] ?? null

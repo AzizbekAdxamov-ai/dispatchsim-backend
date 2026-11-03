@@ -21,16 +21,51 @@ import { weightChangeAgreed, weightHoldLine } from './weightTalk.js'
 import { personaBreak } from '../../lib/personaBreak.js'
 import { paperClaimProblem, paperNextLine } from './paperTalk.js'
 import { negotiationReplyProblem, bookingTurn } from './negotiation.js'
+import { introductionOnly, introductionReply } from './turnTalk.js'
+import { quoteText } from './rateQuote.js'
+import { proposesRebroker, agreesRebroker, refusesRebroker, ONE_CARRIER_RULE, ONE_CARRIER_REPLY } from './carrierPolicy.js'
+import { inventsEnvironment, NO_ENVIRONMENT_LINE } from '../../lib/environmentClaims.js'
+import { stopPayInvented, NO_STOP_PAY_LINE } from './termsTalk.js'
+
+// The dispatcher's own line gives an MC ("MC 999999"). Answering a wrong one
+// with "what's your correct MC?" is a reply to what they said, not an
+// identity form (live 2026-11-03 #109).
+export const GIVES_MC = /\bMC\s*(?:#|no\.?|number)?\s*:?\s*\d{4,8}\b/i
+export const WRONG_MC_LINE = "That MC isn't showing up on our end. What's your correct MC?"
+
+// "...does not match the carrier MC listed on our rate confirmation" before
+// any paper exists (live #109): a document the broker has not written yet.
+const CITES_PAPER = /\b(?:on|in|from|per|listed\s+on|shown\s+on)\s+(?:our|the|your|this)\s+(?:rate\s*(?:confirmation|con)|ratecon|rc)\b/i
+export function citesMissingPaper(reply, paper) {
+  return Boolean(paper) && !paper.delivered && CITES_PAPER.test(String(reply ?? ''))
+}
+
+// The broker gives the stop addresses on the paper; asking the carrier for
+// them turns the roles around (live #128: "Could you provide the exact
+// pickup address in Columbus?").
+const STOP_PLACE = String.raw`(?:pick[\s-]?up|pu|delivery|drop|shipper|receiver|consignee|stop)\s+(?:street\s+)?(?:address|location|addy)`
+const ASKS_STOP = new RegExp(String.raw`\b(?:what(?:'s|\s+is)|provide|share|give|send|need|have|confirm|tell\s+me)\b[^.!?]{0,40}\b${STOP_PLACE}\b[^.!?]*\?|\b${STOP_PLACE}\b[^.!?]*\?`, 'i')
+export function asksCarrierForStop(reply) {
+  return ASKS_STOP.test(String(reply ?? ''))
+}
+function withoutStopQuestion(reply) {
+  return String(reply ?? '').split(/(?<=[.!?])\s+/).filter((part) => !ASKS_STOP.test(part)).join(' ').trim()
+}
+
+function answersWrongMcLine(text, booking) {
+  return GIVES_MC.test(text ?? '') && ['mismatch', 'unverifiable'].includes(booking?.mc?.verdict) ? WRONG_MC_LINE : null
+}
 
 function discussionReply(text, posting, negotiation) {
   if (negotiation?.line) return negotiation.line
+  if (introductionOnly(text)) return introductionReply()
   if (/\b(?:hi|hey|hello|wassap|wassup|what'?s up)\b/i.test(text)) {
     return `Hey! I've got the ${posting.originCity} to ${posting.destinationCity} load here.`
   }
   if (/\b(?:available|avaivable|open|still there)\b/i.test(text)) {
     return `Yes, the ${posting.originCity} to ${posting.destinationCity} load is still available.`
   }
-  return `I'm at $${Number(negotiation?.state.offer ?? posting.rateUsd).toLocaleString('en-US')} all-in on this one.`
+  return `I'm at ${quoteText(posting, negotiation?.state.offer ?? posting.rateUsd)} on this one.`
 }
 
 // `posting` names the lane for the in-character line; `now` and `text` (the
@@ -41,6 +76,18 @@ function discussionReply(text, posting, negotiation) {
 export function brokerReplyProblem(reply, {
   truck, booking = null, posting = null, now = new Date(), text = null, said = null, brokerSaid = [], bookedHere = false, paper = null, negotiation = null,
 } = {}) {
+  if (agreesRebroker(reply) || (proposesRebroker(text) && !refusesRebroker(reply))) return {
+    why: 'accepted or failed to refuse a rebroker proposal', hint: ` ${ONE_CARRIER_RULE}`,
+    unusable: true, safeReply: ONE_CARRIER_REPLY,
+  }
+  if (inventsEnvironment(reply)) return {
+    why: 'invented weather or traffic information', hint: ' No weather or traffic feed is available. Do not invent observations or forecasts.',
+    unusable: true, safeReply: NO_ENVIRONMENT_LINE,
+  }
+  if (stopPayInvented(reply)) return {
+    why: 'invented a separate stop-pay term', hint: ' Stop pay is not among the authorized terms. Do not repurpose detention or another amount as stop pay.',
+    unusable: true, safeReply: NO_STOP_PAY_LINE,
+  }
   // Help-desk talk, or a canned refusal / bare "No." to a request for the
   // prompt: a person who does not follow, back to the load. No safeReply
   // without a posting: the service then uses its holding line.
@@ -56,18 +103,26 @@ export function brokerReplyProblem(reply, {
   }
   if (trippedBannedWord(reply) !== null) return { why: 'used a forbidden word', hint: '', unusable: true }
   if (leaksReasoning(reply)) return { why: 'showed your own reasoning instead of speaking as the broker', hint: '', unusable: true }
+  if (introductionOnly(text) && posting && (
+    /\$|\ball[- ]?in\b|\b(?:load|available|pickup|delivery|rate|linehaul)\b/i.test(reply)
+    || [posting.originCity, posting.destinationCity].filter(Boolean).some((city) => reply.toLowerCase().includes(city.toLowerCase()))
+  )) return {
+    why: 'pitched a particular load before the dispatcher identified one',
+    hint: ' Return only their greeting and optionally your own name. Do not volunteer a lane, availability or price.',
+    unusable: true, safeReply: introductionReply(),
+  }
   const rateProblem = negotiationReplyProblem(reply, negotiation)
   if (rateProblem) {
     // A figure-less confirmation is fixed by spelling the number out; every
     // other rate miss is fixed by rebuilding the sentence from the decision.
     const hint = rateProblem === 'omitted the agreed rate from the confirmation'
-      ? ` Say the agreed $${negotiation.state.agreed.toLocaleString('en-US')} all-in in the confirmation sentence.`
+      ? ` Say the agreed ${quoteText(posting ?? {}, negotiation.state.agreed)} in the confirmation sentence.`
       : rateProblem === 'claimed a permanent final rate while authorized bargaining room remains'
         ? ' State the current authorized offer without calling it final, absolute best, or denying all future movement. Do not raise the amount yourself.'
       : ' Follow AUTHORITATIVE RATE DECISION exactly; change only the voice.'
     return {
       why: rateProblem, hint,
-      unusable: true, safeReply: negotiation.line ?? `My offer is $${negotiation.state.offer.toLocaleString('en-US')} all-in.`,
+      unusable: true, safeReply: negotiation.line ?? `My offer is ${quoteText(negotiation.rateQuote ?? {}, negotiation.state.offer)}.`,
     }
   }
   const paperProblem = paperClaimProblem(reply, paper)
@@ -79,12 +134,30 @@ export function brokerReplyProblem(reply, {
       safeReply: negotiation?.line ?? paperNextLine(paper),
     }
   }
+  if (citesMissingPaper(reply, paper)) {
+    return {
+      why: 'referred to a rate confirmation that does not exist yet',
+      hint: ' There is no rate confirmation yet. Do not cite one; if their MC does not check out, say it is not showing up on your end and ask for the correct MC.',
+      unusable: true,
+      safeReply: answersWrongMcLine(text, booking) ?? negotiation?.line ?? discussionReply(text ?? '', posting ?? {}, negotiation),
+    }
+  }
+  if (asksCarrierForStop(reply)) {
+    const kept = withoutStopQuestion(reply)
+    return {
+      why: 'asked the carrier for a stop address you give them on the paper',
+      hint: ' You give the pickup and delivery addresses on the rate confirmation. Never ask the carrier for them.',
+      unusable: true,
+      safeReply: kept || negotiation?.line || paperNextLine(paper),
+    }
+  }
   if (tooLongForChat(reply)) {
     return { why: `ran to ${reply.trim().length} characters when the limit is ${CHAT_REPLY_MAX_CHARS}`, hint: '', unusable: true }
   }
   // A missing MC must not turn every greeting or counteroffer into an
   // identity form. Persisting after regeneration gets an answer, not MC spam.
-  if (booking && posting && text !== null && !bookingTurn(text, negotiation)
+  const answersWrongMc = GIVES_MC.test(text ?? '') && ['mismatch', 'unverifiable'].includes(booking?.mc?.verdict)
+  if (booking && posting && text !== null && !bookingTurn(text, negotiation) && !answersWrongMc
     && (mcQuestion(reply) || /(?:\b(?:what|provide|share|give|need|may I have|can I have|could I have)\b[^.!?]{0,35}\bcompany name\b)/i.test(reply))) {
     return {
       why: 'asked for carrier identity before rate acceptance or booking',

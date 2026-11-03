@@ -68,6 +68,7 @@ import { driverReplyProblem, driverRetryPrompt } from '../src/modules/driverChat
 import { truckFacts } from '../src/modules/brokerChat/truckTalk.js'
 import { bookingFacts } from '../src/modules/brokerChat/bookingTalk.js'
 import { stripSpeakerLabel } from '../src/lib/speakerLabel.js'
+import { brokerEvalContext } from './brokerEvalContext.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const args = process.argv.slice(2)
@@ -235,7 +236,7 @@ function record(fields) {
 
 async function brokerRun(carrier) {
   const config = evalConfig('broker')
-  say(`## Broker — ${modelHeader(config)} · prompt ${promptVersion('brokerChat/brokerChat.prompt.js')}`)
+  say(`## Broker — production compact context, isolated single turn (no persistence/delivery) · ${modelHeader(config)} · prompt ${promptVersion('brokerChat/brokerContext.js')}`)
   say('')
   const open = (await query(`
     SELECT p.id, p.origin_state AS "originState", p.destination_state AS "destinationState",
@@ -272,31 +273,21 @@ async function brokerRun(carrier) {
     const line = typeof c.line === 'function' ? c.line(posting, market) : c.line
     // One clock for the prompt and the truck check, as in the live service.
     const now = new Date()
-    const truck = truckFacts({ texts: [line], posting, now })
-    const booking = bookingFacts({ texts: [line], carrier, posting, now })
-    const systemPrompt = bp.buildBrokerSystemPrompt({
-      carrier,
-      broker: { name: posting.name, contactName: posting.contactName, persona: posting.persona },
-      posting,
-      now,
-      talk: talkFacts([line], posting.equipmentType),
-      said: [line],
-      booking,
-    })
+    const { systemPrompt, history, negotiation, checkFacts } = brokerEvalContext({ posting, carrier, text: line, now })
     const { reply, model, attempts, outcome } = await answer({
       config, side: 'broker', systemPrompt,
-      messages: (sys) => bp.buildMessages({ systemPrompt: sys, history: [], newMessage: line }),
+      messages: (sys) => bp.buildMessages({ systemPrompt: sys, history, newMessage: line, negotiation }),
       clean: (t) => stripSpeakerLabel(t, posting.contactName),
-      problemOf: (r) => brokerReplyProblem(r, { truck, booking, posting, now, text: line }),
+      problemOf: (r) => brokerReplyProblem(r, checkFacts),
       retryPrompt: brokerRetryPrompt,
-      fallback: bp.FALLBACK_REPLY,
+      fallback: negotiation.line ?? bp.FALLBACK_REPLY,
     })
     const expected = c.expect({ posting, market, terms, line })
     const rpm = (posting.rateUsd / posting.distanceMi).toFixed(2)
     const side = (s) => (s.source === 'regional' ? `${s.region} $${s.linehaul}` : `${s.region ?? '?'} (no regional figure)`)
     record({
       runId, at: new Date().toISOString(), chat: 'broker', caseId: c.id, style: c.style, terms: c.terms, line, good: c.good,
-      model, promptVersion: promptVersion('brokerChat/brokerChat.prompt.js'), reasoningEffort: reasoningEffortOf(config),
+      model, promptVersion: promptVersion('brokerChat/brokerContext.js'), reasoningEffort: reasoningEffortOf(config),
       ...armRecordFields(config, arm),
       data: {
         postingId: posting.id, broker: posting.name, contact: posting.contactName,
@@ -310,7 +301,7 @@ async function brokerRun(carrier) {
       dataSummary: `${posting.originCity}, ${posting.originState} → ${posting.destinationCity}, ${posting.destinationState} · ${posting.equipmentType} · ${posting.distanceMi} mi · $${posting.rateUsd} ($${rpm}/mi)${posting.rateHidden ? ' · call for rate' : ''} · ${posting.contactName} at ${posting.name}`
         + (market ? ` · market: out of ${side(market.origin)}, reload ${side(market.destination)}, national $${market.national}` : '')
         + ` · terms: ${termsLines(terms).slice(0, 3).join(' ')}`,
-      systemPrompt,
+      systemPrompt, history, negotiation, contextPath: 'production-compact-single-turn',
       reply,
       findings: brokerFindings(reply, expected, { line }),
       rawFindings: brokerFindings(outcome.rawReply, expected, { line }),
@@ -343,12 +334,12 @@ async function driverRun(carrier) {
     // The load the line mentions, worked out by code exactly as the live
     // chat does (driverChat.service.js).
     const offer = offerFacts({ driver: ctx.driver, load, texts: [c.line] })
-    const systemPrompt = dp.buildDriverSystemPrompt({ driver: ctx.driver, standing, load, carrier, offer })
+    const systemPrompt = dp.buildDriverSystemPrompt({ driver: ctx.driver, standing, load, carrier, offer, text: c.line, history: [] })
     const { reply, model, attempts, outcome } = await answer({
       config, side: 'driver', systemPrompt,
       messages: (sys) => dp.buildMessages({ systemPrompt: sys, history: [], newMessage: c.line }),
       clean: (t) => stripSpeakerLabel(t, ctx.driver.name),
-      problemOf: (r) => driverReplyProblem(r, { offer, text: c.line, load }),
+      problemOf: (r) => driverReplyProblem(r, { offer, text: c.line, load, driver: ctx.driver, standing, history: [] }),
       retryPrompt: driverRetryPrompt,
       fallback: dp.FALLBACK_REPLY,
     })

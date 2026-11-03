@@ -17,10 +17,26 @@ const POUNDS = /(\d[\d,]*)\s*(?:lbs?\b|pounds?\b)/gi
 const THOUSANDS = /(\d+(?:\.\d+)?)\s?k\b/gi
 const THOUSAND = 1000
 
+// Informal "9k total" is a price, while "43.5k" can still be weight.
+// Mask only explicitly monetary shorthand; a pounds unit always wins so a
+// mixed price-and-weight request cannot hide its actual added freight.
+function weightText(value) {
+  const text = String(value ?? '')
+  return text.replace(THOUSANDS, (token, amount, offset) => {
+    const before = text.slice(0, offset)
+    const after = text.slice(offset + token.length)
+    if (/^\s*(?:lbs?\b|pounds?\b)/i.test(after)) return token
+    const monetary = /\$\s*$/.test(before)
+      || /^\s*(?:\$|total\b|all[- ]?in\b|linehaul\b|dollars?\b|USD\b)/i.test(after)
+    return monetary ? ' '.repeat(token.length) : token
+  })
+}
+
 export function statedWeights(reply) {
+  const text = weightText(reply)
   const out = []
-  for (const m of String(reply).matchAll(POUNDS)) out.push(Number(m[1].replace(/,/g, '')))
-  for (const m of String(reply).matchAll(THOUSANDS)) out.push(Math.round(Number(m[1]) * THOUSAND))
+  for (const m of text.matchAll(POUNDS)) out.push(Number(m[1].replace(/,/g, '')))
+  for (const m of text.matchAll(THOUSANDS)) out.push(Math.round(Number(m[1]) * THOUSAND))
   return out
 }
 
@@ -84,8 +100,8 @@ function asksWeightChange(asked, posting) {
 // posted weight is not agreeing to another.
 export function weightChangeAgreed(reply, { posting, text }) {
   if (posting?.weightLbs == null) return false
-  const r = asciiPunct(String(reply ?? ''))
-  const asked = asciiPunct(String(text ?? ''))
+  const r = weightText(asciiPunct(String(reply ?? '')))
+  const asked = weightText(asciiPunct(String(text ?? '')))
   const stated = statedWeights(r)
   const holdsPosted = stated.some((w) => near(w, posting.weightLbs))
   if (asksWeightChange(asked, posting)

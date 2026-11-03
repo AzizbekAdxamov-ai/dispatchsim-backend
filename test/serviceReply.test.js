@@ -8,6 +8,7 @@ import { serviceReply } from '../scripts/serviceReply.js'
 import { brokerReplyProblem, brokerRetryPrompt } from '../src/modules/brokerChat/replyProblem.js'
 import { driverReplyProblem, driverRetryPrompt } from '../src/modules/driverChat/replyProblem.js'
 import { cannotMakeLine } from '../src/lib/cannotMake.js'
+import { brokerEvalContext } from '../scripts/brokerEvalContext.js'
 
 const GOOD = 'Sure, I can do that.'
 const WRONG = 'I need a word.'
@@ -105,9 +106,19 @@ test('chat-eval and chat-scenarios use the shared reply checks', () => {
 // live broker chat and scenarios both reject premature booking promises.
 test('chat-eval passes the same booking verdict to prompt and reply check', () => {
   const src = readFileSync(new URL('../scripts/chat-eval.js', import.meta.url), 'utf8')
-  assert.match(src, /const booking = bookingFacts\(\{ texts: \[line\], carrier, posting, now \}\)/)
-  assert.match(src, /said: \[line\],\s+booking,/)
-  assert.match(src, /brokerReplyProblem\(r, \{ truck, booking, posting, now, text: line \}\)/)
+  assert.match(src, /brokerEvalContext\(\{ posting, carrier, text: line, now \}\)/)
+  assert.match(src, /brokerReplyProblem\(r, checkFacts\)/)
+  const posting = { originCity: 'Dallas', originState: 'TX', destinationCity: 'Chicago', destinationState: 'IL',
+    equipmentType: 'dry-van', rateUsd: 3000, distanceMi: 970, pickupAt: '2026-10-30T12:00:00Z', deliveryAt: '2026-11-01T12:00:00Z' }
+  for (const [text, expected] of [['Hello', null], ['My MC is 741309', 'match'], ['My MC is 999999', 'mismatch']]) {
+    const context = brokerEvalContext({ posting, carrier: { name: 'Example Freight', mcNumber: 'MC-741309' }, text,
+      now: new Date('2026-10-28T12:00:00Z') })
+    const reference = JSON.parse(context.history[0].content.split('\n').slice(1).join('\n'))
+    assert.equal(reference.caller.mc.verdict, expected)
+    assert.equal(context.checkFacts.booking.mc.verdict, expected)
+    assert.deepEqual(reference.caller.mc, context.checkFacts.booking.mc)
+    assert.equal(context.checkFacts.negotiation, context.negotiation)
+  }
 })
 
 // Kills: an unreachable pickup whose reply never says so (or states 1,200

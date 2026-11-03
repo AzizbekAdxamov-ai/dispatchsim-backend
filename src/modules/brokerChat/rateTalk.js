@@ -17,6 +17,7 @@
 // Pure: text in, facts out. No clock, no network, no database.
 
 import { asciiPunct } from '../../lib/plainText.js'
+import { quoteText } from './rateQuote.js'
 import {
   REGION_STATES, REGIONAL_LINEHAUL, NATIONAL_LINEHAUL, DB_RPM_MAX, fuelPerMile, marketFacts,
 } from '../../constants/marketRates.js'
@@ -54,7 +55,13 @@ export function offeredFigures(reply, theirs = []) {
       && ECHO_FRAME.test(r.slice(Math.max(0, m.index - 40), m.index))
       && !CONDITIONAL.test(before)
       && !ACCEPTS.test(after)
-    if (!echoed) out.push(value)
+    // A figure of theirs the reply turns down clause-by-clause ("I can't do
+    // $8,500" / "...but $8,500 is beyond what we can do", chat:eval EB11
+    // 2026-10-29) repeats the carrier's number to refuse it -- not an offer.
+    // Figures the dispatcher never named stay offers here: raiseWithoutReason
+    // reads them through the wider refusedFigure() split below.
+    const turnedDown = theirs.includes(value) && refusedFigure(r, value, theirs)
+    if (!echoed && !turnedDown) out.push(value)
   }
   return out
 }
@@ -289,7 +296,24 @@ export function unsupportedRateReasons(reply, { posting, truck = null, now = new
   if (!offeredDollars(reply).some((d) => d > posting.rateUsd && d <= ceiling && !theirs.includes(d))) return []
   const real = rateReasons({ posting, truck, now })
   const said = asciiPunct(reply)
-  return Object.keys(REASON_WORDS).filter((k) => REASON_WORDS[k].test(said) && !real.includes(k))
+  const reported = reportedDeadheadMiles(Array.isArray(text) ? text.join(' ') : text)
+  // A later clause can turn an earlier quoted distance into our own route
+  // verification or payment rationale; provenance must hold for the answer.
+  const independentClaim = /\b(?:verified|confirmed|actual|route|because|therefore|since|due to|so|extra|fee|additional|compensat\w*|covers?|raise|bump|increase|pay more)\b/i.test(said)
+  const reasonText = said.split(/(?<=[.!?;])\s+/).filter((clause) => {
+    const attributed = /\b(?:you (?:said|mentioned|reported)|your reported|you'?re saying|i hear you on|i hear the)\b/i.test(clause)
+    const distances = reportedDeadheadMiles(clause)
+    // An exact carrier quote is not route verification or a justification
+    // for paying more. Keep any fee, verification or causal raise assertion.
+    return !(attributed && !independentClaim && distances.length > 0 && distances.every((miles) => reported.includes(miles)))
+  }).join(' ')
+  return Object.keys(REASON_WORDS).filter((k) => REASON_WORDS[k].test(k === 'deadhead' ? reasonText : said) && !real.includes(k))
+}
+
+function reportedDeadheadMiles(value) {
+  const text = asciiPunct(value)
+  const pattern = /\b(\d[\d,]*)\s*-?\s*(?:miles?|mi)\b\s*(?:of\s+)?(?:dead ?head|deadhed|empty (?:miles|run))\b|\b(?:dead ?head|deadhed|empty (?:miles|run))\s*(?:of|is|:)?\s*(\d[\d,]*)\s*-?\s*(?:miles?|mi)\b/gi
+  return [...text.matchAll(pattern)].map((match) => Number((match[1] ?? match[2]).replaceAll(',', '')))
 }
 
 // A raise with no reason this load has: the reply names a figure above the
@@ -299,7 +323,7 @@ export function unsupportedRateReasons(reply, { posting, truck = null, now = new
 //   theirs   figures the dispatcher named; one the reply refuses ("I can't
 //            do $5,475") is not an offer
 //   earlier  figures the broker itself already said in this thread
-const REFUSES_FIGURE = /\b(?:can'?t|cannot|won'?t|not|no|high|steep|too (?:much|high|steep))\b/i
+const REFUSES_FIGURE = /\b(?:can'?t|cannot|won'?t|not|no|high|steep|too (?:much|high|steep)|beyond|more than)\b/i
 // "no problem" is a yes, not a refusal.
 const NO_OBJECTION = /\b(?:no (?:problem|worries|issue)|not a problem)\b/gi
 // Not a thousands comma or a decimal point: "$2,600" is one figure.
@@ -333,5 +357,5 @@ export function raiseWithoutReason(reply, { posting, truck = null, now = new Dat
 
 // What the broker says when it moved with no reason to: the posted rate stays.
 export function holdRateLine(posting) {
-  return `$${posting.rateUsd.toLocaleString('en-US')} all-in is where this one stays.`
+  return `${quoteText(posting)} is where this one stays.`
 }

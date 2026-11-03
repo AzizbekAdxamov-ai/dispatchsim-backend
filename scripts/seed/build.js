@@ -658,6 +658,7 @@ const POSTING_COLUMNS = [
   'origin_city', 'origin_state', 'destination_city', 'destination_state',
   'broker', 'commodity', 'rate_usd', 'distance_mi', 'weight_lbs',
   'equipment_type', 'equipment_length_ft', 'posted_at', 'expires_at', 'pickup_at', 'delivery_at', 'status',
+  'rate_hidden', 'rate_basis', 'fuel_surcharge_usd',
 ]
 
 const TRUCK_LISTING_COLUMNS = [

@@ -4,6 +4,7 @@
 // download builds without a server.
 import { termsForDaysToPay } from '../../constants/paymentTerms.js'
 import { addressLine as carrierAddressLine } from '../carrier/carrier.repository.js'
+import { paperQuote } from './rateQuote.js'
 
 export function rateConInput(data, carrier) {
   return {
@@ -14,6 +15,7 @@ export function rateConInput(data, carrier) {
     conversation: {
       id: data.id,
       agreedRateUsd: data.rateConRateUsd ?? data.agreedRateUsd,
+      ...paperQuote(data),
       updatedAt: data.updatedAt,
     },
     posting: {

@@ -202,7 +202,8 @@ test('the driver answers first and stays brief while allowing a fitting personal
 test('the driver never promises to look or get back, and says plainly when she has no load', () => {
   const p = promptFor(null)
   assert.match(p, /never say "let me look", "let me check", "I will get back to you",\s+"give me a sec"/)
-  assert.match(p, /If you have no load, say so plainly\./)
+  assert.match(p, /If asked about your assigned work and you have no load, say so plainly/)
+  assert.match(p, /personal conversation does not call for a work-status announcement/)
 })
 
 // Kills: the exactness rule demanding machine formats again.
