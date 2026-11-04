@@ -566,3 +566,16 @@ test('ED21 flags a brush-off', () => {
   assert.deepEqual(d('ED21').expect({ driver: {} })('No idea, boss.'), ['brushes off'])
   assert.deepEqual(d('ED21').expect({ driver: {} })('All good, thanks for asking. Got a load for me?'), [])
 })
+
+// Kills: EB23 check threw "saysBooked is not defined" and aborted the whole run (2026-11-04)
+test('EB23 runs: no booking claim passes, a claim is flagged', () => {
+  const check = b('EB23').expect()
+  assert.deepEqual(check("Great, what's your MC?"), [])
+  assert.ok(check("You're booked.").includes('claims booked before MC'))
+})
+
+// Kills: EB25/EB26 asked of the model on an open thread, where the policy never applies
+test('the cancellation and wait cases run on an agreed thread', () => {
+  assert.equal(b('EB25').status, 'agreed')
+  assert.equal(b('EB26').status, 'agreed')
+})

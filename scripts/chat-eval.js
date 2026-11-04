@@ -46,7 +46,7 @@ import { chatTextRecorded, usedToday, budgetRefusal } from '../src/modules/chat/
 import { dailyBudgetFor, dailyTokenStatus } from '../src/constants/chatBudget.js'
 import { DAILY_TOKENS_SQL } from '../src/modules/chat/chatBudget.sql.js'
 import { parseArm, applyArm, armConfig, reasoningEffortOf, armRecordFields } from './evalArm.js'
-import { attemptsLine, attemptFields, runTokenSummary, tokenPlanWarning, parseGap, parseIdList, makeRequestPacer, DEFAULT_REPLY_TOKENS } from './evalAttempts.js'
+import { abortReason, attemptsLine, attemptFields, runTokenSummary, tokenPlanWarning, parseGap, parseIdList, makeRequestPacer, DEFAULT_REPLY_TOKENS } from './evalAttempts.js'
 import appConfig from '../src/config.js'
 import { marketFacts } from '../src/constants/marketRates.js'
 import { relativeDay, clockDateTime } from '../src/constants/appClock.js'
@@ -69,6 +69,7 @@ import { truckFacts } from '../src/modules/brokerChat/truckTalk.js'
 import { bookingFacts } from '../src/modules/brokerChat/bookingTalk.js'
 import { stripSpeakerLabel } from '../src/lib/speakerLabel.js'
 import { brokerEvalContext } from './brokerEvalContext.js'
+import { cancellationDecision } from '../src/modules/brokerChat/blockPolicy.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const args = process.argv.slice(2)
@@ -175,7 +176,12 @@ async function ask(config, messages, side, cause) {
 // One case's answer. Raw: the model's first reply, as before. Service: the
 // live service's path (serviceReply.js) with the shared checks; the requests
 // of both tries are merged into one attempts list.
-async function answer({ config, side, messages, systemPrompt, clean, problemOf, retryPrompt, fallback }) {
+// `fixed`: a line the server itself answers with (its cancellation policy), so
+// no request is sent -- as in the live service.
+async function answer({ config, side, messages, systemPrompt, clean, problemOf, retryPrompt, fallback, fixed = null }) {
+  if (fixed) {
+    return { reply: fixed, model: 'server-policy', attempts: [], outcome: { mode: 'server-policy', rawReply: fixed, regeneratedBecause: null, fellBack: false, stillFailing: null } }
+  }
   if (!service) {
     const r = await ask(config, messages(systemPrompt), side)
     return { ...r, outcome: { mode: 'raw', rawReply: r.reply, regeneratedBecause: null, fellBack: false, stillFailing: null } }
@@ -274,8 +280,12 @@ async function brokerRun(carrier) {
     // One clock for the prompt and the truck check, as in the live service.
     const now = new Date()
     const { systemPrompt, history, negotiation, checkFacts } = brokerEvalContext({ posting, carrier, text: line, now })
+    // A case that fixes the thread status (EB25/EB26 on an agreed load) meets
+    // the server's cancellation policy first, exactly as in the live service:
+    // the model is never called for those turns.
+    const policy = c.status ? cancellationDecision({ status: c.status, text: line }) : null
     const { reply, model, attempts, outcome } = await answer({
-      config, side: 'broker', systemPrompt,
+      config, side: 'broker', systemPrompt, fixed: policy?.line ?? null,
       messages: (sys) => bp.buildMessages({ systemPrompt: sys, history, newMessage: line, negotiation }),
       clean: (t) => stripSpeakerLabel(t, posting.contactName),
       problemOf: (r) => brokerReplyProblem(r, checkFacts),
@@ -416,7 +426,7 @@ try {
   // The request error from ask() is already sanitized. A database error
   // might contain query data, so only state the fact of the failed run.
   aborted = err
-  const reason = err.safeForConsole ? ` ${err.message}` : ''
+  const reason = ` ${abortReason(err)}`
   console.error(`Chat evaluation aborted after ${requests} provider request(s); ${rows.length} case(s) completed.${reason}`)
 } finally {
   if (rows.length > 0) {

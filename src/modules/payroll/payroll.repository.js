@@ -16,8 +16,10 @@ export async function createSettlement(client, {
   return result.rows[0] ?? null
 }
 
-export async function claimDueSettlements(client, limit = 25) {
-  const result = await client.query(SQL.CLAIM_DUE_SETTLEMENTS_SQL, [limit])
+// driverId null = everyone who is due; a string = only that driver, so a
+// finance user can pay one person without paying the whole company.
+export async function claimDueSettlements(client, limit = 25, driverId = null) {
+  const result = await client.query(SQL.CLAIM_DUE_SETTLEMENTS_SQL, [limit, driverId])
   return result.rows
 }
 

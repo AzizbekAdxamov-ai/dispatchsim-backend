@@ -45,14 +45,29 @@ export function makeFakeBrokerRepo({
     id: FAKE_IDS.conversation, postingId: posting.id, userId,
     agreedRateUsd: null, rateConRateUsd: null, status: 'open',
     negotiationStage: 'negotiating', negotiationRevision: 0, brokerOfferUsd: null,
-    recipientEmail: null, ratePushCount: 0, bestCounterUsed: false,
+    recipientEmail: null, ratePushCount: 0, bestCounterUsed: false, pendingCloseUsd: null,
     createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
   }
+  const blocks = []
   const messages = lines.map((content) => ({ id: `m${++seq}`, role: 'dispatcher', content, kind: 'text' }))
   // What a caller sees, like the real CONVERSATION_COLUMNS: no rate con rate.
   const publicRow = () => {
     const { rateConRateUsd, rateConBasis, rateConFuelSurchargeUsd, ...rest } = conversation
     return { ...rest }
+  }
+
+  const exchange = (text, line) => {
+    const dispatcher = { id: `m${++seq}`, role: 'dispatcher', content: text, kind: 'text', deliverAt: new Date().toISOString() }
+    messages.push(dispatcher, { id: `m${++seq}`, role: 'broker', content: line, kind: 'text', deliverAt: new Date().toISOString() })
+    return { ...dispatcher }
+  }
+  const withdrawAndExchange = (conversationId, text, line, voidReason) => {
+    Object.assign(conversation, {
+      agreedRateUsd: null, rateConRateUsd: null, rateConBasis: null, rateConFuelSurchargeUsd: null,
+      recipientEmail: null, pendingCloseUsd: null, negotiationStage: 'held', status: 'open',
+    })
+    for (const m of messages) if (m.kind === 'rate_con' && !m.voidedAt) Object.assign(m, { voidedAt: new Date().toISOString(), voidReason })
+    return exchange(text, line)
   }
 
   const repo = {
@@ -80,6 +95,7 @@ export function makeFakeBrokerRepo({
         await repo.clearRateCon()
         conversation.agreedRateUsd = null
         conversation.recipientEmail = null
+        conversation.pendingCloseUsd = null
         conversation.status = 'open'
         conversation.negotiationStage = intent.kind === 'hold' ? 'held' : 'negotiating'
       }
@@ -92,7 +108,8 @@ export function makeFakeBrokerRepo({
       if (decision.invalidatePaper) await repo.clearRateCon()
       Object.assign(conversation, { brokerOfferUsd: s.offer, agreedRateUsd: s.agreed,
         status: s.agreed === null ? 'open' : 'agreed', negotiationStage: s.stage,
-        recipientEmail: s.recipient, ratePushCount: s.pushes, bestCounterUsed: s.bestCounterUsed })
+        recipientEmail: s.recipient, ratePushCount: s.pushes, bestCounterUsed: s.bestCounterUsed,
+        pendingCloseUsd: s.pendingClose ?? null })
       await repo.addMessage(conversation.id, 'broker', reply, { delaySec })
       if (decision.issuePaper && !messages.some((m) => m.kind === 'rate_con')) {
         conversation.rateConRateUsd = paperRate
@@ -128,7 +145,24 @@ export function makeFakeBrokerRepo({
       return { ...row }
     },
     async rateConDelivered() {
-      return messages.some((m) => m.kind === 'rate_con' && (!m.deliverAt || new Date(m.deliverAt) <= new Date()))
+      return messages.some((m) => m.kind === 'rate_con' && !m.voidedAt && (!m.deliverAt || new Date(m.deliverAt) <= new Date()))
+    },
+    // Cancellation policy (blockPolicy.js), kept to what the SQL does: the
+    // agreement is withdrawn, the paper is voided and kept, the dispatcher's
+    // line is stored before the broker's answer.
+    async isBrokerBlocked({ brokerId = null, brokerMc = null } = {}) {
+      return blocks.some((b) => (brokerId && b.brokerId === brokerId) || (brokerMc && b.brokerMc === brokerMc))
+    },
+    async cancelAndBlock({ conversationId, text, line, brokerId = null, brokerMc = null, brokerContact = null }) {
+      const dispatcher = withdrawAndExchange(conversationId, text, line, 'carrier_cancelled')
+      blocks.push({ id: `b${blocks.length + 1}`, brokerId, brokerMc, brokerContact, conversationId })
+      return { ...dispatcher, blockId: blocks[blocks.length - 1].id }
+    },
+    async releaseForNoEta({ conversationId, text, line }) {
+      return withdrawAndExchange(conversationId, text, line, 'wait_no_eta')
+    },
+    async addExchange({ conversationId, text, line }) {
+      return exchange(text, line)
     },
     async markBooked(id, uid) {
       if (id !== conversation.id || uid !== conversation.userId) return null
@@ -162,7 +196,7 @@ export function makeFakeBrokerRepo({
   return {
     repo,
     // Test-only handles on the stored state.
-    state: { conversation, messages },
+    state: { conversation, messages, blocks },
     deliverAll() { for (const message of messages) message.deliverAt = new Date(0).toISOString() },
     // Put the thread where a booking left it, without going through the gate
     // (for testing the second gate at accept time).

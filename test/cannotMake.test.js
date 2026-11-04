@@ -132,7 +132,7 @@ test('the shared reply checks report banned word, leak, length, then the unreach
 // (the model is told what was wrong with its last reply, then to try again).
 test('the retry prompts name the problem and keep the system prompt first', () => {
   const broker = brokerRetryPrompt('SYSTEM', { why: 'used a forbidden word', hint: '' })
-  assert.equal(broker, 'SYSTEM\n\nYour last reply used a forbidden word. Reply again as the broker, in character, one to three sentences only.')
+  assert.equal(broker, 'SYSTEM\n\nYour last reply used a forbidden word. Reply again as the broker, in character, one or two sentences only.')
   const driver = driverRetryPrompt('SYSTEM', { why: 'x', hint: ' Do y.' })
   assert.equal(driver, 'SYSTEM\n\nYour last reply x. Do y. Reply again as the driver, in character, one to three sentences only.')
 })

@@ -275,8 +275,10 @@ test('hold and changed price invalidate a paper; a repeated email does not creat
 
 test('first push holds, grounded later push moves partway, huge requests never become agreement', () => {
   const first = step('Need $1800 for the heavy weight.')
-  // Kills: first pressure must apply STEP_1_SHARE from the mandatory ladder.
-  assert.equal(first.state.offer, 1646)
+  // Kills: a verified reason starting at the posted rate (T2 #208: reasoned 2,578 < unreasoned 2,603).
+  // The unreasoned first push earns the first rung (1646); the reasoned one the second rung on top of it.
+  assert.equal(step('Need $1800.').state.offer, 1646)
+  assert.equal(first.state.offer, 1696)
   assert.equal(first.state.agreed, null)
   const second = step('Need $1800 for the heavy weight.', saved(first))
   assert.ok(second.state.offer > 1646)

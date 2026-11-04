@@ -122,6 +122,14 @@ export function isGroq(baseUrl) {
 // and stops, and is charged for three sentences.
 export const CHAT_REPLY_TOKENS = 220
 
+// How long one chat request may take before it is abandoned. Measured live
+// on 2026-11-04: a single request took 2.5 s at most and 1.2 s on average, so
+// 15 s is about 6x the worst seen. A turn can send up to 4 requests (reply,
+// regeneration, fallback model, second try); at 15 s each the worst turn is
+// about 60 s, the longest a person is meant to wait on a desk reply. Chat
+// only: the seed generator passes no timeout (null keeps its old behaviour).
+export const CHAT_REQUEST_TIMEOUT_MS = 15000
+
 // How much thinking a reply is allowed to cost, as a multiple of the reply
 // itself. Stated as a ratio rather than a total so it means something:
 // "a model may think three times as long as it speaks". A model that needs

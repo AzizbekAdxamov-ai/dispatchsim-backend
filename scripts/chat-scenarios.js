@@ -44,7 +44,7 @@ import { pool, query } from '../src/db/pool.js'
 import { chatConfigFor } from '../src/modules/chat/chatProvider.js'
 import { chatText } from './seed/aiClient.js'
 import { sleep } from './seed/config.js'
-import { parseGap, parseIdList, makeRequestPacer, attemptsLine } from './evalAttempts.js'
+import { abortReason, parseGap, parseIdList, makeRequestPacer, attemptsLine } from './evalAttempts.js'
 import { promptVersionOf } from '../src/lib/promptVersion.js'
 import { chatTextRecorded, usedToday, budgetRefusal } from '../src/modules/chat/scriptRequests.js'
 import { tooLongForChat, dailyBudgetFor, groqReasoningParams } from '../src/constants/chatBudget.js'
@@ -53,9 +53,12 @@ import { asciiPunct } from '../src/lib/plainText.js'
 import {
   brokerReply, driverReply, correctCount, BROKER_EXPECT, DRIVER_EXPECT, summarize,
   s9Ask, s9Email, s9Mc, s9WrongMc, afterTomorrowSixCentral, bookedBeforeAskingMc,
+  brokerCancellationFindings, brokerWaitNoEtaFindings,
 } from './scenarioChecks.js'
 import { findCity } from './seed/cities.js'
-import { bookingFacts } from '../src/modules/brokerChat/bookingTalk.js'
+import { brokerTurnContext, newConversation, conversationAfterTurn, conversationAfterWithdrawal } from './brokerEvalContext.js'
+import { cancellationDecision } from '../src/modules/brokerChat/blockPolicy.js'
+import { PROMPT_VERSION as brokerPromptVersion } from '../src/modules/brokerChat/brokerChat.service.js'
 import { marketFacts } from '../src/constants/marketRates.js'
 import { relativeDay, APP_TIMEZONE } from '../src/constants/appClock.js'
 import { talkFacts } from '../src/constants/freightTerms.js'
@@ -69,7 +72,6 @@ import { getCarrier } from '../src/modules/carrier/carrier.repository.js'
 import { serviceReply } from './serviceReply.js'
 import { brokerReplyProblem, brokerRetryPrompt } from '../src/modules/brokerChat/replyProblem.js'
 import { driverReplyProblem, driverRetryPrompt } from '../src/modules/driverChat/replyProblem.js'
-import { truckFacts } from '../src/modules/brokerChat/truckTalk.js'
 import { offerFacts } from '../src/modules/driverChat/offerTalk.js'
 import { stripSpeakerLabel } from '../src/lib/speakerLabel.js'
 
@@ -104,7 +106,9 @@ const results = []
 // what --scenario accepts.
 const TURNS = {
   S1: 3, S2: 3, S3: 2, S4: 1, S5: 1, S6: 1, S7: 1, S8: 1,
-  S9a: 6, S9b: 6, S9c: 5, S10: 3, S11: 4,
+  // S10/S11: the cancel and the wait are answered by the server (no request), so
+  // only the five lines up to the booking call reach the model.
+  S9a: 6, S9b: 6, S9c: 5, S10: 5, S11: 5,
   G1: 2, G2: 2, G3: 3,
 }
 const sideOf = (key) => (key.startsWith('G') ? 'driver' : 'broker')
@@ -131,7 +135,6 @@ for (const key of chosen) {
 const only = !chosen.some((k) => sideOf(k) === 'broker') ? 'driver' : !chosen.some((k) => sideOf(k) === 'driver') ? 'broker' : 'both'
 const wanted = (key) => chosen.includes(key)
 const reasoningEffort = (config) => groqReasoningParams(config.baseUrl, config.model, config.chat).reasoning_effort ?? 'n/a'
-const brokerPromptVersion = promptVersionOf(fileURLToPath(new URL('../src/modules/brokerChat/brokerChat.prompt.js', import.meta.url)))
 const driverPromptVersion = promptVersionOf(fileURLToPath(new URL('../src/modules/driverChat/driverChat.prompt.js', import.meta.url)))
 
 function flags(text, prompt, findings = []) {
@@ -255,35 +258,46 @@ async function brokerConversation({ key, title, posting, lines }, carrier, confi
   }) ?? {}
   const history = []
   let previous = null
+  // The thread lives in memory and follows the live service: the server's
+  // cancellation policy first, then the same financial decision, context and
+  // reply checks (brokerEvalContext.js). Nothing is written to the database.
+  let conversation = newConversation()
+  let paperDelivered = false
+  let blocked = false
+  let paperInvalidated = false
   for (const [turn, raw] of lines.entries()) {
     const text = typeof raw === 'function' ? raw(posting, m, { previous, carrier }) : raw
-    const dispatcherSoFar = [...history.filter((h) => h.role === 'dispatcher').map((h) => h.content), text]
+    const brokerSaid = history.filter((h) => h.role === 'broker').map((h) => h.content)
+    const policy = cancellationDecision({ status: conversation.status, text, brokerSaid, thread: history })
+    if (policy) {
+      // Decided by the server, no model request (the live service does the same).
+      say(`- **D:** \`${text}\``)
+      const reply = policy.line
+      if (policy.action !== 'ask_eta') {
+        paperInvalidated = paperInvalidated || paperDelivered
+        paperDelivered = false
+        conversation = conversationAfterWithdrawal(conversation)
+      }
+      if (policy.action === 'block') blocked = true
+      const findings = [...brokerReply(reply, previous, text), ...(expect[turn]?.(asciiPunct(reply)) ?? [])]
+      results.push({ scenario: key, run, findings })
+      say(`- **B (server policy: ${policy.action}):** ${reply}${flags(reply, bp, findings)}`)
+      history.push({ role: 'dispatcher', content: text, kind: 'text' }, { role: 'broker', content: reply, kind: 'text' })
+      previous = reply
+      continue
+    }
     // One clock for the prompt and the truck check, as in the live service.
     const now = new Date()
-    const truck = truckFacts({ texts: dispatcherSoFar, posting, now })
-    // Who is calling and what is missing, as the live service computes it.
-    const booking = bookingFacts({ texts: dispatcherSoFar, carrier, posting, now })
-    const brokerSaid = history.filter((h) => h.role === 'broker').map((h) => h.content)
-    const systemPrompt = bp.buildBrokerSystemPrompt({
-      carrier,
-      broker: { name: posting.name, contactName: posting.contactName, persona: posting.persona },
-      posting,
-      now,
-      talk: talkFacts(dispatcherSoFar, posting.equipmentType),
-      said: dispatcherSoFar,
-      booking,
-      brokerSaid,
-    })
+    const thread = [...history, { role: 'dispatcher', content: text, kind: 'text' }]
+    const ctx = brokerTurnContext({ posting, carrier, thread, conversation, text, now, paperDelivered })
     say(`- **D:** \`${text}\``)
     const out = await answer({
-      config, side: 'broker', systemPrompt,
-      messages: (sys) => bp.buildMessages({ systemPrompt: sys, history, newMessage: text }),
+      config, side: 'broker', systemPrompt: ctx.systemPrompt,
+      messages: (sys) => bp.buildMessages({ systemPrompt: sys, history: ctx.history, newMessage: text, negotiation: ctx.negotiation }),
       clean: (t) => stripSpeakerLabel(t, posting.contactName),
-      problemOf: (r) => brokerReplyProblem(r, {
-        truck, booking, posting, now, text, said: dispatcherSoFar, brokerSaid,
-      }),
+      problemOf: (r) => brokerReplyProblem(r, ctx.checkFacts),
       retryPrompt: brokerRetryPrompt,
-      fallback: bp.FALLBACK_REPLY,
+      fallback: ctx.negotiation.line ?? bp.FALLBACK_REPLY,
     })
     const reply = out.reply
     const findings = reply.startsWith('(FAILED')
@@ -291,8 +305,20 @@ async function brokerConversation({ key, title, posting, lines }, carrier, confi
       : [...brokerReply(reply, previous, text), ...(expect[turn]?.(asciiPunct(reply)) ?? [])]
     results.push({ scenario: key, run, findings })
     sayReply('B', out, bp, findings, config, brokerPromptVersion)
-    history.push({ role: 'dispatcher', content: text }, { role: 'broker', content: reply })
+    // completeChatTurn, in memory; the paper arrives as soon as it is issued.
+    conversation = conversationAfterTurn(conversation, ctx.negotiation)
+    if (ctx.negotiation.invalidatePaper) paperDelivered = false
+    if (ctx.negotiation.issuePaper) paperDelivered = true
+    history.push({ role: 'dispatcher', content: text, kind: 'text' }, { role: 'broker', content: reply, kind: 'text' })
     previous = reply
+  }
+  const brokerReplies = history.filter((h) => h.role === 'broker').map((h) => h.content)
+  // The two policy scenarios are judged on their outcome (scenarioChecks.js).
+  if (key === 'S10') {
+    results.push({ scenario: key, run, findings: brokerCancellationFindings({ replies: brokerReplies, blocked, paperInvalidated }) })
+  }
+  if (key === 'S11') {
+    results.push({ scenario: key, run, findings: brokerWaitNoEtaFindings({ replies: brokerReplies, blocked }) })
   }
   // Marcus's read-back is once per chat at most (062): more is the tic again.
   if (correctCount(history.filter((h) => h.role === 'broker').map((h) => h.content)) > 1) {
@@ -479,7 +505,7 @@ try {
   if (only !== 'broker') await runDriver(carrier)
 } catch (err) {
   aborted = err
-  say(`Run stopped: ${err.safeForConsole ? err.message : 'run error; completed turns preserved.'}`)
+  say(`Run stopped: ${abortReason(err)}; completed turns preserved.`)
 } finally {
   const { lines, clean } = summarize(results, times)
   if (aborted) say('_Aborted run: completed turns only._')

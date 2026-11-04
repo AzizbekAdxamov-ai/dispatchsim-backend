@@ -135,3 +135,15 @@ export function makeRequestPacer({ gapSec, sleep, now = Date.now }) {
     last = now()
   }
 }
+
+// Why a run stopped, for the console and the report. A message already
+// cleaned for the console is shown as is; a database error shows only its
+// code (its message can carry query data); anything else shows its name and
+// message, so a bug in the script itself ("ReferenceError: saysBooked is not
+// defined", 2026-11-04) is not hidden behind a generic line.
+const PG_CODE = /^[0-9A-Z]{5}$/
+export function abortReason(err) {
+  if (err?.safeForConsole) return err.message
+  if (err?.severity || (typeof err?.code === 'string' && PG_CODE.test(err.code))) return `database error ${err.code ?? err.severity}`
+  return `${err?.name ?? 'Error'}: ${err?.message ?? String(err)}`
+}

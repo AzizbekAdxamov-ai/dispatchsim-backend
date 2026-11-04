@@ -26,6 +26,7 @@ import { quoteText } from './rateQuote.js'
 import { proposesRebroker, agreesRebroker, refusesRebroker, ONE_CARRIER_RULE, ONE_CARRIER_REPLY } from './carrierPolicy.js'
 import { inventsEnvironment, NO_ENVIRONMENT_LINE } from '../../lib/environmentClaims.js'
 import { stopPayInvented, NO_STOP_PAY_LINE } from './termsTalk.js'
+import { asciiPunct } from '../../lib/plainText.js'
 
 // The dispatcher's own line gives an MC ("MC 999999"). Answering a wrong one
 // with "what's your correct MC?" is a reply to what they said, not an
@@ -35,6 +36,14 @@ export const WRONG_MC_LINE = "That MC isn't showing up on our end. What's your c
 const MARKDOWN = /\*\*|__|`/
 const HELP_DESK_CLOSING = /please let me know if you have any other concerns|thank you,?\s*mc\b/i
 const QUESTION_MARK = /\?/g
+// Call-centre filler a person on a freight desk does not say: apologising for
+// a short wait (live #202 "Sorry for the wait", #203 "Sorry for the hold-up"),
+// "How can I help you?" (#198), "Please let us know ..." (EB26). Checked on
+// ASCII-folded text because the model writes U+2011 and curly quotes.
+export const HELP_DESK_TONE = /\b(?:sorry|apologi[sz]e)\s+(?:for|about)\s+(?:the\s+)?(?:delay|wait|hold[- ]?up|late reply|slow reply)\b|\bhow (?:can|may) i (?:help|assist) you\b|\bplease let us know\b/i
+// A reply sentence repeating the carrier's own words back needs at least this
+// many words to count as an echo: "Reloads are weak." (live #209) is three.
+export const ECHO_MIN_WORDS = 3
 
 // "...does not match the carrier MC listed on our rate confirmation" before
 // any paper exists (live #109): a document the broker has not written yet.
@@ -53,6 +62,21 @@ export function asksCarrierForStop(reply) {
 }
 function withoutStopQuestion(reply) {
   return String(reply ?? '').split(/(?<=[.!?])\s+/).filter((part) => !ASKS_STOP.test(part)).join(' ').trim()
+}
+
+function withoutSentences(reply, drop) {
+  return String(reply ?? '').split(/(?<=[.!?])\s+/).filter((part) => !drop(part)).join(' ').trim()
+}
+
+// True when a sentence of the reply (not a question) is made only of words
+// the carrier already typed: the broker is repeating their claim as fact.
+export function echoesCarrierClaim(reply, text) {
+  const said = new Set(asciiPunct(text).toLowerCase().match(/[a-z']+/g) ?? [])
+  return String(reply ?? '').split(/(?<=[.!?])\s+/).some((part) => {
+    if (part.includes('?')) return false
+    const words = asciiPunct(part).toLowerCase().match(/[a-z']+/g) ?? []
+    return words.length >= ECHO_MIN_WORDS && words.every((word) => said.has(word))
+  })
 }
 
 function answersWrongMcLine(text, booking) {
@@ -86,6 +110,15 @@ export function brokerReplyProblem(reply, {
   if (HELP_DESK_CLOSING.test(String(reply ?? ''))) return {
     why: 'used a canned help-desk closing', hint: 'Keep the broker reply to one or two natural desk sentences.', unusable: true,
     safeReply: negotiation?.line ?? discussionReply(text ?? '', posting ?? {}, negotiation),
+  }
+  if (HELP_DESK_TONE.test(asciiPunct(reply))) {
+    const kept = withoutSentences(reply, (part) => HELP_DESK_TONE.test(asciiPunct(part)))
+    return {
+      why: 'used help-desk filler',
+      hint: ' No apologies for delays, no "How can I help you?", no "Please let us know". One or two plain desk sentences.',
+      unusable: true,
+      safeReply: kept || (negotiation?.line ?? discussionReply(text ?? '', posting ?? {}, negotiation)),
+    }
   }
   if ((String(reply ?? '').match(QUESTION_MARK) ?? []).length > 1) return {
     why: 'asked more than one question in one reply', hint: 'Ask only the next single missing question.', unusable: true,
@@ -139,6 +172,11 @@ export function brokerReplyProblem(reply, {
       why: rateProblem, hint,
       unusable: true, safeReply: negotiation.line ?? `My offer is ${quoteText(negotiation.rateQuote ?? {}, negotiation.state.offer)}.`,
     }
+  }
+  if (negotiation?.unverifiedReason && echoesCarrierClaim(reply, text ?? '')) return {
+    why: "repeated the carrier's unverified claim as fact",
+    hint: ' The reason they gave is not true of this load: do not repeat or agree with it. Answer their ask with the current offer.',
+    unusable: true, safeReply: negotiation.line ?? undefined,
   }
   const paperProblem = paperClaimProblem(reply, paper)
   if (paperProblem) {
@@ -283,5 +321,5 @@ export function brokerReplyProblem(reply, {
 export function brokerRetryPrompt(systemPrompt, problem) {
   return `${systemPrompt}
 
-Your last reply ${problem.why}.${problem.hint} Reply again as the broker, in character, one to three sentences only.`
+Your last reply ${problem.why}.${problem.hint} Reply again as the broker, in character, one or two sentences only.`
 }

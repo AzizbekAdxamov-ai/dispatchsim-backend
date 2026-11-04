@@ -950,3 +950,60 @@ test('config.js stops on a bad CHAT_DRIVER_REASONING_EFFORT like the shared one'
   assert.match(src, /CHAT_DRIVER_REASONING_EFFORT must be 'low', 'medium' or 'high'/)
   assert.match(src, /\['low', 'medium', 'high'\]\.includes\(rawDriverEffort\)/)
 })
+
+// Kills: no AI timeout (a stalled provider held a dispatcher's request open) -- 2026-11-04 live measure: 2.5 s max per request
+test('every chat request carries a timeout signal; the seed path has none', async () => {
+  const { chatText } = await import('../scripts/seed/aiClient.js')
+  const { CHAT_REQUEST_TIMEOUT_MS } = await import('../src/constants/chatBudget.js')
+  assert.equal(CHAT_REQUEST_TIMEOUT_MS, 15000)
+  const signals = []
+  const fake = { fetch: async (_url, opts) => { signals.push(opts.signal); return { ok: true, json: async () => GOOD } } }
+  await withFetch(fake, () => chatText({ messages: [], config: { baseUrl: OPENROUTER, apiKey: 'x', model: 'm' } }))
+  assert.ok(signals[0] instanceof AbortSignal)
+  // An explicit null keeps the pre-timeout behaviour for callers that want it.
+  await withFetch(fake, () => chatText({ messages: [], timeoutMs: null, config: { baseUrl: OPENROUTER, apiKey: 'x', model: 'm' } }))
+  assert.equal(signals[1], undefined)
+})
+
+// Kills: a primary that times out ending the turn instead of reaching the backup model
+test('a primary that times out hands the turn to the backup model', async () => {
+  const { chatText } = await import('../scripts/seed/aiClient.js')
+  const models = []
+  const answered = []
+  let sent = 0
+  const fake = { fetch: async (_url, opts) => {
+    models.push(JSON.parse(opts.body).model)
+    if (models.length === 1) throw new DOMException('The operation was aborted due to timeout', 'TimeoutError')
+    return { ok: true, json: async () => GOOD }
+  } }
+  const reply = await withFetch(fake, () => chatText({
+    messages: [], config: { baseUrl: OPENROUTER, apiKey: 'x', model: 'primary', fallbackModel: 'backup' },
+    onRequest: () => { sent += 1 }, onModel: (model) => { answered.push(model) },
+  }))
+  assert.equal(reply, 'copy that')
+  assert.deepEqual(models, ['primary', 'backup'])
+  assert.equal(sent, 2)
+  assert.deepEqual(answered, ['backup'])
+})
+
+// Kills: a body read that stalls after the headers escaping as an unhandled error
+test('a body read that times out is a timeout, flagged for the caller', async () => {
+  const { chatText } = await import('../scripts/seed/aiClient.js')
+  const fake = { fetch: async () => ({ ok: true, json: async () => { throw new DOMException('timeout', 'TimeoutError') } }) }
+  await assert.rejects(
+    withFetch(fake, () => chatText({ messages: [], config: { baseUrl: OPENROUTER, apiKey: 'x', model: 'only', fallbackModel: 'spare' } })),
+    (err) => err.timedOut === true && /timed out/.test(err.message) && !/DOMException/.test(err.message),
+  )
+})
+
+// Kills: a timeout on a single model retried MAX_ATTEMPTS times (a dispatcher waiting minutes)
+test('a timeout with no backup model is attempted once, not retried', async () => {
+  const { chatText } = await import('../scripts/seed/aiClient.js')
+  let sent = 0
+  const fake = { fetch: async () => { sent += 1; throw new DOMException('timeout', 'TimeoutError') } }
+  await assert.rejects(
+    withFetch(fake, () => chatText({ messages: [], config: { baseUrl: OPENROUTER, apiKey: 'x', model: 'only' } })),
+    (err) => err.timedOut === true,
+  )
+  assert.equal(sent, 1)
+})

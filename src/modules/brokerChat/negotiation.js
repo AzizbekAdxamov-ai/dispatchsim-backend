@@ -15,7 +15,7 @@ const ACCEPT = /^(?:(?:ok(?:ay)?|yes|great|thanks)[,!. ]+)*(?:i(?:'ll| will)|we(
 const NATURAL_ACCEPT = /^(?:ok(?:ay)?\s+)?(?:let'?s book it|let'?s do it|the rate works(?:\s+we can book it)?|works for me|that works|it'?s fine|that'?s fine|deal|send (?:the )?(?:rc|rate con)|confirmed|sounds good(?:,?\s+book it)?|we(?:'ll| will) take it|i(?:'ll| will) take it)[.!]?$/i
 const HOLD = /\b(?:hold (?:off|up)|on hold|not ready|don't (?:book|send|issue|confirm)|do not (?:book|send|issue|confirm)|not (?:book|confirm|accept)(?:ing|ed)? yet|before (?:we|i) (?:book|confirm)|let me (?:check|confirm|verify)|gotta check (?:with )?(?:my|our|the) driver|wait for (?:my|our) confirmation|cancel (?:it|this|the load)|release (?:it|this|the load))\b/i
 const WALK = /\b(?:i(?:'ll| will) pass|we(?:'ll| will) pass|pass on (?:it|this)|walk away|find another (?:truck|carrier))\b/i
-const MORE = /\b(?:do better|need more|pay more|(?:to{1,2}|kinda) low|too cheap|more money|bump (?:it|the rate)|add (?:a )?(?:little|litle)(?: bit)?|what(?:'s| is) your best)\b/i
+const MORE = /\b(?:do better|need more|pay more|(?:to{1,2}|kinda) low|too cheap|more money|bump (?:it|the rate)|add (?:a )?(?:little|litle)(?: bit)?|what(?:'s| is) your best|work (?:on|with me on) (?:the |ur |your )?rate|(?:come on,?\s+)?(?:a\s+)?(?:little|lil|litle)(?:\s+bit)?\s+more(?=\s*(?:[?.!,]|$|pls\b|please\b|on (?:the |ur |your )?rate\b|money\b)))\b/i
 const QUOTED = /["“][^"”]*["”]|(?<!\w)'[^'\n]{2,}'(?!\w)/g
 const HYPOTHETICAL = /\b(?:if|unless|hypothetically|example|suppose|said|quoted|asks?|asking whether|what if|would you accept)\b/i
 const NEGATIVE = /\b(?:not|never|can't|cannot|won't|don't|didn't|do not|isn't|is not|haven't)\b/i
@@ -40,15 +40,21 @@ const KEY_INTENTS = Object.freeze({
   service: /\b(?:clean truck|reliable driver|strong communication(?: and tracking)?)\b/i,
   market: /\b(?:seeing this lane|market is stronger|limited capacity)\b/i,
   reload: /\b(?:reloads?.*weak|delivery area.*tough.*reloads?)\b/i,
-  deadhead: /\b(?:deadhead|empty run|total mileage including)\b/i,
-  tight_window: /\b(?:appointment times.*tight|fcfs|strict appointment|pickup and delivery appointments)\b/i,
+  deadhead: /\b(?:deadhead|empty run)\b/i,
+  tight_window: /\b(?:appointment times.*tight|strict appointment)\b/i,
   terms: /\b(?:detention|layover|driver assist|lumper|extra stops)\b/i,
   commodity: /\b(?:commodity and weight|linehaul plus fsc|commodity and lbs|commodity.*lbs)\b/i,
+  // Questions ABOUT the load (miles incl. deadhead, FCFS or appointment) --
+  // facts to answer, not a rate push. Live #212/#214 (EB27, EB28) took a
+  // raise from "fcfs or appt?" (2,492 -> 2,667).
+  facts_question: /\b(?:total (?:miles|mileage)(?: including| incl\.?| with| w\/)?(?: the)? (?:deadhead|dh)\b|how (?:many|much) (?:deadhead|dh|empty)\b|fcfs or appt|appt or fcfs|fcfs\s*\?|(?:pickup|pu) and (?:delivery|del) (?:appointments|appts|times)\b|is (?:it|this) fcfs\b)/i,
   weak_push: /\b(?:please add \$?\s*\d+|really need more money|pls add .*?\bneed it)\b/i,
 })
 
 function keyIntent(src) {
   if (KEY_INTENTS.ask_room.test(src)) return { kind: 'ask_room' }
+  const factsQuestion = src.match(KEY_INTENTS.facts_question)
+  if (factsQuestion) return { kind: 'question', topic: /dead|dh|mile|empty/i.test(factsQuestion[0]) ? 'deadhead' : 'appointments' }
   if (KEY_INTENTS.push.test(src)) return { kind: 'push' }
   if (KEY_INTENTS.close_at.test(src)) return { kind: 'close_at' }
   if (KEY_INTENTS.position.test(src)) return { kind: 'push', reason: 'position' }
@@ -245,6 +251,27 @@ export function chatIntent(raw, rateSource = null) {
   return { kind: 'talk' }
 }
 
+// The first ladder rung: STEP_1_SHARE of the room above the posted rate,
+// rounded to $25, never above the ceiling or the carrier's own ask. Used for
+// "what's the best you can do" and for a first push; a first push WITH a
+// reason skips straight to the second rung, which must not land below it
+// (live T2 #208: with a reason 2,578 < 2,603 without).
+export function firstRungOffer(posting, amount = Infinity) {
+  const ceiling = ceilingFor(posting)
+  const room = Math.max(0, ceiling - posting.rateUsd)
+  const allowance = Math.max(25, Math.round(room * STEP_1_SHARE / 25) * 25)
+  return Math.min(ceiling, posting.rateUsd + allowance, amount)
+}
+
+// Carrier reasons the server can check against the load's facts, keyed to
+// the rateReasons() name that would make each one true.
+const CHECKABLE_REASON = Object.freeze({ reload: 'weak-reload', deadhead: 'deadhead', 'tight-window': 'tight-window' })
+
+function unverifiedReasonFor(intent, { posting, truck, now }) {
+  const key = CHECKABLE_REASON[intent.reason]
+  return Boolean(key) && !rateReasons({ posting, truck, now }).includes(key)
+}
+
 const money = (n) => `$${Number(n).toLocaleString('en-US')}`
 // Sharing a truck/driver or asking a price is not a request to book.
 // Use the same intent at the prompt and reply boundary so MC cannot gate haggling.
@@ -266,12 +293,17 @@ export function negotiationState(conversation, posting) {
     recipient: conversation.recipientEmail ?? null,
     pushes: conversation.ratePushCount ?? 0,
     bestCounterUsed: conversation.bestCounterUsed ?? false,
+    // A price the carrier closed at before their MC checked out (live T3
+    // #218-#219): accepted on price, waiting only for the MC.
+    pendingClose: conversation.pendingCloseUsd ?? null,
   }
 }
 
 export function negotiate({ conversation, posting, text, booking, truck, effectiveEmail = null, now = new Date(), offerVisible = false }) {
   const previous = negotiationState(conversation, posting)
   const state = { ...previous }
+  const pending = previous.pendingClose
+  state.pendingClose = null
   const intent = chatIntent(text, posting)
   const quote = (amount) => quoteText(posting, amount)
   let changed = false
@@ -283,7 +315,11 @@ export function negotiate({ conversation, posting, text, booking, truck, effecti
   const clear = () => { state.agreed = null; state.recipient = null; state.stage = 'negotiating'; invalidatePaper = true; changed = true }
   const agree = (amount) => {
     bookingRequested = true
-    if (!verified) { line = ['mismatch', 'unverifiable'].includes(booking?.mc?.verdict) ? 'What is your correct MC?' : "What's your MC?"; return }
+    if (!verified) {
+      line = ['mismatch', 'unverifiable'].includes(booking?.mc?.verdict) ? 'What is your correct MC?' : "What's your MC?"
+      state.pendingClose = amount; state.offer = amount; changed = true
+      return
+    }
     if (truck?.makesIt === false || booking?.trailer?.fits === false) { line = 'We need a truck that can meet the pickup and equipment requirements before confirming.'; return }
     if (state.agreed !== amount || state.stage === 'held') clear()
     state.offer = amount; state.agreed = amount; state.stage = 'awaiting_email'; changed = true
@@ -299,9 +335,7 @@ export function negotiate({ conversation, posting, text, booking, truck, effecti
   } else if (intent.kind === 'ask_room') {
     // Room questions receive the next authorized counter without exposing
     // the ceiling; this is the broker's normal first bargaining step.
-    const room = Math.max(0, ceilingFor(posting) - posting.rateUsd)
-    const next = Math.min(ceilingFor(posting), posting.rateUsd + Math.max(25, Math.round(room * STEP_1_SHARE / 25) * 25))
-    state.offer = Math.max(state.offer, next)
+    state.offer = Math.max(state.offer, firstRungOffer(posting))
     if (state.offer !== previous.offer) changed = true
     line = `I can offer ${quote(state.offer)}. Does that work for you?`
   } else if (['offer', 'accept_amount', 'push'].includes(intent.kind)) {
@@ -331,16 +365,17 @@ export function negotiate({ conversation, posting, text, booking, truck, effecti
         line = `Best I can do is ${quote(state.offer)}, that's my max.`
       } else if (effectivePush === 2) {
         const ceiling = ceilingFor(posting)
-        const step = Math.max(25, Math.round((Math.min(amount, ceiling) - state.offer) * STEP_2_SHARE / 25) * 25)
-        state.offer = Math.min(ceiling, state.offer + step)
+        // A first push with a verified reason jumps to the second rung; it
+        // starts from the first rung so the reasoned counter is never lower
+        // than the unreasoned one.
+        const skippedFirstRung = steps === 2 && state.pushes === 1
+        const base = skippedFirstRung ? Math.max(state.offer, firstRungOffer(posting, amount)) : state.offer
+        const step = Math.max(25, Math.round((Math.min(amount, ceiling) - base) * STEP_2_SHARE / 25) * 25)
+        state.offer = Math.min(ceiling, base + step)
       } else {
         // Ordinary bargaining can earn one small counter, not an endless
         // ladder. Anchor it to the posting so retries never compound it.
-        const room = Math.max(0, ceilingFor(posting) - posting.rateUsd)
-        const share = STEP_1_SHARE
-        const allowance = Math.max(25, Math.round(room * share / 25) * 25)
-        const counter = Math.min(ceilingFor(posting), posting.rateUsd + allowance, amount)
-        state.offer = Math.max(state.offer, counter)
+        state.offer = Math.max(state.offer, firstRungOffer(posting, amount))
       }
       if (state.offer >= ceilingFor(posting)) line = previous.offer >= ceilingFor(posting)
         ? `${quote(state.offer)} is as high as I can go.`
@@ -358,6 +393,13 @@ export function negotiate({ conversation, posting, text, booking, truck, effecti
     state.offer = Math.max(state.offer, ceilingFor(posting))
     line = `Before you go, I can do ${quote(state.offer)}. Would that work?`
   }
+  // A conditional close waits for the MC, not for the price: once the MC
+  // checks out on a non-financial turn, the earlier price is agreed. Any
+  // financial turn already replaced or cleared it (state.pendingClose = null).
+  if (pending !== null && state.agreed === null && ['talk', 'question', 'terms', 'commodity', 'email'].includes(intent.kind)) {
+    if (verified) agree(pending)
+    else state.pendingClose = pending
+  }
   // Sharing an email is authorization only after a handshake; never from profile alone.
   if (state.stage === 'awaiting_email' && ['email', 'accept', 'accept_amount', 'offer'].includes(intent.kind)) {
     const email = intent.emails?.length === 1 ? intent.emails[0] : intent.useOwnEmail ? effectiveEmail : null
@@ -374,6 +416,9 @@ export function negotiate({ conversation, posting, text, booking, truck, effecti
   }
   return { state, intent, changed, issuePaper, invalidatePaper, bookingRequested, line,
     previousOfferUsd: previous.offer,
+    // The carrier gave a reason the load's facts do not support: the reply
+    // must not repeat it as fact (live #209 "Reloads are weak").
+    unverifiedReason: unverifiedReasonFor(intent, { posting, truck, now }),
     // Voice must not turn a temporary hold into an absolute economic limit.
     rateQuote: rateQuote(posting, state.offer),
     hasRateRoom: state.offer < ceilingFor(posting), requiresMc: bookingRequested && !verified }
@@ -392,6 +437,8 @@ export function negotiationLines(decision) {
     ...(['offer', 'push', 'accept_amount'].includes(decision.intent.kind) && !decision.bookingRequested
       ? ['  Answer their bargaining request with the current authorized offer; do not present their requested price as accepted.'] : []),
     ...(decision.state.stage === 'awaiting_email' ? ['  Rate is agreed. Request the recipient email unless they have already supplied authorization.'] : []),
+    ...(decision.unverifiedReason ? ["  The carrier's stated reason is not supported by this load's facts; do not repeat or agree with it."] : []),
+    ...(decision.state.pendingClose != null ? [`  Their conditional close at ${money(decision.state.pendingClose)} is accepted on price; only their MC is missing. Do not quote another figure.`] : []),
     ...(decision.state.stage === 'held' ? ['  Booking is on hold; do not request email or promise a document.'] : []),
     ...(decision.issuePaper ? ['  The authorized document will appear in this chat shortly for review and signature; do not claim an email was sent.'] : []),
     ...(decision.bookingRequested && decision.state.agreed === null ? ['  The rate cannot be confirmed yet. Follow the verified caller and equipment facts for the missing prerequisite.'] : []),

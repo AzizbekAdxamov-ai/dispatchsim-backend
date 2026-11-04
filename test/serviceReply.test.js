@@ -221,9 +221,12 @@ test('the live service passes one checkFacts to both brokerReplyProblem calls', 
   assert.match(src, /const checkFacts = \{[^}]*\bbrokerSaid,[^}]*bookedHere: BOOKED_STATUSES\.includes\(conversation\.status\)/)
   assert.match(src, /BOOKED_STATUSES = Object\.freeze\(\['agreed', 'booked'\]\)/)
   const scenarios = readFileSync(new URL('../scripts/chat-scenarios.js', import.meta.url), 'utf8')
+  // The scenario runner builds the same checkFacts through the shared turn context.
   assert.match(scenarios, /const brokerSaid = history\.filter/)
-  assert.match(scenarios, /said: dispatcherSoFar, brokerSaid,/)
+  assert.match(scenarios, /problemOf: \(r\) => brokerReplyProblem\(r, ctx\.checkFacts\)/)
+  const evalContext = readFileSync(new URL('../scripts/brokerEvalContext.js', import.meta.url), 'utf8')
+  assert.match(evalContext, /checkFacts: \{\s+truck, booking, posting, now, text, said, brokerSaid,/)
   // The prompt gets it too: the MC question depends on what the broker already asked.
   assert.match(src, /booking,\s+brokerSaid,\s+negotiation: decision,\s+\}\)/)
-  assert.match(scenarios, /booking,\s+brokerSaid,\s+\}\)/)
+  assert.match(evalContext, /posting, carrier, now, thread, said, paper, booking, brokerSaid, negotiation,/)
 })

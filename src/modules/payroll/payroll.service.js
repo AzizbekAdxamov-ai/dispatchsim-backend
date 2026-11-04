@@ -28,7 +28,12 @@ export const MAX_PER_RUN = 50
 // a driver because the balance is low is precisely the situation the
 // student is supposed to feel, not be protected from. Interest on the
 // credit line is the consequence, and it is already charged by the tick.
-export async function runPayroll({ userId } = {}) {
+// driverId: pay only that driver's due settlements (null = everyone due).
+// deps is a test seam: transaction runner, payroll repo and cash repo.
+export async function runPayroll(
+  { userId, driverId = null } = {},
+  { run = withTransaction, payrollRepo = repo, cash = cashRepo } = {},
+) {
   const paid = []
   const failed = []
 
@@ -36,21 +41,21 @@ export async function runPayroll({ userId } = {}) {
     let outcome
     try {
       // eslint-disable-next-line no-await-in-loop
-      outcome = await withTransaction(async (client) => {
-        const [next] = await repo.claimDueSettlements(client, 1)
+      outcome = await run(async (client) => {
+        const [next] = await payrollRepo.claimDueSettlements(client, 1, driverId)
         if (!next) return { done: true }
 
         // The conditional UPDATE is half of "cannot pay twice"; the unique
         // index on (kind, ref_type, ref_id) is the other half. Either one
         // alone would leave a window.
-        const marked = await repo.markPaid(client, next.id)
+        const marked = await payrollRepo.markPaid(client, next.id)
         // Somebody else paid it between the claim and here. Skip THIS one
         // and keep going -- breaking out of the whole run would return
         // "nothing was due" while drivers were still owed, which is the
         // silent failure this module's comments say to avoid.
         if (!marked) return { skipped: true }
 
-        await cashRepo.addEntry(client, {
+        await cash.addEntry(client, {
           kind: 'settlement',
           amountUsd: -marked.netUsd,
           description: `${next.driverName} — load ${marked.loadId}`,
@@ -91,7 +96,7 @@ export async function runPayroll({ userId } = {}) {
   // What is still owed after this run. MAX_PER_RUN caps a single run, so
   // without this the button could say "Run payroll — $18,400", pay part of
   // it, and leave the student with no way to know the rest exists.
-  const stillDue = (await repo.driverOwedAll())
+  const stillDue = (await payrollRepo.driverOwedAll())
     .filter((d) => d.daysOverdue != null && d.daysOverdue >= 0)
     .reduce((sum, d) => sum + d.owedUsd, 0)
 
@@ -100,7 +105,7 @@ export async function runPayroll({ userId } = {}) {
     failed,
     totalUsd,
     remainingDueUsd: stillDue,
-    balanceUsd: await cashRepo.getBalance(),
+    balanceUsd: await cash.getBalance(),
   }
 }
 

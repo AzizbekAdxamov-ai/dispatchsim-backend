@@ -35,6 +35,7 @@ export const CLAIM_DUE_SETTLEMENTS_SQL = `
     FROM driver_settlements s
     JOIN drivers d ON d.id = s.driver_id
    WHERE s.paid_at IS NULL AND s.due_at <= now()
+     AND ($2::text IS NULL OR s.driver_id = $2)
    ORDER BY s.due_at, s.id
    LIMIT $1
    FOR UPDATE OF s SKIP LOCKED`

@@ -27,7 +27,10 @@ export function proposesRebroker(value) {
 export function agreesRebroker(value) {
   return clauses(value).some((clause) => {
     if (!clause.trim() || clause.trim().endsWith('?')) return false
-    const relay = /\b(?:okay|ok|fine|sure|yeah|yep|go ahead|up to you)\b[^.!?;]{0,35}\b(?:my|your|their)\s+(?:(?:own|other)\s+){0,2}mc\b|\bno matter who\s+[a-z]+|\bwhoever\s+[a-z]+\b[^.!?;]{0,30}\b(?:fine|ok(?:ay)?|good|works)\b|\b(?:put|place|send|ship|stick)\w*\s+(?:it|this|that)\s+(?:on|under|with)\s+(?:my|your|their|his|her|another|any)\s*(?:(?:other|own)\s+)?(?:mc|authority|carrier)\b|\b(?:my|your|their)\s+(?:(?:other|own)\s+){0,2}mc\b[^.!?;]{0,35}\b(?:ok(?:ay)?|fine|good|works)\b/i.test(clause)
+    // "your MC" alone is the caller's own MC being confirmed (live #229:
+    // "Yep, your MC is good" read as agreeing to rebroker); only "own MC" /
+    // "other MC" names a different authority, hence {1,2} and not {0,2}.
+    const relay = /\b(?:okay|ok|fine|sure|yeah|yep|go ahead|up to you)\b[^.!?;]{0,35}\b(?:my|your|their)\s+(?:(?:own|other)\s+){1,2}mc\b|\bno matter who\s+[a-z]+|\bwhoever\s+[a-z]+\b[^.!?;]{0,30}\b(?:fine|ok(?:ay)?|good|works)\b|\b(?:put|place|send|ship|stick)\w*\s+(?:it|this|that)\s+(?:on|under|with)\s+(?:my|your|their|his|her|another|any)\s*(?:(?:other|own)\s+)?(?:mc|authority|carrier)\b|\b(?:my|your|their)\s+(?:(?:other|own)\s+){1,2}mc\b[^.!?;]{0,35}\b(?:ok(?:ay)?|fine|good|works)\b/i.test(clause)
     if (!/^\s*(?:go ahead (?:and )?)?(?:rebroker|double[- ]?broker)\b/i.test(clause) && !AGREES_REBROKER.test(clause) && !relay && !(HANDOFF.test(clause) && /\b(?:sure|yes|fine|okay|go ahead)\b/i.test(clause))) return false
     // Scope denial to this clause, never let an earlier refusal hide a
     // later permission. "No problem" is permission, not a refusal.

@@ -17,7 +17,7 @@
 import { STREET, PHONE, dollars, brokerReply, driverReply, isFallback, FELL_BACK, offeredFigures, agreesWithClaim, AGREES_REBROKER, relaysTheLoad } from './scenarioChecks.js'
 import { loadingMode, tarpFor, securementFor } from '../src/constants/freightHandling.js'
 import { marketClaims } from '../src/modules/brokerChat/rateTalk.js'
-import { NEGATION, unnegated } from '../src/modules/brokerChat/bookingTalk.js'
+import { NEGATION, unnegated, saysBooked } from '../src/modules/brokerChat/bookingTalk.js'
 import { statedWeights } from '../src/modules/brokerChat/weightTalk.js'
 import { asciiPunct } from '../src/lib/plainText.js'
 import { inventsEnvironment } from '../src/lib/environmentClaims.js'
@@ -383,7 +383,7 @@ export const BROKER_CASES = [
     good: 'States the next authorized counter without exposing a permanent ceiling.',
   },
   {
-    id: 'EB25', style: 'P', terms: ['cancellation', 'block'], pick: 'posted',
+    id: 'EB25', style: 'P', terms: ['cancellation', 'block'], pick: 'posted', status: 'agreed',
     line: "truck broke down, I can't cover — cancel it",
     expect: () => (r) => [
       ...(/please let me know|thank you|no worries/i.test(r) ? ['too soft or help-desk closing'] : []),
@@ -392,7 +392,7 @@ export const BROKER_CASES = [
     good: 'Short, firm desk response that records the carrier cancellation.',
   },
   {
-    id: 'EB26', style: 'P', terms: ['wait', 'ETA'], pick: 'posted',
+    id: 'EB26', style: 'P', terms: ['wait', 'ETA'], pick: 'posted', status: 'agreed',
     line: 'truck is not working, can you wait? I have no ETA',
     expect: () => (r) => [
       ...(/another truck/i.test(r) ? [] : ['does not reclaim the load after no ETA']),
