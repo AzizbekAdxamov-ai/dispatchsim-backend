@@ -4,6 +4,13 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { negotiate } from '../src/modules/brokerChat/negotiation.js'
 import { ceilingFor } from '../src/modules/brokerChat/ratePolicy.js'
+
+// Kills: returning an unrounded distance-times-five cap.
+test('a lane cap rounds down without dropping below the posted rate', () => {
+  const ceiling = ceilingFor({ id: 'rounded-cap', rateUsd: 900, distanceMi: 203 })
+  assert.equal(ceiling % 25, 0)
+  assert.ok(ceiling >= 900 && ceiling <= 1015)
+})
 import { fakePosting } from './helpers/fakeBrokerRepo.js'
 
 const STEP = 25

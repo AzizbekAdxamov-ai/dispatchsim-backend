@@ -131,23 +131,28 @@ export function nearLoadCoverage(rows, { maxMiles = DEADHEAD_MAX_MI, minimum = M
  * Round a posted rate to a broker-style round figure and return the new total.
  *
  * The step ($50 at or above RATE_ROUND_THRESHOLD_USD, else $25) is judged on
- * the amount being rounded: the whole rate for all-in postings, the linehaul
- * (rate minus fuel) for split ones. Fuel never changes, so the total moves by
- * the linehaul rounding only. Rounding is to the nearest multiple, then pulled
+ * the total rate for both all-in and split postings. Rounding is to the nearest multiple, then pulled
  * inward to the nearest multiple inside [lowerBound, upperBound] (bounds apply
  * to the total). If no multiple fits inside the bounds, the unrounded
  * (already clamped) rateUsd is returned untouched. Pure: no RNG, no clock.
  */
-export function roundPostedRate({ rateUsd, fuelUsd = 0, lowerBound, upperBound }) {
-  const amount = rateUsd - fuelUsd
-  const lo = Math.max(MIN_LINEHAUL_USD, lowerBound - fuelUsd)
-  const hi = upperBound - fuelUsd
+export function roundPostedRate({ rateUsd, lowerBound, upperBound }) {
+  const amount = rateUsd
+  const lo = lowerBound
+  const hi = upperBound
   const step = amount >= RATE_ROUND_THRESHOLD_USD ? RATE_ROUND_HIGH_USD : RATE_ROUND_LOW_USD
   let rounded = Math.round(amount / step) * step
   if (rounded > hi) rounded = Math.floor(hi / step) * step
   if (rounded < lo) rounded = Math.ceil(lo / step) * step
   if (rounded < lo || rounded > hi) return rateUsd
-  return rounded + fuelUsd
+  return rounded
+}
+
+// Azizbek qarori 2026-11-06 — split components must add up to a rounded total.
+export function roundFuelSurcharge(fuelUsd, total) {
+  if (!fuelUsd) return 0
+  const step = total >= RATE_ROUND_THRESHOLD_USD ? RATE_ROUND_HIGH_USD : RATE_ROUND_LOW_USD
+  return Math.max(step, Math.min(total - step, Math.round(fuelUsd / step) * step))
 }
 
 // Classify items into tiers by deadhead percentile.
@@ -243,13 +248,13 @@ export function buildPostingRows({ rng, postingItems, drivers, trucks, fleetEqui
     const clampedRate = Math.min(upperBound, Math.max(lowerBound, rawRate))
     // This is a declared seed allocation, not a live DAT fuel surcharge.
     // Stable lane hashing adds variety without changing totals or RNG draws.
-    // Fuel is computed from the clamped rate, before rounding, so rounding
-    // never moves it.
+    // Round fuel separately while retaining a consistent total.
     const split = hash01(`${item.broker}:${item.originCity}:${item.destinationCity}`) < 0.25
       && fuelPerMile(item.equipmentType) !== null
-    const fuelUsd = split ? Math.min(clampedRate - 1, Math.max(1, Math.round(item.distanceMi * fuelPerMile(item.equipmentType)))) : 0
+    const rawFuelUsd = split ? Math.min(clampedRate - 1, Math.max(1, Math.round(item.distanceMi * fuelPerMile(item.equipmentType)))) : 0
     // Brokers post round figures; see roundPostedRate. No RNG is drawn.
-    const rateUsd = roundPostedRate({ rateUsd: clampedRate, fuelUsd, lowerBound, upperBound })
+    const rateUsd = roundPostedRate({ rateUsd: clampedRate, lowerBound, upperBound })
+    const fuelUsd = roundFuelSurcharge(rawFuelUsd, rateUsd)
 
     // Equipment length: pick from valid lengths for this equipment type
     const equipLengths = EQUIP_LENGTHS[item.equipmentType] || [53]
