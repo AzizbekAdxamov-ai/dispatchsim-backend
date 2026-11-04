@@ -107,6 +107,9 @@ export async function listLoads({ status, equipmentType, search, limit, offset }
   if (status) {
     params.push(status)
     conditions.push(`l.status = $${params.length}`)
+  } else {
+    // A cancelled load is off the list unless asked for by name.
+    conditions.push(`l.status <> 'cancelled'`)
   }
 
   const finalWhere = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
@@ -142,7 +145,7 @@ export async function countLoadStatuses({ equipmentType, search }) {
   const { whereClause, params } = buildLoadFilter({ equipmentType, search })
   const result = await query(
     `SELECT
-       count(*)::int                                                          AS "all",
+       count(*) FILTER (WHERE l.status <> 'cancelled')::int                   AS "all",
        count(*) FILTER (WHERE l.status IN ('ontime','warn','crit'))::int      AS active,
        count(*) FILTER (WHERE l.status = 'neutral')::int                      AS pending,
        count(*) FILTER (WHERE l.status = 'done')::int                        AS delivered,
@@ -183,10 +186,10 @@ export async function listLoadsByDriverId(driverId, { limit = 10 } = {}) {
 // a broken on-time percentage sit unnoticed for weeks.
 export const DASHBOARD_COUNTS_SQL = `
   SELECT
-    count(*) FILTER (WHERE status <> 'done')::int                  AS "activeLoads",
+    count(*) FILTER (WHERE status NOT IN ('done','cancelled'))::int AS "activeLoads",
     count(*) FILTER (WHERE status IN ('ontime','warn','crit'))::int AS "inTransit",
     count(*) FILTER (WHERE status IN ('warn','crit'))::int          AS "atRisk",
-    count(*) FILTER (WHERE status <> 'neutral')::int                AS "evaluatedLoads",
+    count(*) FILTER (WHERE status NOT IN ('neutral','cancelled'))::int AS "evaluatedLoads",
     -- On time is a FACT about the delivery, not the status.
     -- markDelivered sets status='done' for every load, late or not, so
     -- FILTER (status IN ('ontime','done')) counted a load that ran 40%
@@ -647,6 +650,20 @@ export async function cancelDispatch(client, loadId) {
         AND status IN ('ontime', 'warn', 'crit')
       RETURNING id, driver_id AS "driverId"`,
     [loadId],
+  )
+  return result.rows[0] ?? null
+}
+
+// Cancel a load that was never dispatched (the agreement behind it was
+// withdrawn). Only a 'neutral', undelivered load: a dispatched one has to
+// be undone first (loadWithdrawal.js), a delivered one has money against it.
+export async function cancelLoad(client, { loadId, reason }) {
+  const result = await client.query(
+    `UPDATE loads
+        SET status = 'cancelled', cancelled_at = now(), cancel_reason = $2
+      WHERE id = $1 AND status = 'neutral' AND delivered_at IS NULL
+      RETURNING id`,
+    [loadId, reason],
   )
   return result.rows[0] ?? null
 }

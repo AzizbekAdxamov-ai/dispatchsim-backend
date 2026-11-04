@@ -1,6 +1,7 @@
 // SQL for broker conversations. One table pair: broker_conversations holds
 // the thread and the agreed rate, broker_messages holds the turns.
 import { query, withTransaction } from '../../db/pool.js'
+import { withdrawBookedLoad } from '../loads/loadWithdrawal.js'
 import { AppError } from '../../lib/errors.js'
 import { chatIntent } from './negotiation.js'
 import { rateQuote, ALL_IN } from './rateQuote.js'
@@ -423,6 +424,17 @@ export async function createBrokerBlock({ conversationId, brokerId = null, broke
 // back to open/held and void (not delete) the rate confirmation so the audit
 // trail keeps it. Runs inside the caller's transaction.
 async function withdrawAgreement(client, conversationId, voidReason) {
+  // A booked thread owns a load (created when the rate confirmation was
+  // accepted). Withdrawing the agreement takes that load back too, in this
+  // transaction -- otherwise it sits 'neutral' and dispatchable for a broker
+  // who has already given it away. Locked FOR UPDATE so a concurrent accept
+  // cannot book between this read and the status change below.
+  const booked = await client.query(`SELECT p.booked_load_id AS "bookedLoadId"
+      FROM broker_conversations c JOIN load_postings p ON p.id = c.posting_id
+     WHERE c.id = $1 AND c.status = 'booked' AND p.booked_by_user_id = c.user_id
+       FOR UPDATE OF c`, [conversationId])
+  const loadId = booked.rows[0]?.bookedLoadId
+  if (loadId) await withdrawBookedLoad(client, { loadId, reason: voidReason })
   await client.query(`UPDATE broker_conversations SET agreed_rate_usd = NULL, rate_con_rate_usd = NULL,
     rate_con_basis = NULL, rate_con_fuel_surcharge_usd = NULL, recipient_email = NULL,
     pending_close_usd = NULL,

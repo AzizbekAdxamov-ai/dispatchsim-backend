@@ -120,3 +120,63 @@ test('through the service, an ETA given after the question keeps the wait open',
   assert.equal(again.recovered, undefined)
   assert.equal(t.fake.state.conversation.status, 'agreed')
 })
+
+// A client that answers the withdrawal's reads: the booked-load lookup and
+// the load row. Everything else is recorded and succeeds.
+const BOOKED_LOAD_ID = '000123'
+function withdrawalClient({ booked = true, loadStatus = 'neutral' } = {}) {
+  const calls = []
+  return {
+    calls,
+    query: async (sql, params) => {
+      calls.push({ sql, params })
+      if (/booked_load_id AS "bookedLoadId"/.test(sql)) {
+        return { rows: booked ? [{ bookedLoadId: BOOKED_LOAD_ID }] : [], rowCount: booked ? 1 : 0 }
+      }
+      if (/FROM loads l/.test(sql)) return { rows: [{ id: BOOKED_LOAD_ID, status: loadStatus, deliveredAt: null }], rowCount: 1 }
+      return { rows: [{ id: 'x' }], rowCount: 1 }
+    },
+  }
+}
+const loadCancelIndex = (calls) => calls.findIndex((c) => /UPDATE loads/.test(c.sql) && /'cancelled'/.test(c.sql))
+const messageInsertIndex = (calls) => calls.findIndex((c) => /INSERT INTO broker_messages/.test(c.sql))
+
+// Kills: withdrawAgreement not cancelling the booked load (step 4 removed)
+test('cancelAndBlock on a booked thread cancels its load in the same transaction', async () => {
+  const client = withdrawalClient()
+  await cancelAndBlock({ conversationId: 'c1', text: 'cancel it', line: 'no' }, { run: (fn) => fn(client) })
+  const cancel = loadCancelIndex(client.calls)
+  assert.ok(cancel >= 0, 'the load was cancelled on the same client')
+  assert.equal(client.calls[cancel].params[0], BOOKED_LOAD_ID)
+  assert.equal(client.calls[cancel].params[1], 'carrier_cancelled')
+  assert.ok(cancel < messageInsertIndex(client.calls), 'cancelled before the exchange is written')
+})
+
+// Kills: only cancelAndBlock cancelling the load, releaseForNoEta forgetting it
+test('releaseForNoEta cancels the booked load too', async () => {
+  const client = withdrawalClient()
+  await releaseForNoEta({ conversationId: 'c1', text: 'no eta', line: 'x' }, { run: (fn) => fn(client) })
+  const cancel = loadCancelIndex(client.calls)
+  assert.ok(cancel >= 0)
+  assert.equal(client.calls[cancel].params[1], 'wait_no_eta')
+  assert.ok(!client.calls.some((c) => /broker_blocks|DELETE/.test(c.sql)))
+})
+
+// Kills: dropping the booked / booked_by_user_id filter (an unbooked thread would touch a load)
+test('withdrawing an unbooked agreement touches no load', async () => {
+  const client = withdrawalClient({ booked: false })
+  await cancelAndBlock({ conversationId: 'c1', text: 'cancel it', line: 'no' }, { run: (fn) => fn(client) })
+  assert.equal(loadCancelIndex(client.calls), -1)
+  assert.ok(!client.calls.some((c) => /UPDATE loads/.test(c.sql)))
+  const lookup = client.calls.find((c) => /booked_load_id AS "bookedLoadId"/.test(c.sql))
+  assert.match(lookup.sql, /c\.status = 'booked'/)
+  assert.match(lookup.sql, /p\.booked_by_user_id = c\.user_id/)
+})
+
+// Kills: the fake repo (and so the service-level flows) not mirroring the load cancel
+test('through the service, a booked thread cancelled by the dispatcher records the cancelled load', async () => {
+  const t = setup({ status: 'booked' })
+  await send(t, 'can u wait')
+  await send(t, 'no eta')
+  assert.equal(t.fake.state.cancelledLoads.length, 1)
+})

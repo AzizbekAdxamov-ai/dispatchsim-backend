@@ -49,6 +49,7 @@ export function makeFakeBrokerRepo({
     createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
   }
   const blocks = []
+  const cancelledLoads = []
   const messages = lines.map((content) => ({ id: `m${++seq}`, role: 'dispatcher', content, kind: 'text' }))
   // What a caller sees, like the real CONVERSATION_COLUMNS: no rate con rate.
   const publicRow = () => {
@@ -62,11 +63,14 @@ export function makeFakeBrokerRepo({
     return { ...dispatcher }
   }
   const withdrawAndExchange = (conversationId, text, line, voidReason) => {
+    const wasBooked = conversation.status === 'booked'
     Object.assign(conversation, {
       agreedRateUsd: null, rateConRateUsd: null, rateConBasis: null, rateConFuelSurchargeUsd: null,
       recipientEmail: null, pendingCloseUsd: null, negotiationStage: 'held', status: 'open',
     })
     for (const m of messages) if (m.kind === 'rate_con' && !m.voidedAt) Object.assign(m, { voidedAt: new Date().toISOString(), voidReason })
+    // The real repo cancels the booked load in the same transaction.
+    if (wasBooked) cancelledLoads.push({ conversationId, reason: voidReason })
     return exchange(text, line)
   }
 
@@ -196,7 +200,7 @@ export function makeFakeBrokerRepo({
   return {
     repo,
     // Test-only handles on the stored state.
-    state: { conversation, messages, blocks },
+    state: { conversation, messages, blocks, cancelledLoads },
     deliverAll() { for (const message of messages) message.deliverAt = new Date(0).toISOString() },
     // Put the thread where a booking left it, without going through the gate
     // (for testing the second gate at accept time).

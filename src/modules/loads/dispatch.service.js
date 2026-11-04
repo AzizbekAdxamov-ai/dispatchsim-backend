@@ -33,7 +33,6 @@ import * as availabilityService from '../availability/availability.service.js'
 import { REASONS } from '../../constants/availabilityReasons.js'
 import { postRefusal } from '../driverChat/driverChat.refusalPost.js'
 import { rollEvents } from '../loadEvents/loadEvents.service.js'
-import * as loadEventsRepo from '../loadEvents/loadEvents.repository.js'
 import {
   gallonsFor, fuelCostForGallons, splitTankAndPump, tirePointsWorn, serviceDueMileage,
   allocateRunDays, splitGallons, walkFuelPct,
@@ -77,6 +76,7 @@ import { fromHosDomain, driverHosSnapshot, HOS_LOOKBACK_HOURS } from '../../cons
 import * as complianceService from '../compliance/compliance.service.js'
 import { readPreferences, hasRequests, preferenceConflicts, avoidedPlaces } from '../../constants/driverPreferences.js'
 import { deliveredTo, emptyRunCheck, placeLabel } from './whereabouts.js'
+import { undoDispatch } from './loadWithdrawal.js'
 
 // How long the run takes, in simulated days, from the window the broker
 // promised. Floored at half a day so a short local run still has a
@@ -1257,39 +1257,7 @@ export async function chargeInsurance({ enabled = config.financeEnabled, run = w
 // the same transaction, or a cancel would leave them marked as running
 // freight that is no longer theirs.
 export async function cancelDispatch({ loadId }) {
-  return withTransaction(async (client) => {
-    // Read before the UPDATE: after it, the row's driver_id is already NULL
-    // and the release below would have nobody to release.
-    const driverId = await loadsRepo.getLoadDriver(client, loadId)
-    const cancelled = await loadsRepo.cancelDispatch(client, loadId)
-    if (!cancelled) {
-      // Either it does not exist, or it is already delivered -- and a
-      // delivered load has money against it, which is not something an
-      // UPDATE gets to undo.
-      const load = await loadsRepo.getLoadById(loadId, client)
-      if (!load) throw new AppError('LOAD_NOT_FOUND')
-      throw new AppError('LOAD_NOT_CANCELLABLE')
-    }
-    await loadsRepo.releaseDriver(client, { driverId })
-
-    // Close any open road event with the cancel, in the same transaction.
-    //
-    // The loads row survives a cancel, so ON DELETE CASCADE never fires and
-    // an open event was simply orphaned. claimArrivedLoads skips loads with
-    // one, so the load could be re-dispatched, would never arrive, would
-    // slide to 'crit', and nothing anywhere said why. Worse, the event was
-    // still resolvable: a $1,450 tow could be charged against a truck that
-    // was not on the road, which is precisely the thing the resolve path's
-    // own comment promises cannot happen.
-    const closed = await loadEventsRepo.closeEventsForLoad(client, loadId)
-
-    // The duty log planned for this run: what has not happened yet is
-    // removed, the status in progress ends now. The part already lived
-    // stays -- those hours were really driven and still count.
-    const duty = await dutyEventsRepo.trimForCancelledLoad(client, loadId)
-
-    return { load: cancelled, eventsClosed: closed.length, dutyEventsRemoved: duty.removed }
-  })
+  return withTransaction((client) => undoDispatch(client, loadId))
 }
 
 // A load that will not make its window, and one that already has not.

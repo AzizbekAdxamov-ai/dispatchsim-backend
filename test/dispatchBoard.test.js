@@ -23,7 +23,8 @@ test('the board columns are disjoint and cover every load exactly once', { skip:
     assert.equal(new Set(ids).size, ids.length, 'no load appears in two columns')
 
     // Cover: the four columns together are every load the list knows.
-    const listed = await client.query(`SELECT count(*)::int AS n FROM loads`)
+    // A cancelled load is on no board column.
+    const listed = await client.query(`SELECT count(*)::int AS n FROM loads WHERE status <> 'cancelled'`)
     assert.equal(ids.length, listed.rows[0].n,
       'the board and the loads table agree on how many loads exist')
 
