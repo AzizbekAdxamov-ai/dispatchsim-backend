@@ -55,13 +55,8 @@ import { POSTING_CONFIG } from './marketTargets.js'
 export const HIDDEN_RATE_SHARE = 0.1
 
 // Azizbek qarori 2026-11-06 — brokerlar yaxlit narx e'lon qiladi.
-// Posted amounts at or above the threshold go to the nearest $50, below it to
-// the nearest $25.
-export const RATE_ROUND_THRESHOLD_USD = 1000
-// Azizbek qarori 2026-11-06 — brokerlar yaxlit narx e'lon qiladi.
-export const RATE_ROUND_HIGH_USD = 50
-// Azizbek qarori 2026-11-06 — brokerlar yaxlit narx e'lon qiladi.
-export const RATE_ROUND_LOW_USD = 25
+// Azizbek qarori 2026-11-05 — board totals use whole hundreds.
+export const POSTED_RATE_STEP_USD = 100
 // Azizbek qarori 2026-11-06 — brokerlar yaxlit narx e'lon qiladi.
 // Linehaul never drops below $1: migration 066 requires 0 < fuel < rate.
 export const MIN_LINEHAUL_USD = 1
@@ -130,8 +125,8 @@ export function nearLoadCoverage(rows, { maxMiles = DEADHEAD_MAX_MI, minimum = M
 /**
  * Round a posted rate to a broker-style round figure and return the new total.
  *
- * The step ($50 at or above RATE_ROUND_THRESHOLD_USD, else $25) is judged on
- * the total rate for both all-in and split postings. Rounding is to the nearest multiple, then pulled
+ * The $100 step is judged on the total for both all-in and split postings.
+ * Rounding is to the nearest multiple, then pulled
  * inward to the nearest multiple inside [lowerBound, upperBound] (bounds apply
  * to the total). If no multiple fits inside the bounds, the unrounded
  * (already clamped) rateUsd is returned untouched. Pure: no RNG, no clock.
@@ -140,7 +135,7 @@ export function roundPostedRate({ rateUsd, lowerBound, upperBound }) {
   const amount = rateUsd
   const lo = lowerBound
   const hi = upperBound
-  const step = amount >= RATE_ROUND_THRESHOLD_USD ? RATE_ROUND_HIGH_USD : RATE_ROUND_LOW_USD
+  const step = POSTED_RATE_STEP_USD
   let rounded = Math.round(amount / step) * step
   if (rounded > hi) rounded = Math.floor(hi / step) * step
   if (rounded < lo) rounded = Math.ceil(lo / step) * step
@@ -151,7 +146,8 @@ export function roundPostedRate({ rateUsd, lowerBound, upperBound }) {
 // Azizbek qarori 2026-11-06 — split components must add up to a rounded total.
 export function roundFuelSurcharge(fuelUsd, total) {
   if (!fuelUsd) return 0
-  const step = total >= RATE_ROUND_THRESHOLD_USD ? RATE_ROUND_HIGH_USD : RATE_ROUND_LOW_USD
+  const step = POSTED_RATE_STEP_USD
+  if (total <= step) return Math.max(MIN_LINEHAUL_USD, Math.min(total - MIN_LINEHAUL_USD, fuelUsd))
   return Math.max(step, Math.min(total - step, Math.round(fuelUsd / step) * step))
 }
 

@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises'
 import { pool } from '../src/db/pool.js'
 
 // Kills: rounding a negotiated/committed posting, or failing to synchronize an empty conversation.
-test('migration rounds safe postings and preserves active quotes', async (t) => {
+test('migrations round safe postings to hundreds and preserve active quotes', async (t) => {
   let client
   try { client = await pool.connect() } catch { t.skip('PostgreSQL unavailable'); return }
   try {
@@ -26,11 +26,12 @@ test('migration rounds safe postings and preserves active quotes', async (t) => 
       (4,4,'agreed',3869,NULL,3869,0,'paper_pending',3869,0,now())`)
     await client.query('INSERT INTO broker_messages VALUES (2)')
     await client.query(await readFile(new URL('../src/db/migrations/070_round_open_posting_rates.sql', import.meta.url), 'utf8'))
+    await client.query(await readFile(new URL('../src/db/migrations/071_round_posted_rates_to_hundreds.sql', import.meta.url), 'utf8'))
     const rates = (await client.query('SELECT id, rate_usd, fuel_surcharge_usd FROM load_postings ORDER BY id')).rows
     assert.deepEqual(rates.map((r) => [r.id, r.rate_usd, r.fuel_surcharge_usd]),
-      [[1,3850,850], [2,3869,869], [3,3869,869], [4,3869,869]])
+      [[1,3900,900], [2,3869,869], [3,3869,869], [4,3869,869]])
     const offers = (await client.query('SELECT id, broker_offer_usd, negotiation_revision FROM broker_conversations ORDER BY id')).rows
-    assert.deepEqual(offers.map((r) => [r.id, r.broker_offer_usd, r.negotiation_revision]), [[1,3850,1],[2,3869,0],[4,3869,0]])
+    assert.deepEqual(offers.map((r) => [r.id, r.broker_offer_usd, r.negotiation_revision]), [[1,3900,2],[2,3869,0],[4,3869,0]])
   } finally {
     await client.query('ROLLBACK')
     client.release()

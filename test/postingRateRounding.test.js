@@ -14,24 +14,23 @@ const round = (rateUsd, lowerBound, upperBound, fuelUsd) => roundPostedRate({ ra
 test('all-in rates round to the nearest multiple', () => {
   assert.equal(round(6308, 1000, 10000), 6300)
   assert.equal(round(901, 100, 4505), 900)
-  assert.equal(round(643, 130, 650), 650)
+  assert.equal(round(643, 130, 650), 600)
 })
 
-// Kills: swapping the $50 and $25 steps, or moving the $1,000 threshold.
-test('amounts below $1,000 use $25, from $1,000 use $50', () => {
-  assert.equal(round(987, 100, 20000), 975)
-  assert.equal(round(1037, 100, 20000), 1050)
+// Kills: retaining $25/$50 increments instead of the requested $100.
+test('posted totals use whole hundreds', () => {
+  assert.equal(round(987, 100, 20000), 1000)
+  assert.equal(round(1037, 100, 20000), 1000)
   assert.equal(round(1012, 100, 20000), 1000)
+  assert.equal(round(3124, 100, 20000), 3100)
+  assert.equal(round(7322, 100, 20000), 7300)
 })
-
-// Note: changing `>=` to `>` at the threshold is an equivalent mutant: 1000 is
-// a multiple of both steps, so it rounds to 1000 either way. Not claimed as a kill.
 
 // Kills: rounding the linehaul while leaving the total uneven.
 test('a split rate rounds the total and fuel', () => {
   assert.equal(round(6308, 1200, 6500, 437), 6300)
-  assert.equal(roundFuelSurcharge(437, 6300), 450)
-  assert.equal(round(3869, 100, 20000, 869), 3850)
+  assert.equal(roundFuelSurcharge(437, 6300), 400)
+  assert.equal(round(3869, 100, 20000, 869), 3900)
 })
 
 // Kills: selecting rounding step from linehaul instead of total.
@@ -41,17 +40,17 @@ test('the split step is judged on the total', () => {
 
 // Kills: removing the inward floor, or clamping to the upper bound itself.
 test('a non-round upper bound pulls the rate inward to a multiple', () => {
-  assert.equal(round(663, 133, 665), 650)
+  assert.equal(round(663, 133, 665), 600)
 })
 
 // Kills: removing the inward ceil, or clamping to the lower bound itself.
 test('a non-round lower bound pulls the rate inward to a multiple', () => {
-  assert.equal(round(1312, 1312, 6560), 1350)
+  assert.equal(round(1312, 1312, 6560), 1400)
 })
 
 // Kills: allowing the rounded total above the upper bound.
 test('split bounds apply to the total', () => {
-  assert.equal(round(665, 133, 665, 52), 650)
+  assert.equal(round(665, 133, 665, 52), 600)
 })
 
 // Kills: dropping the no-fit fallback (would return a figure outside the bounds).
@@ -59,7 +58,7 @@ test('when no multiple fits the bounds the clamped rate is kept', () => {
   assert.equal(round(110, 101, 120), 110)
 })
 
-const stepFor = (amount) => (amount >= 1000 ? 50 : 25)
+const stepFor = () => 100
 const makeItems = () => {
   const rng = mulberry32(23)
   return Array.from({ length: 100 }, () => validateLoadItem(generateLoad(rng)).item)
