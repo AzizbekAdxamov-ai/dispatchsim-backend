@@ -6,7 +6,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { sendMessage, getThread } from '../src/modules/brokerChat/brokerChat.service.js'
-import { WAIT_ETA_LINE } from '../src/modules/brokerChat/blockPolicy.js'
+import { WAIT_ETA_LINE, RELEASED_LINE } from '../src/modules/brokerChat/blockPolicy.js'
 import { cancelAndBlock, releaseForNoEta } from '../src/modules/brokerChat/brokerChat.repository.js'
 import { makeFakeBrokerRepo, fakePosting, FAKE_IDS } from './helpers/fakeBrokerRepo.js'
 
@@ -179,4 +179,18 @@ test('through the service, a booked thread cancelled by the dispatcher records t
   await send(t, 'can u wait')
   await send(t, 'no eta')
   assert.equal(t.fake.state.cancelledLoads.length, 1)
+})
+
+// Kills: removing the released-thread short circuit in sendMessage (the model
+// would be called and the broker would offer the load back).
+test('after a no-ETA release the broker never offers the load back', async () => {
+  const t = setup()
+  assert.equal((await send(t, 'can u wait')).waitingForEta, true)
+  assert.equal((await send(t, 'no eta')).recovered, true)
+
+  const later = await send(t, 'ok can i still get it if he fixes it in an hour?')
+  assert.equal(later.released, true)
+  assert.equal(later.awaitingReply, false)
+  assert.equal(t.fake.state.messages.at(-1).content, RELEASED_LINE)
+  assert.equal(t.calls(), 0, 'no model or budget call')
 })

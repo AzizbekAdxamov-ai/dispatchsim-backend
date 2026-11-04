@@ -6,7 +6,7 @@
 // separate budgets, keys and models.
 import { chatText } from '../../../scripts/seed/aiClient.js'
 import { brokerReplyProblem, brokerRetryPrompt } from './replyProblem.js'
-import { cancellationDecision } from './blockPolicy.js'
+import { cancellationDecision, releasedToAnotherTruck, RELEASED_LINE } from './blockPolicy.js'
 import { truckFacts } from './truckTalk.js'
 import { bookingFacts, carrierNotVerified } from './bookingTalk.js'
 import { stopsForRow } from './stops.js'
@@ -167,6 +167,12 @@ export async function sendMessage({ conversationId, userId, text }, { deps = DEF
     }
     const dispatcherMessage = await deps.repo.addExchange(exchange)
     return { dispatcherMessage, awaitingReply: false, blocked: false, waitingForEta: true }
+  }
+  // The load was released to another truck on an earlier turn: the broker
+  // does not take it back. A fixed line, no model call, no budget spent.
+  if (releasedToAnotherTruck(policyThread)) {
+    const dispatcherMessage = await deps.repo.addExchange({ conversationId, text, line: RELEASED_LINE })
+    return { dispatcherMessage, awaitingReply: false, released: true }
   }
   assertPostingOpen(posting)
 

@@ -103,10 +103,24 @@ export function blockUntil(from = new Date(), days = BROKER_BLOCK_DAYS) {
   return result
 }
 
+// The line that takes the load back when the carrier has no ETA. Stored
+// verbatim as the broker's message, so releasedToAnotherTruck can find it.
+export const RECLAIM_LINE = "I gave you a window and you still have no ETA. I'm giving this to another truck."
+// What the broker says to any later message on a released thread: the load is
+// gone, it is never offered back.
+export const RELEASED_LINE = "That one's already gone to another truck. Call me if you've got a truck for something else."
+
+// True once the broker has released the load to another truck on this thread
+// (thread: { role, content } rows). Exact match: the line is written by
+// insertExchange as-is and read back unchanged by listMessages.
+export function releasedToAnotherTruck(thread = []) {
+  return thread.some((m) => m.role === 'broker' && m.content === RECLAIM_LINE)
+}
+
 // No speaker prefix: the line is stored as the broker's message and the UI
 // already shows who said it ("Marcus Oyelaran: ..." doubled the name).
 export function cancellationResponse({ alreadyAskedEta = false, noEta = false } = {}) {
-  if (noEta || alreadyAskedEta) return "I gave you a window and you still have no ETA. I'm giving this to another truck."
+  if (noEta || alreadyAskedEta) return RECLAIM_LINE
   return "You booked it and now you're bailing? I just burned my shipper because of you. Don't call this desk again."
 }
 
