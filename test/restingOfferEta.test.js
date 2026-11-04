@@ -26,13 +26,13 @@ test('resting with 11 hours and a 608-mile pickup has no verified legal ETA', ()
   assert.ok(offer.pickupAt instanceof Date)
   const lines = offerLines(offer).join('\n')
   assert.match(lines, /Central time/)
-  assert.match(lines, /rest end time is not verified/)
+  assert.match(lines, /You don't know when your ten is up/)
   assert.doesNotMatch(lines, /earliest you could be there|you can make it|you cannot make it/)
   const prompt = buildDriverSystemPrompt({
     driver, offer, load: null, now,
     standing: { stage: 'ok', unpaidCount: 0, owedUsd: 0, daysOverdue: 0 },
   })
-  assert.match(prompt, /current rest end time is not recorded/)
+  assert.match(prompt, /current ten-hour break ends/)
 })
 
 test('the live invented rest end and contradictory arrival are withheld', () => {
@@ -48,7 +48,7 @@ test('the live invented rest end and contradictory arrival are withheld', () => 
 
 test('uncertainty is allowed and routine messages are not blocked', () => {
   const offer = offerFacts({ driver, texts, now })
-  const honest = "I don't have a confirmed rest end time, so I can't give you an arrival yet."
+  const honest = "Not sure when my ten's up, so I can't give you an arrival yet."
   assert.equal(driverReplyProblem(honest, { offer, text: question }), null)
   assert.equal(driverReplyProblem('It is 45 degrees in the box.', { offer, text: 'What is the trailer temperature?' }), null)
   const offDuty = offerFacts({ driver: { ...driver, dutyStatus: 'off' }, texts, now })
@@ -60,7 +60,7 @@ test('resting driver is protected even if the offer extractor missed the city', 
   const invented = 'My rest ends at noon, and I can make it by the pickup.'
   const problem = driverReplyProblem(invented, { offer: null, driver, text: question })
   assert.equal(problem?.unusable, true)
-  assert.match(problem.safeReply, /don't have a confirmed end time/)
+  assert.match(problem.safeReply, /ten's up/)
   assert.equal(driverReplyProblem(problem.safeReply, { offer: null, driver, text: question }), null)
   assert.equal(driverReplyProblem('Truck is in Seattle.', { offer: null, driver, text: 'Where is the truck?' }), null)
 })

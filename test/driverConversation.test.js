@@ -144,7 +144,7 @@ test('operational corrections take priority over an appended service offer', () 
   const offer = { city: 'Great Falls', state: 'MT', miles: 608, restEndUnknown: true, earliestAt: null, makesIt: null }
   const rest = check('My rest ends at 2 pm.' + service, 'When does your rest end?', { driver: resting, offer })
   assert.equal(rest?.why, 'gave an unverified rest end or arrival time')
-  assert.match(rest.safeReply, /confirmed end time/)
+  assert.match(rest.safeReply, /ten's up/)
 
   const late = check('I can reach pickup at 3 pm.' + service, 'Can you make the pickup?', {
     offer: { ...offer, restEndUnknown: false, makesIt: false,

@@ -91,7 +91,7 @@ test('the Great Falls case stays unverified', () => {
   assert.equal(gf.miles, 608)
   assert.equal(gf.makesIt, null)
   assert.equal(gf.earliestAt, null)
-  assert.match(offerLines(gf).join('\n'), /rest end time is not verified/)
+  assert.match(offerLines(gf).join('\n'), /You don't know when your ten is up/)
   assert.equal(exceedsLegalReach(600, 20), false)
 })
 

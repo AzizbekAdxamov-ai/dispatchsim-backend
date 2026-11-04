@@ -20,7 +20,7 @@ test('Ethan live offer keeps pickup and delivery facts separate without assertin
   assert.equal(offer.makesIt, true)
   assert.equal(offer.deliveryVerified, false)
   assert.equal(offer.deliveryImpossible, false)
-  assert.match(offerLines(offer).join('\n'), /Delivery feasibility is not verified/)
+  assert.match(offerLines(offer).join('\n'), /delivery isn't certain/)
   const live = 'Yes, I can hit the 6:14 AM pickup in Rockford and make the 12:47 AM delivery in Columbus.'
   const problem = driverReplyProblem(live, { offer, text, driver })
   assert.equal(problem?.unusable, true)

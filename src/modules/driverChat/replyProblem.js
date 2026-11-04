@@ -103,6 +103,12 @@ function notFollowingLine(load) {
     : 'No idea what that means, boss. You got a load for me or what?'
 }
 
+/// Words from the system's own status notes. A driver says "not sure when my
+// ten's up", never "rest end time isn't verified"; bare "verified" stays legal
+// ("I verified the seal").
+const LEAKED_STATUS_RE = /\b(?:(?:is|isn't|is\s+not|not)\s+verified|unverified|feasibility|rest\s+end\s+time)\b/i
+const REST_UNKNOWN_LINE = "Not sure when my ten's up, so I can't give you a solid time yet."
+
 // The computed "cannot make it" line; without a pickup time to quote, a
 // shorter one that still names the miles and the city.
 const unreachableLine = (offer, miles) => cannotMakeLine(offer)
@@ -220,6 +226,18 @@ export function driverReplyProblem(reply, { offer, text, load = null, driver = n
   // A driving/log violation needs a plain no. A statement of remaining
   // hours, or "Copy that", leaves the dangerous request standing.
   if (hos) return hos
+  if (LEAKED_STATUS_RE.test(reply)) {
+    const place = offer?.state ? `${offer.city}, ${offer.state}` : offer?.city
+    const miles = offer?.miles == null ? '' : `I'm about ${offer.miles.toLocaleString('en-US')} road miles from ${place}. `
+    const restUnknown = offer?.restEndUnknown || driver?.dutyStatus === 'resting'
+    return {
+      why: 'used system wording instead of a driver\'s words',
+      hint: ' Say it the way a driver would, for example "not sure when my ten\'s up"; never mention what is verified, feasibility or a rest end time.',
+      unusable: true,
+      // Without a rest to talk about the service uses its own holding line.
+      safeReply: restUnknown ? `${miles}${REST_UNKNOWN_LINE}` : undefined,
+    }
+  }
   if (inventsEnvironment(reply)) return {
     why: 'invented weather or traffic information', hint: ' No weather or traffic feed is available. Say what is unknown without guessing conditions.',
     unusable: true, safeReply: NO_ENVIRONMENT_LINE,
@@ -242,7 +260,7 @@ export function driverReplyProblem(reply, { offer, text, load = null, driver = n
   }
   if (inventedRestEta(reply, text, offer, driver, load)) {
     const place = offer?.state ? `${offer.city}, ${offer.state}` : offer?.city
-    const miles = offer?.miles == null ? '' : `I'm about ${offer.miles.toLocaleString('en-US')} road miles from ${place}, but `
+    const miles = offer?.miles == null ? '' : `I'm about ${offer.miles.toLocaleString('en-US')} road miles from ${place}. `
     const recorded = !offer && load?.etaAt && clockDateTime(load.etaAt)
     return {
       why: 'gave an unverified rest end or arrival time',
@@ -252,7 +270,7 @@ export function driverReplyProblem(reply, { offer, text, load = null, driver = n
       unusable: true,
       safeReply: (offer?.makesIt === false ? cannotMakeLine(offer) : null)
         ?? (recorded ? `I'm due into ${load.destinationCity} around ${recorded}.` : null)
-        ?? `${miles}I don't have a confirmed end time for this rest, so I can't give you a reliable arrival time yet.`,
+        ?? `${miles}${REST_UNKNOWN_LINE}`,
     }
   }
   if (deliveryCommitment(reply, text, offer)) {

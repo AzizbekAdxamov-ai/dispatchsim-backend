@@ -193,7 +193,7 @@ test('the observed resting-driver legal ETA and timezone claims stay unverified;
   assert.match(prompt, /truck record does not list a trailer type/)
   assert.match(prompt, /Trailer length is not recorded/)
   assert.doesNotMatch(prompt, /Driving time left today:|53-foot|48-foot/)
-  assert.match(offerLines(offer).join('\n'), /rest end time is not verified/)
+  assert.match(offerLines(offer).join('\n'), /You don't know when your ten is up/)
 })
 
 test('actual street acceptance is recognized but cannot confirm a rate without the correct MC', async () => {

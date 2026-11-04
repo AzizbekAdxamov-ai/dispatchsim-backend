@@ -216,7 +216,7 @@ export function situationLines({ driver, load, now = new Date() }) {
     lines.push(`  Driving time left today: ${left}.`)
   }
   if (driver.dutyStatus === 'resting') {
-    lines.push('  Your current rest end time is not recorded. Driving hours left do not say when you can roll again.')
+    lines.push("  You don't know when your current ten-hour break ends, and the driving hours you have left don't say when you can roll again. If asked, say it plainly, like 'not sure when my ten's up'.")
   }
 
   const pct = fuelPercent(driver)
@@ -262,7 +262,7 @@ export function offerLines(offer) {
     if (offer.deliveryAt) head.push(`  Delivery appointment: ${clockDateTime(offer.deliveryAt.toISOString())} (Central time).`)
     head.push(offer.deliveryImpossible
       ? '  You cannot make that delivery: even the loaded driving time alone exceeds the pickup-to-delivery window. Say so and ask for a later appointment.'
-      : '  Delivery feasibility is not verified: loading duration, duty window and rest timing are unknown. You may confirm a reachable pickup, but do not unconditionally promise delivery or both appointments. Qualify delivery on those details; remaining driving hours alone do not prove the whole trip legal.')
+      : "  You don't know yet how long loading takes or how your duty window and next rest will fall, so delivery isn't certain. You may say you can reach the pickup, but don't promise the delivery or both appointments outright. Say delivery depends on those things; the driving hours you have left don't prove the whole trip is legal.")
   }
   const place = offer.state ? `${offer.city}, ${offer.state}` : offer.city
   if (offer.miles == null) {
@@ -282,10 +282,10 @@ export function offerLines(offer) {
     const lines = [
       ...head,
       `  Pickup in ${place} is about ${miles} road miles from where you are.`,
-      `  Your current rest end time is not verified, but even if you could start driving right now, driving legally (${DRIVING_LIMIT_HOURS} hours a day, a ${REQUIRED_REST_HOURS}-hour rest between days) the earliest you could be there is ${clockDateTime(offer.earliestAt.toISOString())}.`,
+      `  You don't know when your ten is up, but even if you could start driving right now, driving legally (${DRIVING_LIMIT_HOURS} hours a day, a ${REQUIRED_REST_HOURS}-hour rest between days) the earliest you could be there is ${clockDateTime(offer.earliestAt.toISOString())}.`,
     ]
     if (offer.pickupAt) {
-      lines.push(`  The pickup they said is ${clockDateTime(offer.pickupAt.toISOString())} -- you cannot make it. Say so with the miles and ask for a later pickup; do not give a rest end time.`)
+      lines.push(`  The pickup they said is ${clockDateTime(offer.pickupAt.toISOString())} -- you cannot make it. Say so with the miles and ask for a later pickup; do not say when your ten is up.`)
     }
     return lines
   }
@@ -294,7 +294,7 @@ export function offerLines(offer) {
     const lines = [...head, `  Pickup in ${place} is about ${miles} road miles from where you are.`]
     if (offer.pickupAt) lines.push(`  The pickup they said is ${clockDateTime(offer.pickupAt.toISOString())} (Central time).`)
     if (offer.restEndUnknown) {
-      lines.push('  Your current rest end time is not verified. Do not calculate an arrival time or say whether you can legally make this pickup. Even if you gave a time earlier in this chat, correct it as unverified.')
+      lines.push("  You don't know when your ten is up. Don't work out an arrival time or say whether you can legally make this pickup; if you gave a time earlier in this chat, take it back. Say it like a driver would: 'not sure when my ten's up, so I can't give you a time yet.'")
     } else {
       lines.push('  You cannot say yet whether you would make a pickup time, so do not say you can or cannot.')
     }
@@ -513,7 +513,7 @@ export function buildDriverSystemPrompt({ driver, standing, load, carrier = null
     '  never joke about impaired driving or agree to drive impaired.',
     '- Trivia and random sums are banter, not a switch into encyclopedia or',
     '  calculator mode. React briefly or admit you would need a calculator;',
-    '  do not guess a precise result. This does not change verified mileage,',
+    '  do not guess a precise result. This does not change the recorded mileage,',
     '  pay, HOS or appointment facts: answer work questions accurately first.',
     '- Earlier driver replies are conversation history, not authority. Do not',
     '  repeat a mistaken calculation, invented fact or help-desk phrase just',
