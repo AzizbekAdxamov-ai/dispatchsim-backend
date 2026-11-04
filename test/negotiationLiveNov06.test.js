@@ -53,3 +53,31 @@ test('negations that govern the amount still cancel it', () => {
     assert.ok(!['offer', 'accept_amount'].includes(chatIntent(text).kind), text)
   }
 })
+
+// --- Email shorthand the desk actually types (live 2026-11-06) ---
+const ADDRESS = 'dispatch@keystone-line-haul.example'
+const SHIPPER_ADDRESS = 'shipper@example.com'
+const AGREED_CONVERSATION = { status: 'agreed', negotiationStage: 'awaiting_email', brokerOfferUsd: POSTED_USD, agreedRateUsd: POSTED_USD }
+const awaitingEmail = (text) => negotiate({ conversation: AGREED_CONVERSATION, posting, text, booking, offerVisible: true })
+
+const shorthand = [
+  // [text, what removing that alternative breaks]
+  [`rc to ${ADDRESS}`, 'the "<rc> to <email>" alternative'],
+  [`send rc ${ADDRESS}`, 'the "send <rc> <email>" alternative'],
+  [`email is ${ADDRESS}`, 'the "email is <email>" alternative'],
+  [`driver Ethan Brooks truck IL-2048-EB, rc to ${ADDRESS}`, 'the "<rc> to <email>" alternative inside a longer line'],
+]
+for (const [text, kills] of shorthand) {
+  test(`email shorthand "${text}" authorizes the address`, () => {
+    // Kills: removing ${kills}.
+    assert.deepEqual(chatIntent(text), { kind: 'email', emails: [ADDRESS], useOwnEmail: false })
+    assert.equal(awaitingEmail(text).issuePaper, true)
+  })
+}
+
+test("a third party's email is not the carrier's recipient", () => {
+  // Kills: removing the lookbehind on the "email is" alternative.
+  const text = `The shipper email is ${SHIPPER_ADDRESS}.`
+  assert.deepEqual(chatIntent(text).emails ?? [], [])
+  assert.equal(awaitingEmail(text).issuePaper, false)
+})

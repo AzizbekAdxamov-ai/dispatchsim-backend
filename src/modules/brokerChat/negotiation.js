@@ -176,6 +176,11 @@ function authorizedRecipient(src) {
     const instruction = /\b(?:my|our) (?:(?:company|carrier|contact|dispatch) )?e-?mail\s*(?:is|:)?\s+EMAILTOKEN\d+/i.test(clause)
       || /\b(?:send|email)\b[^.!?]{0,65}\bto\s+EMAILTOKEN\d+/i.test(clause)
       || /\b(?:use|recipient(?: is|:)?)\s+EMAILTOKEN\d+/i.test(clause)
+      // Desk shorthand: "rc to x@y", "send rc x@y", "email is x@y". The
+      // last is the carrier's own only when no third party owns the email.
+      || /\b(?:rc|rate ?con(?:firmation)?|ratecon|paperwork)\s+to\s+EMAILTOKEN\d+/i.test(clause)
+      || /\bsend\s+(?:the\s+|over\s+(?:the\s+)?)?(?:rc|rate ?con(?:firmation)?|ratecon|paperwork)\s+(?:over\s+)?(?:to\s+)?EMAILTOKEN\d+/i.test(clause)
+      || /(?<!\b(?:shipper|receiver|consignee|broker|his|her|their)(?:'s)?\s+(?:\w+\s+)?)\be-?mail\s*(?:is|:)\s+EMAILTOKEN\d+/i.test(clause)
       || /\bput\s+(?:(?:it|the (?:rate confirmation|rate con|ratecon|paperwork))\s+(?:on|to)\s+EMAILTOKEN\d+|EMAILTOKEN\d+\s+on\s+(?:the\s+)?(?:rate confirmation|rate con|ratecon|paperwork))\b/i.test(clause)
     const question = /\?/.test(clause) && !/\b(?:send|email)\b[^.!?]{0,65}\bto\s+EMAILTOKEN\d+/i.test(clause)
     if ((emailOnly || instruction) && !question) authorized.push(addresses[Number(tokens[0][1])])
