@@ -50,6 +50,10 @@ export const INVOICE_CTE = `
       -- The fallback keeps rows written before migration 019 readable.
       coalesce(l.invoice_due_at, l.delivered_at + (${termsIntervalSql()})) AS "dueAt"
     FROM loads l
+    -- A cancelled load (migration 072) was never worked and never will be:
+    -- no invoice, not even a draft. Without this it reads as deliveredAt
+    -- IS NULL, so it showed up as a draft and inflated the draft count.
+    WHERE l.status <> 'cancelled'
   ),
   invoice_status AS (
     SELECT ib.*,
@@ -204,17 +208,22 @@ export async function getInvoiceKpis() {
 // netProfit/marginPct/rpm are all fractional money, computed in JS (see
 // the file header). Every load, not just delivered ones, matching
 // financeData.js's loadProfitability (built from ALL of `loads`).
-export async function listProfitabilityRows() {
-  const result = await query(
-    `SELECT
+// Exported so the test can run it inside a rolled-back transaction (the
+// pool-backed query() below would never see uncommitted fixture rows).
+// A cancelled load earned nothing: its rate must not reach revenue or
+// gross margin.
+export const PROFITABILITY_SQL = `SELECT
        l.id AS "loadId", l.origin_city AS "originCity", l.origin_state AS "originState",
        l.destination_city AS "destinationCity", l.destination_state AS "destinationState",
        l.broker, l.rate_usd AS "rateUsd", l.distance_mi AS "distanceMi",
        d.pay_model AS "payModel", d.pay_percent_bp AS "payPercentBp", d.pay_per_mile_cents AS "payPerMileCents"
      FROM loads l
      LEFT JOIN drivers d ON d.id = l.driver_id
-     ORDER BY l.pickup_at DESC`,
-  )
+     WHERE l.status <> 'cancelled'
+     ORDER BY l.pickup_at DESC`
+
+export async function listProfitabilityRows() {
+  const result = await query(PROFITABILITY_SQL)
   return result.rows
 }
 
