@@ -302,9 +302,8 @@ export async function sendMessage({ conversationId, userId, text }, { deps = DEF
         // Second layer for a price: a regenerated reply that still misquotes
         // the rate is never sent. The server's own line goes out instead,
         // whatever safeReply carries, because model text cannot be trusted.
-        reply = remaining.why === RATE_MISS_REASON && decision.line
-          ? decision.line
-          : remaining.safeReply ?? decision.line ?? FALLBACK_REPLY
+        reply = remaining.safeReply ?? decision.line ?? FALLBACK_REPLY
+        if (remaining.why === RATE_MISS_REASON && decision.line) reply = decision.line
         usedFallback = true
       }
       else if (remaining) console.warn(`[brokerChat] regenerated reply still ${remaining.why}`)
