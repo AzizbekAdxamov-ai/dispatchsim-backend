@@ -409,3 +409,20 @@ test('future approval conditions keep recipient unauthorized without losing a se
     assert.equal(step(text, accepted).issuePaper, true, text)
   }
 })
+
+test('an unlabelled-dollar split reply with the posted linehaul is a rate miss', () => {
+  // Posted split quote 3,900 linehaul + 1,406 fuel = 5,306 total (named, not magic).
+  const SPLIT_TOTAL = 5306
+  const SPLIT_FUEL = 1406
+  const splitPosting = fakePosting({ rateUsd: SPLIT_TOTAL, rateBasis: 'linehaul-plus-fuel', fuelSurchargeUsd: SPLIT_FUEL, distanceMi: 900 })
+  const decision = negotiate({ conversation: {}, posting: splitPosting, text: 'what is the rate?', booking, offerVisible: true })
+  assert.equal(decision.state.offer, SPLIT_TOTAL)
+  // Kills: reverting the linehaul/fuel label -> financial rule (the line is then never classed as money).
+  assert.match(negotiationReplyProblem('3,700 linehaul + 1,406 fuel = 5,106.', decision), /other than the authoritative decision/)
+  assert.equal(negotiationReplyProblem('3,900 linehaul + 1,406 fuel = 5,306.', decision), null)
+  // Kills: reverting the label rule alone -- a labelled figure with no sum is not money.
+  assert.match(negotiationReplyProblem('Linehaul is 3,700 on this one.', decision), /other than the authoritative decision/)
+  // Kills: dropping the +/= sum rule -- an unlabelled wrong total slips by.
+  assert.match(negotiationReplyProblem('3,900 + 1,406 = 5,106.', decision), /other than the authoritative decision/)
+  assert.equal(negotiationReplyProblem('3,900 + 1,406 = 5,306.', decision), null)
+})

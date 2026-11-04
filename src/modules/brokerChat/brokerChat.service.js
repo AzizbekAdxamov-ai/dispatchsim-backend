@@ -19,7 +19,7 @@ import { AppError } from '../../lib/errors.js'
 import { stripSpeakerLabel } from '../../lib/speakerLabel.js'
 import { getCarrier, carrierEmail } from '../carrier/carrier.repository.js'
 import { findById } from '../auth/users.repository.js'
-import { negotiate } from './negotiation.js'
+import { negotiate, RATE_MISS_REASON } from './negotiation.js'
 import { buildBrokerContext } from './brokerContext.js'
 import * as repo from './brokerChat.repository.js'
 import { talkFacts } from '../../constants/freightTerms.js'
@@ -299,7 +299,12 @@ export async function sendMessage({ conversationId, userId, text }, { deps = DEF
       }))
       const remaining = brokerReplyProblem(reply, checkFacts)
       if (remaining?.unusable) {
-        reply = remaining.safeReply ?? decision.line ?? FALLBACK_REPLY
+        // Second layer for a price: a regenerated reply that still misquotes
+        // the rate is never sent. The server's own line goes out instead,
+        // whatever safeReply carries, because model text cannot be trusted.
+        reply = remaining.why === RATE_MISS_REASON && decision.line
+          ? decision.line
+          : remaining.safeReply ?? decision.line ?? FALLBACK_REPLY
         usedFallback = true
       }
       else if (remaining) console.warn(`[brokerChat] regenerated reply still ${remaining.why}`)

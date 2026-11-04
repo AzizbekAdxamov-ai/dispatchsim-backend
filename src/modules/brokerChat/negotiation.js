@@ -19,6 +19,8 @@ const MORE = /\b(?:do better|need more|pay more|(?:to{1,2}|kinda) low|too cheap|
 const QUOTED = /["“][^"”]*["”]|(?<!\w)'[^'\n]{2,}'(?!\w)/g
 const HYPOTHETICAL = /\b(?:if|unless|hypothetically|example|suppose|said|quoted|asks?|asking whether|what if|would you accept)\b/i
 const NEGATIVE = /\b(?:not|never|can't|cannot|won't|don't|didn't|do not|isn't|is not|haven't)\b/i
+// The reason negotiationReplyProblem gives for any misquoted price; the service keys its server-line fallback on it.
+export const RATE_MISS_REASON = 'offered a rate other than the authoritative decision'
 const amountValue = (token) => {
   const value = Number(token.replaceAll(',', '').replace(/k$/i, '')) * (/k$/i.test(token) ? 1000 : 1)
   return Math.abs(value - Math.round(value)) < 1e-8 ? Math.round(value) : value
@@ -485,16 +487,26 @@ export function negotiationReplyProblem(reply, decision) {
       const accessorial = /\b(?:detention|layover|lumper|tonu|tolls?|driver[- ]?assist)\s*(?:is|:|of|at)?\s*$/i.test(before)
         || /^\s*(?:for\s+)?(?:detention|layover|lumper|tonu|tolls?|driver[- ]?assist)\b/i.test(after)
       if (units || accessorial) continue
-      const financial = match[1] !== undefined || /all[- ]?in|\b(?:rate|offer|pay|do|ask|asked|requested|looking for|works|agreed|confirmed)\b/i.test(`${before} ${after}`)
-      if (!financial) continue
-      lastReferencedAmount = amount
       // A component is valid only under its own label; equal numeric values
       // do not turn fuel into total or an unapproved total into linehaul.
       const fuelLabel = /^\s*(?:for\s+)?fuel(?: surcharge)?\b/i.test(after) || /\bfuel(?: surcharge)?\s*(?:is|:|of|at)?\s*$/i.test(before)
       const linehaulLabel = /^\s*linehaul\b/i.test(after) || /\blinehaul\s*(?:is|:|of|at)?\s*$/i.test(before)
+      // A figure beside a + or = in a split quote is an arithmetic line
+      // ("3,700 linehaul + 1,406 fuel = 5,106"): its unlabelled sum is money
+      // too, so a wrong total cannot slip past as plain digits.
+      const inSplitSum = splitQuote !== null && (/[+=]\s*$/.test(before) || /^\s*[+=]/.test(after))
+      // A component label makes a bare number money even with no $ or rate word.
+      const financial = match[1] !== undefined || fuelLabel || linehaulLabel || inSplitSum
+        || /all[- ]?in|\b(?:rate|offer|pay|do|ask|asked|requested|looking for|works|agreed|confirmed)\b/i.test(`${before} ${after}`)
+      if (!financial) continue
+      lastReferencedAmount = amount
       if (splitQuote && (fuelLabel || linehaulLabel)) {
         const expected = fuelLabel ? [splitQuote.fuelSurchargeUsd] : allowed.map((total) => total - splitQuote.fuelSurchargeUsd)
         if (expected.includes(amount)) continue
+      } else if (inSplitSum) {
+        // Unlabelled in a sum: only fuel, the total, or total minus fuel are true.
+        const sumFigures = [splitQuote.fuelSurchargeUsd, ...allowed, ...allowed.map((total) => total - splitQuote.fuelSurchargeUsd)]
+        if (sumFigures.includes(amount)) continue
       } else if (allowed.includes(amount)) continue
       const attributed = /\byou(?:'re| are| were)\s+(?:looking|asking|aiming|hoping)\s+for\s*$/i.test(before)
         || /\byou\s+(?:asked(?: for)?|requested|wanted)\s*$/i.test(before)
@@ -504,14 +516,14 @@ export function negotiationReplyProblem(reply, decision) {
         || /\b(?:approved|accepted|agreed|confirmed)\b/i.test(after)
         || /^\s*[,;:]?\s*(?:(?:ask|request)\s+)?(?:works|(?:will|would)\s+work|(?:sounds|looks)\s+(?:good|fine)|(?:is|will be)\s+fine|deal)\b/i.test(after)
       const requestedAmount = splitQuote && linehaulLabel ? decision.intent.rateUsd - splitQuote.fuelSurchargeUsd : decision.intent.rateUsd
-      if (!(attributed && !committed && amount === requestedAmount)) return 'offered a rate other than the authoritative decision'
+      if (!(attributed && !committed && amount === requestedAmount)) return RATE_MISS_REASON
     }
     // A quoted ask cannot become a payment promise through a later pronoun.
     // Track the latest monetary referent so a subsequent authorized offer can
     // still be followed by "I can pay that" without inheriting the old ask.
     if (lastReferencedAmount !== null && !allowed.includes(lastReferencedAmount)
       && /\b(?:i|we)(?:'ll|'d)?\s+(?:(?:can|will|would)\s+)?(?:pay|offer|match|meet|accept|approve|agree to)\s+(?:that|it|your (?:ask|rate|request))\b|\b(?:that|it)(?:(?:'s| is| will be)\s+(?:approved|accepted|agreed|confirmed|fine)|\s+(?:works|sounds good))\b/i.test(clause)
-      && !NEGATIVE.test(clause)) return 'offered a rate other than the authoritative decision'
+      && !NEGATIVE.test(clause)) return RATE_MISS_REASON
   }
   if (decision.state.agreed === null) {
     const assertions = text.replace(EMAIL, ' ').split(/(?<=[.!?;])\s+|\b(?:but|however)\b/i)
