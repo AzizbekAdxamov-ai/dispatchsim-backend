@@ -15,7 +15,13 @@ const ACCEPT = /^(?:(?:ok(?:ay)?|yes|great|thanks)[,!. ]+)*(?:i(?:'ll| will)|we(
 const NATURAL_ACCEPT = /^(?:ok(?:ay)?\s+)?(?:let'?s book it|let'?s do it|the rate works(?:\s+we can book it)?|works for me|that works|it'?s fine|that'?s fine|deal|send (?:the )?(?:rc|rate con)|confirmed|sounds good(?:,?\s+book it)?|we(?:'ll| will) take it|i(?:'ll| will) take it)[.!]?$/i
 const HOLD = /\b(?:hold (?:off|up)|on hold|not ready|don't (?:book|send|issue|confirm)|do not (?:book|send|issue|confirm)|not (?:book|confirm|accept)(?:ing|ed)? yet|before (?:we|i) (?:book|confirm)|let me (?:check|confirm|verify)|gotta check (?:with )?(?:my|our|the) driver|wait for (?:my|our) confirmation|cancel (?:it|this|the load)|release (?:it|this|the load))\b/i
 const WALK = /\b(?:i(?:'ll| will) pass|we(?:'ll| will) pass|pass on (?:it|this)|walk away|find another (?:truck|carrier))\b/i
-const MORE = /\b(?:do better|need more|pay more|(?:to{1,2}|kinda) low|too cheap|more money|bump (?:it|the rate)|add (?:a )?(?:little|litle)(?: bit)?|what(?:'s| is) your best|work (?:on|with me on) (?:the |ur |your )?rate|(?:come on,?\s+)?(?:a\s+)?(?:little|lil|litle)(?:\s+bit)?\s+more(?=\s*(?:[?.!,]|$|pls\b|please\b|on (?:the |ur |your )?rate\b|money\b)))\b/i
+const MORE = /\b(?:do better|too light|need more|pay more|(?:to{1,2}|kinda) low|too cheap|more money|bump (?:it|the rate)|add (?:a )?(?:little|litle)(?: bit)?|what(?:'s| is) your best|work (?:on|with me on) (?:the |ur |your )?rate|(?:come on,?\s+)?(?:a\s+)?(?:little|lil|litle)(?:\s+bit)?\s+more(?=\s*(?:[?.!,]|$|pls\b|please\b|on (?:the |ur |your )?rate\b|money\b)))\b/i
+// A negation only governs the words after the last of these: in "I can't cover
+// that rate, can u do 8975" the comma ends the refusal, so the ask still counts.
+const NEGATION_SCOPE_BOUNDARY = /,|\bbut\b|\bso\b/gi
+// "I can't do 7300" refuses a price without naming a new one: a push, no amount.
+// The figure must not be a unit (hours, miles, lbs).
+const REJECT_PRICE = new RegExp(`\\b(?:can't|cant|cannot|won't|wont)\\s+(?:do|take it for|run it for)\\s+${MONEY}(?![\\d.,]|\\s*(?:hrs?|hours?|mi|miles?|lbs?)\\b)`, 'i')
 const QUOTED = /["“][^"”]*["”]|(?<!\w)'[^'\n]{2,}'(?!\w)/g
 const HYPOTHETICAL = /\b(?:if|unless|hypothetically|example|suppose|said|quoted|asks?|asking whether|what if|would you accept)\b/i
 const NEGATIVE = /\b(?:not|never|can't|cannot|won't|don't|didn't|do not|isn't|is not|haven't)\b/i
@@ -136,8 +142,16 @@ function intentText(raw) {
   return result + normalize(src.slice(position))
 }
 
-// Recipient authorization is checked once, per clause, before every intent branch.
+// True when a negation sits in the stretch of the clause that leads into this
+// match: from the last scope boundary before it to the end of the match.
+function negatedLocally(clause, match) {
+  let start = 0
+  for (const boundary of clause.slice(0, match.index).matchAll(NEGATION_SCOPE_BOUNDARY)) start = boundary.index + boundary[0].length
+  return NEGATIVE.test(clause.slice(start, match.index + match[0].length))
+}
+
 // Mask addresses while splitting so their dots cannot detach a negation or condition.
+// Recipient authorization is checked once, per clause, before every intent branch.
 function authorizedRecipient(src) {
   const addresses = []
   const masked = src.replace(QUOTED, ' ').replace(EMAIL, (email) => {
@@ -216,7 +230,10 @@ export function chatIntent(raw, rateSource = null) {
     // hypothetical story. Preserve every other conditional/quotation veto.
     const concreteExample = [...clause.matchAll(EXAMPLE_OFFER)].length > 0
     const hypotheticalText = concreteExample ? clause.replace(/\bfor (?:example|exaple|exapmle|exmaple|exampel)\b/gi, '') : clause
-    if (HYPOTHETICAL.test(hypotheticalText) || NEGATIVE.test(clause)
+    // Hypotheticals and quotes void the whole clause. A plain negation voids
+    // only what it governs (see negatedLocally), so one refusal does not eat
+    // a later ask in the same clause.
+    if (HYPOTHETICAL.test(hypotheticalText)
       || /\bif\b[^.!?]{0,40}\bmight\s+take\b/i.test(clause)) continue
     // An accessorial charge is not the load's linehaul. A mixed financial
     // sentence is clarified rather than guessing which amount is the deal.
@@ -225,15 +242,18 @@ export function chatIntent(raw, rateSource = null) {
     if (/\b(?:per\s+mile|a\s+mile|\/\s*mi)\b/i.test(clause)) continue
     for (const pattern of [OFFER, ACCEPT_AT, EXAMPLE_OFFER]) {
       for (const m of clause.matchAll(pattern)) {
+        if (negatedLocally(clause, m)) continue
         const tail = clause.slice(m.index + m[0].length)
         if (/^\s*(?:[-/]\s*\d|(?:lbs?|pounds?|miles?|mi|ft|feet|gal|hours?|hrs?|per|\/|%|am|pm)\b)/i.test(tail)) continue
         addAmount(m[1], clause)
         if (pattern === ACCEPT_AT) acceptsAmount = true
       }
     }
-    const first = AMOUNT_FIRST.exec(clause)
+    // An amount-first or "let's" phrase has no verb to carry its own negation,
+    // so a negation anywhere in the clause still voids it.
+    const first = NEGATIVE.test(clause) ? null : AMOUNT_FIRST.exec(clause)
     if (first) { addAmount(first[1], clause); acceptsAmount = true }
-    const lets = LETS_OFFER.exec(clause)
+    const lets = NEGATIVE.test(clause) ? null : LETS_OFFER.exec(clause)
     if (lets) addAmount(lets[1], clause)
   }
   const unique = [...new Set(amounts)]
@@ -254,7 +274,7 @@ export function chatIntent(raw, rateSource = null) {
   if (!NEGATIVE.test(acceptance) && !HYPOTHETICAL.test(acceptance) && ACCEPT.test(acceptance)) return { kind: 'accept', emails, useOwnEmail }
   if (emails.length === 1 || useOwnEmail) return { kind: 'email', emails, useOwnEmail }
   if (WALK.test(src)) return { kind: 'walk' }
-  if (MORE.test(src) || keyed?.kind === 'push') return { kind: 'push', ...(keyed?.reason ? { reason: keyed.reason } : {}) }
+  if (MORE.test(src) || REJECT_PRICE.test(src) || keyed?.kind === 'push') return { kind: 'push', ...(keyed?.reason ? { reason: keyed.reason } : {}) }
   return { kind: 'talk' }
 }
 
