@@ -2,7 +2,9 @@
 // "3,700 linehaul + 1,406 fuel = 5,106." -- a wrong sum, sent twice.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { negotiate } from '../src/modules/brokerChat/negotiation.js'
+import { negotiate, negotiationLines } from '../src/modules/brokerChat/negotiation.js'
+import { brokerReplyProblem } from '../src/modules/brokerChat/replyProblem.js'
+import { buildBrokerContext } from '../src/modules/brokerChat/brokerContext.js'
 import { sendMessage } from '../src/modules/brokerChat/brokerChat.service.js'
 import { makeFakeBrokerRepo, fakePosting, FAKE_IDS } from './helpers/fakeBrokerRepo.js'
 
@@ -30,4 +32,41 @@ test('a regenerated reply that still misquotes is replaced by the server line', 
   assert.equal(calls, 2)
   assert.equal(saved, decision.line)
   assert.doesNotMatch(saved, /5,106\./)
+})
+
+// --- #13: "authorized email" help-desk wording ---
+const LIVE_JARGON = [
+  'Great, $6,000 all-in is locked in. Could you send the authorized email address so we can get the paperwork over?',
+  'Rate $3,650 all-in confirmed. Please provide the authorized email for the paperwork.',
+  'The rate is $4,050 all-in, agreed. Please provide the authorized recipient email for the paperwork.',
+  'Please provide the authorized email address so we can send the paperwork.',
+]
+const AUTH_WORDS = /authori[sz]ed (?:email|recipient)/i
+
+test('help-desk "authorized email" wording is replaced with a plain ask', () => {
+  for (const reply of LIVE_JARGON) {
+    const p = brokerReplyProblem(reply, { posting: fakePosting(), text: 'ok lets book it' })
+    // Kills: removing AUTH_JARGON_RE.
+    assert.equal(p?.why, 'used help-desk wording for the email request', reply)
+    assert.equal(p.unusable, true)
+    assert.doesNotMatch(p.safeReply, AUTH_WORDS)
+  }
+  // Kills: AUTH_JARGON_RE matching any use of "email".
+  assert.equal(brokerReplyProblem('What email should I send the rate con to?', { posting: fakePosting(), text: 'ok lets book it' }), null)
+})
+
+test('the broker prompt no longer tells the model to say "authorized" or "recipient"', () => {
+  const decision = negotiate({ conversation: { status: 'agreed', negotiationStage: 'awaiting_email', brokerOfferUsd: POSTED_TOTAL, agreedRateUsd: POSTED_TOTAL },
+    posting: split, text: 'ok lets book it', booking: mcBooking, offerVisible: true })
+  assert.equal(decision.state.stage, 'awaiting_email')
+  const lines = negotiationLines(decision).join(' ')
+  // Kills: reverting the awaiting_email line in negotiation.js.
+  assert.doesNotMatch(lines, AUTH_WORDS)
+  assert.match(lines, /which email to send the rate con to/)
+  const carrier = { name: 'Keystone Line Haul', mcNumber: 'MC-741309' }
+  const built = buildBrokerContext({ broker: { name: 'Blue Meridian Logistics', contactName: 'Priyanka', persona: 'Formal.' }, posting: split, carrier,
+    now: new Date(), thread: [{ role: 'dispatcher', content: 'ok lets book it' }], booking: mcBooking, negotiation: decision })
+  // Kills: reverting the brokerContext.js paper line.
+  assert.doesNotMatch(built.systemPrompt, AUTH_WORDS)
+  assert.match(built.systemPrompt, /caller.email is only a mentioned contact and cannot replace it/)
 })

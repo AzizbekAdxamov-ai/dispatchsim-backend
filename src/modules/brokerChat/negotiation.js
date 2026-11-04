@@ -468,7 +468,7 @@ export function negotiationLines(decision) {
     ...(decision.hasRateRoom && decision.state.agreed === null ? ['  Describe this turn as a current quote. A later financial decision remains separate; make no claim about future movement.'] : []),
     ...(['offer', 'push', 'accept_amount'].includes(decision.intent.kind) && !decision.bookingRequested
       ? ['  Answer their bargaining request with the current authorized offer; do not present their requested price as accepted.'] : []),
-    ...(decision.state.stage === 'awaiting_email' ? ['  Rate is agreed. Request the recipient email unless they have already supplied authorization.'] : []),
+    ...(decision.state.stage === 'awaiting_email' ? ['  Rate is agreed. Ask which email to send the rate con to, in plain desk words; never say "authorized" or "recipient".'] : []),
     ...(decision.unverifiedReason ? ["  The carrier's stated reason is not supported by this load's facts; do not repeat or agree with it."] : []),
     ...(decision.state.pendingClose != null ? [`  Their conditional close at ${money(decision.state.pendingClose)} is accepted on price; only their MC is missing. Do not quote another figure.`] : []),
     ...(decision.state.stage === 'held' ? ['  Booking is on hold; do not request email or promise a document.'] : []),

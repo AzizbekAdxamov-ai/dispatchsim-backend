@@ -33,6 +33,10 @@ import { asciiPunct } from '../../lib/plainText.js'
 // identity form (live 2026-11-03 #109).
 export const GIVES_MC = /\bMC\s*(?:#|no\.?|number)?\s*:?\s*\d{4,8}\b/i
 export const WRONG_MC_LINE = "That MC isn't showing up on our end. What's your correct MC?"
+// Help-desk phrasing for "what email should I send the rate con to?" (live
+// 2026-11-06: "provide the authorized email address"). A broker just asks.
+const AUTH_JARGON_RE = /\bauthori[sz]ed\s+(?:e-?mail(?:\s+address)?|recipient|address)\b|\brecipient\s+e-?mail\b/i
+const ASK_EMAIL_LINE = 'What email should I send the rate con to?'
 const MARKDOWN = /\*\*|__|`/
 const HELP_DESK_CLOSING = /please let me know if you have any other concerns|thank you,?\s*mc\b/i
 const QUESTION_MARK = /\?/g
@@ -172,6 +176,11 @@ export function brokerReplyProblem(reply, {
       why: rateProblem, hint,
       unusable: true, safeReply: negotiation.line ?? `My offer is ${quoteText(negotiation.rateQuote ?? {}, negotiation.state.offer)}.`,
     }
+  }
+  if (AUTH_JARGON_RE.test(reply)) return {
+    why: 'used help-desk wording for the email request',
+    hint: ' Ask which email to send the rate con to, in plain desk words; never say "authorized" or "recipient".',
+    unusable: true, safeReply: negotiation?.line ?? ASK_EMAIL_LINE,
   }
   if (negotiation?.unverifiedReason && echoesCarrierClaim(reply, text ?? '')) return {
     why: "repeated the carrier's unverified claim as fact",
