@@ -25,6 +25,7 @@
 // only if `loads` grows by an order of magnitude.
 
 import { query } from '../../db/pool.js'
+import { placeLabel } from './whereabouts.js'
 
 // Exported for the dispatch board's column queries (loads.service.js):
 // one projection, shared, so the board's cards and the list's rows are
@@ -424,6 +425,12 @@ export async function getDriverForDispatch(client, driverId) {
 // truck's location -- the two are one fact about one place. Until
 // 2026-10-05 nothing wrote these columns at all.
 export async function moveDriverTo(client, { driverId, city, state, lat, lon, label }) {
+  // A place without a name or coordinates is not a place. Skipping leaves
+  // the old location standing; throwing would roll back the delivery.
+  if (!placeLabel(city, state) || !Number.isFinite(lat) || !Number.isFinite(lon)) {
+    console.warn(`moveDriverTo: skipped driver ${driverId}, invalid place`, { city, state, lat, lon })
+    return
+  }
   await client.query(
     `UPDATE drivers
         SET current_city = $2, current_state = $3, current_lat = $4, current_lon = $5,
@@ -452,6 +459,10 @@ export async function claimArrivedLoads(client, limit = 1) {
             -- linked, and the caller checks for that rather than catching.
             l.truck_id AS "truckId", l.dispatched_at AS "dispatchedAt",
             l.pickup_at AS "pickupAt", l.delivery_at AS "deliveryAt",
+            -- Where the run ends. deliveredTo() and the truck's location
+            -- label both read these; without them the label was
+            -- "undefined, undefined" and the driver never moved.
+            l.destination_city AS "destinationCity", l.destination_state AS "destinationState",
             -- Detour miles a resolved event added. They burn fuel, wear
             -- tires and land on the odometer -- but are NOT in
             -- distance_mi, which stays the contracted lane. See

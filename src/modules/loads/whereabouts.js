@@ -15,6 +15,18 @@ import { findCity, roadMiles } from '../../../scripts/seed/cities.js'
 import { AVG_HIGHWAY_MPH } from '../../../scripts/seed/facilities.js'
 import { DRIVING_LIMIT_HOURS, DUTY_WINDOW_HOURS, BREAK_AFTER_DRIVING_HOURS, BREAK_MINUTES, REQUIRED_REST_HOURS } from '../../constants/hosClock.js'
 
+// Strings a template literal produces from a missing value. A place made of
+// one of these is a bug upstream, never a city.
+export const INVALID_PLACE_TOKENS = ['undefined', 'null']
+
+// "City, ST", or null when either part is missing, not a string, empty or
+// a stringified missing value. The one way to build a location label.
+export function placeLabel(city, state) {
+  const parts = [city, state].map((v) => (typeof v === 'string' ? v.trim() : ''))
+  if (parts.some((v) => !v || INVALID_PLACE_TOKENS.includes(v.toLowerCase()))) return null
+  return `${parts[0]}, ${parts[1]}`
+}
+
 // Where a delivered load leaves its driver: the destination, as a place
 // the city list knows (lat/lon included, so the board's road_miles can
 // measure from it). null for a city the list does not know -- the old
@@ -22,7 +34,7 @@ import { DRIVING_LIMIT_HOURS, DUTY_WINDOW_HOURS, BREAK_AFTER_DRIVING_HOURS, BREA
 export function deliveredTo(load) {
   const c = findCity(load?.destinationCity, load?.destinationState)
   if (!c) return null
-  return { city: c.city, state: c.state, lat: c.lat, lon: c.lon, label: `${c.city}, ${c.state}` }
+  return { city: c.city, state: c.state, lat: c.lat, lon: c.lon, label: placeLabel(c.city, c.state) }
 }
 
 // The empty run from where the driver is parked to a load's pickup: road

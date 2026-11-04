@@ -12,7 +12,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { deliveredTo, emptyRunToPickup, emptyRunCheck } from '../src/modules/loads/whereabouts.js'
+import { deliveredTo, emptyRunToPickup, emptyRunCheck, placeLabel } from '../src/modules/loads/whereabouts.js'
 import { livePlace, withLivePlace } from '../src/modules/driverChat/livePlace.js'
 import { situationLines } from '../src/modules/driverChat/driverChat.prompt.js'
 import { findCity, roadMiles } from '../scripts/seed/cities.js'
@@ -95,4 +95,29 @@ test('the driver hears she is on the road, and about the empty miles before the 
   assert.match(lines, /Before this load you were parked in Seattle, WA\. The pickup in Nashville, TN was about 2,\d{3} road miles from there, all of it empty\./)
   const home = situationLines({ driver: { currentCity: 'Nashville', currentState: 'TN', parkedCity: 'Nashville', parkedState: 'TN', dutyStatus: 'driving' }, load: RUN, now: NOW }).join('\n')
   assert.doesNotMatch(home, /all of it empty/)
+})
+
+// Kills: placeLabel going back to a plain `${city}, ${state}` template,
+// which turns a missing part into the text "undefined".
+test('placeLabel refuses missing and stringified-undefined parts', () => {
+  assert.equal(placeLabel('Memphis', 'TN'), 'Memphis, TN')
+  assert.equal(placeLabel(undefined, undefined), null)
+  assert.equal(placeLabel('Memphis', undefined), null)
+  assert.equal(placeLabel('undefined', 'undefined'), null)
+  assert.equal(placeLabel('Memphis', 'null'), null)
+  assert.equal(placeLabel('', 'TN'), null)
+  assert.equal(placeLabel(42, 'TN'), null)
+})
+
+// Kills: removing destination_city / destination_state from the
+// claimArrivedLoads SELECT -- deliveredTo and the truck label read both.
+test('claimArrivedLoads selects every field deliveredTo reads', async () => {
+  const { readFile } = await import('node:fs/promises')
+  const src = await readFile(new URL('../src/modules/loads/loads.repository.js', import.meta.url), 'utf8')
+  const start = src.indexOf('export async function claimArrivedLoads')
+  const end = src.indexOf('export async function markDelivered')
+  assert.ok(start > 0 && end > start, 'claimArrivedLoads not found')
+  const claim = src.slice(start, end)
+  assert.match(claim, /l\.destination_city AS "destinationCity"/)
+  assert.match(claim, /l\.destination_state AS "destinationState"/)
 })

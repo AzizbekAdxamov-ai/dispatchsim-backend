@@ -76,7 +76,7 @@ function dvirRngFor(loadId) {
 import { fromHosDomain, driverHosSnapshot, HOS_LOOKBACK_HOURS } from '../../constants/hosClock.js'
 import * as complianceService from '../compliance/compliance.service.js'
 import { readPreferences, hasRequests, preferenceConflicts, avoidedPlaces } from '../../constants/driverPreferences.js'
-import { deliveredTo, emptyRunCheck } from './whereabouts.js'
+import { deliveredTo, emptyRunCheck, placeLabel } from './whereabouts.js'
 
 // How long the run takes, in simulated days, from the window the broker
 // promised. Floored at half a day so a short local run still has a
@@ -796,7 +796,7 @@ export async function applyRunToTruck(client, load) {
     rearTirePoints,
     // Where the truck now is. Written here and nowhere else: the delivery
     // is the one moment the program knows the answer.
-    endedAtLabel: `${load.destinationCity}, ${load.destinationState}`,
+    endedAtLabel: deliveredTo(load)?.label ?? placeLabel(load.destinationCity, load.destinationState),
   })
   if (!run) return null
 

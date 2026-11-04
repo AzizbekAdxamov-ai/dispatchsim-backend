@@ -5,6 +5,7 @@
 // drivers.repository.js.
 
 import { query } from '../../db/pool.js'
+import { placeLabel } from '../loads/whereabouts.js'
 
 import { DAILY_DISTANCE_CAP_MI, DAILY_GALLONS_CAP, TIRE_LIFE_FRONT_MI, TIRE_LIFE_REAR_MI } from '../../constants/truckWear.js'
 import {
@@ -107,8 +108,20 @@ export async function lockTruckForRun(client, truckId) {
 export async function applyRunToTruck(client, {
   truckId, roadMiles, gallonsFromTank, frontTirePoints, rearTirePoints, endedAtLabel = null,
 }) {
+  // Second guard, behind the caller's: a label like "undefined, undefined"
+  // would be coalesced straight into current_location. It becomes NULL (the
+  // old location stands) and a warning -- not a throw, which would roll back
+  // the delivery and retry it on every tick forever.
+  let label = endedAtLabel
+  if (label != null) {
+    const [city, state, ...rest] = String(label).split(', ')
+    if (rest.length > 0 || !placeLabel(city, state)) {
+      console.warn(`applyRunToTruck: invalid location label ${JSON.stringify(label)} for truck ${truckId}`)
+      label = null
+    }
+  }
   const result = await client.query(APPLY_RUN_TO_TRUCK_SQL, [
-    truckId, roadMiles, gallonsFromTank, frontTirePoints, rearTirePoints, endedAtLabel,
+    truckId, roadMiles, gallonsFromTank, frontTirePoints, rearTirePoints, label,
   ])
   return result.rows[0] ?? null
 }
