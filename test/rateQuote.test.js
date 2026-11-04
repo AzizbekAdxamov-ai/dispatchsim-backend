@@ -9,7 +9,7 @@ import { createLoad } from '../src/modules/loads/loads.repository.js'
 import { sendMessage, getRateConfirmation } from '../src/modules/brokerChat/brokerChat.service.js'
 import { makeFakeBrokerRepo, fakePosting, FAKE_IDS } from './helpers/fakeBrokerRepo.js'
 import { buildListPostingsSql } from '../src/modules/loadBoard/loadBoard.repository.js'
-import { buildPostingRows } from '../scripts/seed/postings.js'
+import { buildPostingRows, roundPostedRate } from '../scripts/seed/postings.js'
 import { generateLoad } from '../scripts/seed/generate.js'
 import { validateLoadItem } from '../scripts/seed/validate.js'
 import { mulberry32 } from '../scripts/seed/build.js'
@@ -150,7 +150,7 @@ test('booking reads the locked frozen quote; load and invoice never add fuel twi
   assert.equal(invoice.lineItems.reduce((sum, i) => sum + i.amountUsd, 0), invoice.amountUsd)
 })
 
-test('board query redacts every hidden rate component; seeded totals are unchanged and both bases exist', () => {
+test('board query redacts every hidden rate component; seeded totals are rounded and both bases exist', () => {
   const sql = buildListPostingsSql({ sort: 'posted', limit: 25, offset: 0 }).text
   for (const column of ['rate_usd', 'rate_basis', 'fuel_surcharge_usd']) assert.ok(sql.includes(`CASE WHEN p.rate_hidden THEN NULL ELSE p.${column} END`))
   assert.match(sql, /CASE WHEN p.rate_hidden OR p.rate_basis = 'all-in' THEN NULL/)
@@ -163,7 +163,10 @@ test('board query redacts every hidden rate component; seeded totals are unchang
   assert.ok(rows.some((row) => row.rate_basis === 'linehaul-plus-fuel'))
   for (const row of rows) {
     const input = items.find((item) => item.originCity === row.origin_city && item.destinationCity === row.destination_city && item.broker === row.broker)
-    assert.equal(row.rate_usd, Math.min(20000, input.distanceMi * 5, Math.max(100, input.distanceMi, Math.round(input.distanceMi * input.ratePerMile))))
+    const lowerBound = Math.max(100, input.distanceMi)
+    const upperBound = Math.min(20000, input.distanceMi * 5)
+    const clamped = Math.min(20000, input.distanceMi * 5, Math.max(100, input.distanceMi, Math.round(input.distanceMi * input.ratePerMile)))
+    assert.equal(row.rate_usd, roundPostedRate({ rateUsd: clamped, fuelUsd: row.fuel_surcharge_usd, lowerBound, upperBound }))
     rateQuote({ rateUsd: row.rate_usd, rateBasis: row.rate_basis, fuelSurchargeUsd: row.fuel_surcharge_usd })
   }
 })

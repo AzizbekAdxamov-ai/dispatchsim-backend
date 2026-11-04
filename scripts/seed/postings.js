@@ -7,7 +7,8 @@
 //
 // Determinism guarantee: timestamps are offset integers (minutes from now()),
 // so md5sum is stable across runs with the same seed. rng() is never called
-// for trailer_type (index-based) — same rule as build.js.
+// for trailer_type (index-based) — same rule as build.js. Rate rounding
+// (roundPostedRate) draws no RNG either, so every other draw stays stable.
 import { findCity, roadMiles } from './cities.js'
 import { rateBandFor } from './validate.js'
 import { drawTransitHours, EQUIP_LENGTHS } from './build.js'
@@ -52,6 +53,18 @@ import { POSTING_CONFIG } from './marketTargets.js'
 // sorting a column. The student has to open the chat and ask, which is
 // how the rate gets negotiated rather than accepted.
 export const HIDDEN_RATE_SHARE = 0.1
+
+// Azizbek qarori 2026-11-06 — brokerlar yaxlit narx e'lon qiladi.
+// Posted amounts at or above the threshold go to the nearest $50, below it to
+// the nearest $25.
+export const RATE_ROUND_THRESHOLD_USD = 1000
+// Azizbek qarori 2026-11-06 — brokerlar yaxlit narx e'lon qiladi.
+export const RATE_ROUND_HIGH_USD = 50
+// Azizbek qarori 2026-11-06 — brokerlar yaxlit narx e'lon qiladi.
+export const RATE_ROUND_LOW_USD = 25
+// Azizbek qarori 2026-11-06 — brokerlar yaxlit narx e'lon qiladi.
+// Linehaul never drops below $1: migration 066 requires 0 < fuel < rate.
+export const MIN_LINEHAUL_USD = 1
 
 // ---------------------------------------------------------------------
 // Tier definitions — the quality spectrum that makes the board educational
@@ -112,6 +125,29 @@ export function nearLoadCoverage(rows, { maxMiles = DEADHEAD_MAX_MI, minimum = M
     counts.set(key, (counts.get(key) ?? 0) + 1)
   }
   return counts.size > 0 && [...counts.entries()].every(([, count]) => count >= minimum)
+}
+
+/**
+ * Round a posted rate to a broker-style round figure and return the new total.
+ *
+ * The step ($50 at or above RATE_ROUND_THRESHOLD_USD, else $25) is judged on
+ * the amount being rounded: the whole rate for all-in postings, the linehaul
+ * (rate minus fuel) for split ones. Fuel never changes, so the total moves by
+ * the linehaul rounding only. Rounding is to the nearest multiple, then pulled
+ * inward to the nearest multiple inside [lowerBound, upperBound] (bounds apply
+ * to the total). If no multiple fits inside the bounds, the unrounded
+ * (already clamped) rateUsd is returned untouched. Pure: no RNG, no clock.
+ */
+export function roundPostedRate({ rateUsd, fuelUsd = 0, lowerBound, upperBound }) {
+  const amount = rateUsd - fuelUsd
+  const lo = Math.max(MIN_LINEHAUL_USD, lowerBound - fuelUsd)
+  const hi = upperBound - fuelUsd
+  const step = amount >= RATE_ROUND_THRESHOLD_USD ? RATE_ROUND_HIGH_USD : RATE_ROUND_LOW_USD
+  let rounded = Math.round(amount / step) * step
+  if (rounded > hi) rounded = Math.floor(hi / step) * step
+  if (rounded < lo) rounded = Math.ceil(lo / step) * step
+  if (rounded < lo || rounded > hi) return rateUsd
+  return rounded + fuelUsd
 }
 
 // Classify items into tiers by deadhead percentile.
@@ -204,12 +240,16 @@ export function buildPostingRows({ rng, postingItems, drivers, trucks, fleetEqui
     const lowerBound = Math.max(100, item.distanceMi)
     const upperBound = Math.min(20000, item.distanceMi * 5)
     const rawRate = Math.round(item.distanceMi * item.ratePerMile)
-    const rateUsd = Math.min(upperBound, Math.max(lowerBound, rawRate))
+    const clampedRate = Math.min(upperBound, Math.max(lowerBound, rawRate))
     // This is a declared seed allocation, not a live DAT fuel surcharge.
     // Stable lane hashing adds variety without changing totals or RNG draws.
+    // Fuel is computed from the clamped rate, before rounding, so rounding
+    // never moves it.
     const split = hash01(`${item.broker}:${item.originCity}:${item.destinationCity}`) < 0.25
       && fuelPerMile(item.equipmentType) !== null
-    const fuelUsd = split ? Math.min(rateUsd - 1, Math.max(1, Math.round(item.distanceMi * fuelPerMile(item.equipmentType)))) : 0
+    const fuelUsd = split ? Math.min(clampedRate - 1, Math.max(1, Math.round(item.distanceMi * fuelPerMile(item.equipmentType)))) : 0
+    // Brokers post round figures; see roundPostedRate. No RNG is drawn.
+    const rateUsd = roundPostedRate({ rateUsd: clampedRate, fuelUsd, lowerBound, upperBound })
 
     // Equipment length: pick from valid lengths for this equipment type
     const equipLengths = EQUIP_LENGTHS[item.equipmentType] || [53]
