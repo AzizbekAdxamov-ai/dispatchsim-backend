@@ -254,3 +254,37 @@ test('actual deadhead counter keeps the requested price and best-we-can-do is no
   // Kills: treating the posted rate as the new authorized counter.
   assert.equal(negotiationReplyProblem(`The best we can do right now is $${decision.state.offer.toLocaleString('en-US')} all-in.`, decision), null)
 })
+
+// Live 2026-11-05, the Chicago→Dallas thread: the dispatcher pushed and the
+// broker never moved, because neither the push nor the finality was read for
+// what it was.
+test('a misspelled example counter raises the offer and a cannot-increase line is a final claim', () => {
+  // Kills: "can add some money for exapmle 3700" read as small talk --
+  // the aliased example word, the missing "you" and "some money" for "more".
+  for (const text of ['can add some money for exapmle 3700', 'can you add more. for exampel 4000.',
+    'sir can add some money for exmaple 4600']) {
+    const intent = chatIntent(text)
+    assert.equal(intent.kind, 'offer', text)
+    assert.ok(intent.rateUsd > 0, text)
+  }
+  const decision = negotiate({
+    // The live shape: the posted quote is 3,500 and the example counter 3,700
+    // sits above it, so the ladder must move the offer upward.
+    posting: fakePosting({ rateUsd: 3500, distanceMi: 900 }),
+    booking, conversation: {},
+    text: 'can add some money for exapmle 3700', offerVisible: true,
+  })
+  assert.equal(decision.intent.kind, 'offer')
+  assert.equal(decision.intent.rateUsd, 3700)
+  assert.ok(decision.state.offer > 3500, `offer did not move: ${decision.state.offer}`)
+  // Kills: the model ending bargaining in other words ("unable to
+  // increase", "can't raise") that the old permanence list did not know.
+  const room = step('Can you do better?')
+  const current = room.state.offer.toLocaleString('en-US')
+  for (const reply of [`Our quote remains $${current} all-in; we're unable to increase it.`,
+    `I can't raise the rate above $${current}.`, 'We are not bumping the rate.']) {
+    assert.match(negotiationReplyProblem(reply, room), /permanent final/, reply)
+  }
+  // Kills: "not included" (fuel) reading as a finality claim.
+  assert.equal(negotiationReplyProblem(`The $${current} is total; fuel is not included in it.`, room), null)
+})

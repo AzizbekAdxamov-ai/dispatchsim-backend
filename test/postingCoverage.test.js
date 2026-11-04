@@ -2,8 +2,8 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { DEADHEAD_MAX_MI, MIN_NEAR_LOADS, TRAP_DH_PCT, nearLoadCoverage, buildNearCoverageRows } from '../scripts/seed/postings.js'
 import { roadMiles } from '../scripts/seed/cities.js'
-import { activeTruckLocations } from '../scripts/refresh-postings.js'
-import { fleetCoverageHealthy } from '../src/jobs/dailyRefresh.js'
+import { activeTruckLocations, withCoveredDestinations } from '../scripts/refresh-postings.js'
+import { fleetCoverageHealthy, coverageOnlyRefresh } from '../src/jobs/dailyRefresh.js'
 import { buildListPostingsSql } from '../src/modules/loadBoard/loadBoard.repository.js'
 import { readFile } from 'node:fs/promises'
 
@@ -27,6 +27,21 @@ test('truck locations and board query include parked trucks and visible 150-mile
   assert.ok(sql.values.includes(150))
 })
 
+// Kills: passing a legacy display label or empty value to generateLoad as
+// an equipment key; known canonical keys must survive without conversion.
+test('active trucks retain valid equipment keys and treat unknown labels as unknown', async () => {
+  const runner = { query: async () => ({ rows: [
+    { id: 'a', trailer_type: 'reefer', current_lat: 1, current_lon: 2 },
+    { id: 'b', trailer_type: 'Dry Van', current_lat: 1, current_lon: 2 },
+    { id: 'c', trailer_type: '', current_lat: 1, current_lon: 2 },
+  ] }) }
+  const trucks = await activeTruckLocations(runner)
+  assert.deepEqual(trucks.map((truck) => truck.trailer_type), ['reefer', null, null])
+  const rows = buildNearCoverageRows({ rng: () => 0.5,
+    drivers: [{ ...trucks[1], current_lat: 41.8781, current_lon: -87.6298 }], brokerIds: new Map() })
+  assert.equal(rows.length, MIN_NEAR_LOADS)
+})
+
 test('coverage health becomes false after visible loads expire or are booked', async () => {
   // Kills: counting expired, future, booked, or fewer than five destination states.
   const calls = []
@@ -36,6 +51,13 @@ test('coverage health becomes false after visible loads expire or are booked', a
   } }
   assert.equal(await fleetCoverageHealthy(runner), false)
   assert.match(calls[1], /status = 'open'.*posted_at <= now\(\).*expires_at > now\(\)/s)
+})
+
+// Kills: triggering a full daily market refresh for a nearby coverage gap.
+test('a nearby gap uses the bounded posting refresh while a depleted market uses the daily refresh', () => {
+  assert.equal(coverageOnlyRefresh(false, false), true)
+  assert.equal(coverageOnlyRefresh(false, true), false)
+  assert.equal(coverageOnlyRefresh(true, true), false)
 })
 
 test('generated coverage supplies five visible destinations at every active location', () => {
@@ -49,6 +71,40 @@ test('generated coverage supplies five visible destinations at every active loca
     assert.ok(near.every((row) => /interval '-\d+ minutes'/.test(row.posted_at.value) && !/interval '-/.test(row.expires_at.value)))
   }
   assert.equal(TRAP_DH_PCT, 0.1)
+})
+
+// Kills: adding five new loads on every refresh even when visible loads
+// already provide four distinct destinations, and counting expired loads.
+test('nearby refresh fills only the missing destination coverage', async () => {
+  const drivers = [{ id: 'a', current_lat: 41.8781, current_lon: -87.6298, duty_status: 'on' }]
+  const calls = []
+  const runner = { query: async (sql, values) => {
+    calls.push({ sql, values })
+    return { rows: ['CA', 'TX', 'FL', 'GA'].map((destination_state) => ({ destination_state })) }
+  } }
+  const covered = await withCoveredDestinations(drivers, runner)
+  const rows = buildNearCoverageRows({ rng: () => 0.5, drivers: covered, brokerIds: new Map() })
+  assert.equal(rows.length, 1)
+  assert.ok(!covered[0].coveredDestinationStates.includes(rows[0].destination_state))
+  assert.match(calls[0].sql, /status = 'open'.*posted_at <= now\(\).*expires_at > now\(\)/s)
+  assert.equal(calls[0].values[2], DEADHEAD_MAX_MI)
+})
+
+// Kills: counting loads for a different trailer or generating duplicate
+// coverage for two trucks in the same place with the same equipment.
+test('coverage uses each truck trailer and shares matching nearby rows', async () => {
+  const atChicago = { current_lat: 41.8781, current_lon: -87.6298, duty_status: 'on' }
+  const drivers = [{ ...atChicago, id: 'a', trailer_type: 'dry-van' },
+    { ...atChicago, id: 'b', trailer_type: 'dry-van' },
+    { ...atChicago, id: 'c', trailer_type: 'reefer' }]
+  const calls = []
+  const runner = { query: async (sql, values) => { calls.push({ sql, values }); return { rows: [] } } }
+  const covered = await withCoveredDestinations(drivers, runner)
+  assert.deepEqual(calls.map((call) => call.values[3]), ['dry-van', 'dry-van', 'reefer'])
+  assert.match(calls[0].sql, /equipment_type = \$4/)
+  const rows = buildNearCoverageRows({ rng: () => 0.5, drivers: covered, brokerIds: new Map() })
+  assert.equal(rows.filter((row) => row.equipment_type === 'dry-van').length, MIN_NEAR_LOADS)
+  assert.equal(rows.filter((row) => row.equipment_type === 'reefer').length, MIN_NEAR_LOADS)
 })
 
 test('coverage test kills a four-load minimum mutation', async () => {

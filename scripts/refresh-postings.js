@@ -14,23 +14,42 @@ import { pool } from '../src/db/pool.js'
 import { generateLoad, generateApplicant, generateTruckListing } from './seed/generate.js'
 import { LoadItem, ApplicantItem, TruckListingItem, BROKERS } from './seed/schemas.js'
 import { validateLoadItem, validateApplicantItem, validateTruckListingItem } from './seed/validate.js'
-import { buildPostingRows, buildNearCoverageRows, POSTING_CONFIG, TIER_WEIGHTS, HIDDEN_RATE_SHARE } from './seed/postings.js'
+import { buildPostingRows, buildNearCoverageRows, POSTING_CONFIG, TIER_WEIGHTS, HIDDEN_RATE_SHARE, DEADHEAD_MAX_MI } from './seed/postings.js'
 import { buildApplicantRows, APPLICANT_CONFIG, APPLICANT_TIERS } from './seed/applicants.js'
 import { buildTruckRows, TRUCK_CONFIG, TRUCK_TIERS } from './seed/trucks.js'
 import { findCity } from './seed/cities.js'
+import { EQUIPMENT_KEYS } from '../src/constants/equipment.js'
 
 // Azizbek qarori 2026-11-04: active trucks define coverage, including a
 // parked truck whose recorded location is available without a driver.
 export async function activeTruckLocations(runner = pool) {
-  const { rows } = await runner.query(`SELECT t.id, t.current_location, d.current_lat, d.current_lon
+  const { rows } = await runner.query(`SELECT t.id, t.current_location, t.trailer_type, d.current_lat, d.current_lon
     FROM trucks t LEFT JOIN drivers d ON d.id = t.driver_id WHERE t.status = 'active'`)
   return rows.map((row) => {
-    if (row.current_lat != null && row.current_lon != null) return { ...row, duty_status: 'on' }
+    // A legacy label (for example "Dry Van") is not an equipment key.
+    // Treat it as unknown rather than passing an invalid key to the
+    // generator or incorrectly claiming a trailer-compatible match.
+    const trailerType = EQUIPMENT_KEYS.includes(row.trailer_type) ? row.trailer_type : null
+    if (row.trailer_type && !trailerType) console.warn(`[posting refresh] unknown trailer type for truck ${row.id}`)
+    if (row.current_lat != null && row.current_lon != null) return { ...row, trailer_type: trailerType, duty_status: 'on' }
     const parts = String(row.current_location ?? '').split(',').map((x) => x.trim())
     const city = parts.length === 2 ? findCity(parts[0], parts[1]) : null
     if (!city) throw new Error(`No known coordinates for active truck ${row.id}`)
-    return { ...row, current_lat: city.lat, current_lon: city.lon, duty_status: 'on' }
+    return { ...row, trailer_type: trailerType, current_lat: city.lat, current_lon: city.lon, duty_status: 'on' }
   })
+}
+
+// Count visible destinations already in the market before adding coverage.
+// Expired, not-yet-visible, and booked postings cannot fill a truck's need.
+export async function withCoveredDestinations(drivers, runner = pool) {
+  return Promise.all(drivers.map(async (driver) => {
+    const result = await runner.query(`SELECT DISTINCT destination_state FROM load_postings
+      WHERE status = 'open' AND posted_at <= now() AND expires_at > now()
+        AND road_miles($1, $2, origin_lat, origin_lon) <= $3
+        AND ($4::text IS NULL OR equipment_type = $4)`,
+    [driver.current_lat, driver.current_lon, DEADHEAD_MAX_MI, driver.trailer_type ?? null])
+    return { ...driver, coveredDestinationStates: result.rows.map((row) => row.destination_state).filter(Boolean) }
+  }))
 }
 
 const POSTING_COLUMNS = [
@@ -60,7 +79,7 @@ export async function runPostingRefresh({ count = 12, runner = pool } = {}) {
   }
   const rng = mulberry32(Date.now())
   const rows = [...buildPostingRows({ rng, postingItems: items, drivers, trucks: [], fleetEquipment: [], brokerIds }),
-    ...buildNearCoverageRows({ rng, drivers, brokerIds })]
+    ...buildNearCoverageRows({ rng, drivers: await withCoveredDestinations(drivers, runner), brokerIds })]
   const client = await runner.connect()
   try {
     await client.query('BEGIN')
@@ -311,7 +330,7 @@ export async function runRefresh() {
     trucks: [],
     fleetEquipment: [],
   })
-  postingRows.push(...buildNearCoverageRows({ rng, drivers, brokerIds }))
+  postingRows.push(...buildNearCoverageRows({ rng, drivers: await withCoveredDestinations(drivers), brokerIds }))
   // One round trip reserves the whole block, so two runs (or the cron and a
   // manual run) can never hand out the same id. Index-based ids were the
   // reason the second run ever attempted died on driver_applicants_pkey.

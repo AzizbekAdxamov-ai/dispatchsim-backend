@@ -301,10 +301,18 @@ export function buildNearCoverageRows({ rng, drivers, brokerIds }) {
   const items = []
   for (const driver of active) {
     const nearby = LANES.filter((lane) => roadMiles({ lat: driver.current_lat, lon: driver.current_lon }, lane.origin) <= DEADHEAD_MAX_MI)
-    const destinations = new Set()
+    const destinations = new Set(driver.coveredDestinationStates ?? [])
+    // A row created for an overlapping truck can serve this truck too, but
+    // only when its trailer matches. Avoid duplicate coverage in one batch.
+    for (const item of items) {
+      if (driver.trailer_type && item.equipmentType !== driver.trailer_type) continue
+      const origin = findCity(item.originCity, item.originState)
+      if (origin && roadMiles({ lat: driver.current_lat, lon: driver.current_lon }, origin) <= DEADHEAD_MAX_MI) destinations.add(item.destinationState)
+    }
+    if (destinations.size >= MIN_NEAR_LOADS) continue
     for (const lane of nearby) {
       if (destinations.has(lane.destination.state)) continue
-      const base = generateLoad(rng)
+      const base = generateLoad(rng, { equipmentType: driver.trailer_type ?? null })
       const [low, high] = rateBandFor(base.equipmentType, lane.distanceMi, lane.origin.state)
       const candidate = { ...base, originCity: lane.origin.city, originState: lane.origin.state,
         destinationCity: lane.destination.city, destinationState: lane.destination.state,

@@ -24,7 +24,12 @@ const amountValue = (token) => {
   return Math.abs(value - Math.round(value)) < 1e-8 ? Math.round(value) : value
 }
 const LETS_OFFER = new RegExp(`^\\s*(?:(?:okay|ok|alright|aight)[, ]+)?let'?s\\s+${MONEY}\\s*$`, 'i')
-const EXAMPLE_OFFER = new RegExp(`\\b(?:can|could) (?:you|u) add more[^;!?]*?\\bfor (?:example|exaple)\\s+${MONEY}(?![\\w.,])`, 'gi')
+// The "for example" misspellings are not sloppy reading: the dispatcher
+// typos the word and the amount is real either way (live 2026-11-05: "can
+// add some money for exapmle 3700" was read as small talk, and the offer
+// was never raised).
+const EXAMPLE_WORD = '(?:example|exaple|exapmle|exmaple|exampel)'
+const EXAMPLE_OFFER = new RegExp(`\\b(?:can|could)(?:\\s+(?:you|u|we|sir))?\\s+add (?:more|some money)[^;!?]*?\\bfor ${EXAMPLE_WORD}\\s+${MONEY}(?![\\w.,])`, 'gi')
 const REPLY_MONEY = /(?<![\w\d])(?:\$\s*(\d+(?:,\d{3})*(?:\.\d+)?k?)|(\d+(?:\.\d+)?k|\d{1,3}(?:,\d{3})+|\d{3,5})(?:\.00)?)(?![\w\d])/gi
 
 // Azizbek qarori 2026-11-04 — the negotiation ladder uses named shares so
@@ -164,7 +169,7 @@ function authorizedRecipient(src) {
 }
 
 export function chatIntent(raw, rateSource = null) {
-  const src = intentText(raw).replace(/(\b(?:can|could) (?:you|u) add more)\.\s*(?=for (?:example|exaple)\b)/gi, '$1, ')
+  const src = intentText(raw).replace(/(\b(?:can|could)(?:\s+(?:you|u|we|sir))?)\s*(add (?:more|some money))\.\s*(?=[^;!?]*\bfor (?:example|exaple|exapmle|exmaple|exampel)\b)/gi, '$1 $2, ')
   // A mixed price acceptance/email cannot authorize a prohibited handoff.
   if (proposesRebroker(src)) return { kind: 'rebroker' }
   if (NATURAL_ACCEPT.test(src) && !HYPOTHETICAL.test(src) && !NEGATIVE.test(src)) return { kind: 'accept' }
@@ -208,7 +213,7 @@ export function chatIntent(raw, rateSource = null) {
     // A concrete counter introduced with "for example" is a request, not a
     // hypothetical story. Preserve every other conditional/quotation veto.
     const concreteExample = [...clause.matchAll(EXAMPLE_OFFER)].length > 0
-    const hypotheticalText = concreteExample ? clause.replace(/\bfor (?:example|exaple)\b/gi, '') : clause
+    const hypotheticalText = concreteExample ? clause.replace(/\bfor (?:example|exaple|exapmle|exmaple|exampel)\b/gi, '') : clause
     if (HYPOTHETICAL.test(hypotheticalText) || NEGATIVE.test(clause)
       || /\bif\b[^.!?]{0,40}\bmight\s+take\b/i.test(clause)) continue
     // An accessorial charge is not the load's linehaul. A mixed financial
@@ -457,7 +462,7 @@ export function negotiationReplyProblem(reply, decision) {
   if (decision.hasRateRoom && decision.state.agreed === null) {
     const claims = text.split(/(?<=[.!?;])\s+|\b(?:but|however)\b/i)
     if (claims.some((clause) => !clause.includes('?') && !/\b(?:you said|your|not (?:my|a|the|our)|isn't my|is not my|haven't called|didn't say|never said|right now|at the moment|for now)\b/i.test(clause)
-      && /\b(?:final (?:rate|offer|price)|(?:my |the |our )?(?:absolute )?best (?:rate|offer|price)|best (?:i|we) can (?:do|pay|offer)|(?:can(?:not|'t)|won't|will not|not) (?:go|mov(?:e|ing)|come|pay)(?: any)? (?:higher|above|up)|(?:most|highest|top) (?:i|we) can (?:do|pay|offer))\b/i.test(clause))) {
+      && /\b(?:final (?:rate|offer|price)|(?:my |the |our )?(?:absolute )?best (?:rate|offer|price)|best (?:i|we) can (?:do|pay|offer)|(?:can(?:not|'t)|won't|will not|not|unable to) (?:go|mov(?:e|ing)|come|pay)(?: any)? (?:higher|above|up)|(?:can(?:not|'t)|won't|will not|not|unable to) (?:increas\w*|improv\w*|rais\w*|bump\w*)|(?:most|highest|top) (?:i|we) can (?:do|pay|offer))\b/i.test(clause))) {
       return 'claimed a permanent final rate while authorized bargaining room remains'
     }
   }

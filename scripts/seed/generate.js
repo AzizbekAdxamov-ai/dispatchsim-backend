@@ -112,6 +112,35 @@ function buildLanes() {
 
 export const LANES = Object.freeze(buildLanes())
 
+// Product assumption: large freight hubs have twice the lane postings of
+// other represented cities. These are relative model weights, not live DAT
+// volume figures. All other represented origins retain a non-zero chance.
+export const FREIGHT_HUB_ORIGIN_WEIGHT = 2
+export const OTHER_ORIGIN_WEIGHT = 1
+export const FREIGHT_HUB_ORIGINS = Object.freeze(new Set([
+  'Chicago, IL', 'Dallas, TX', 'Houston, TX', 'Los Angeles, CA',
+  'Atlanta, GA', 'Memphis, TN', 'Indianapolis, IN', 'Columbus, OH',
+  'Newark, NJ', 'Laredo, TX',
+]))
+const laneCumulativeWeights = []
+let totalLaneWeight = 0
+for (const lane of LANES) {
+  const key = `${lane.origin.city}, ${lane.origin.state}`
+  totalLaneWeight += FREIGHT_HUB_ORIGINS.has(key) ? FREIGHT_HUB_ORIGIN_WEIGHT : OTHER_ORIGIN_WEIGHT
+  laneCumulativeWeights.push(totalLaneWeight)
+}
+
+export function pickMarketLane(rng) {
+  const roll = rng() * totalLaneWeight
+  let low = 0, high = laneCumulativeWeights.length - 1
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2)
+    if (roll < laneCumulativeWeights[middle]) high = middle
+    else low = middle + 1
+  }
+  return LANES[low]
+}
+
 // How much more often a broker you have hauled for posts to your board.
 //
 // Freight is a relationship business. A broker who has moved three loads
@@ -144,17 +173,17 @@ export function brokerWeights(history) {
 // `brokerHistory` is a Map of broker name -> how many loads this company
 // has already hauled for them. Optional: with none, every broker is
 // equally likely, which is the right behaviour on a brand new account.
-export function generateLoad(rng, { avoid, brokerHistory, hiddenRateShare = 0 } = {}) {
-  let lane = pick(rng, LANES)
+export function generateLoad(rng, { avoid, brokerHistory, hiddenRateShare = 0, equipmentType: requiredEquipment = null } = {}) {
+  let lane = pickMarketLane(rng)
   if (avoid) {
     for (let tries = 0; tries < 12; tries += 1) {
       const key = `${lane.origin.city}, ${lane.origin.state} -> ${lane.destination.city}, ${lane.destination.state}`
       if (!avoid.has(key)) break
-      lane = pick(rng, LANES)
+      lane = pickMarketLane(rng)
     }
   }
 
-  const equipmentType = weighted(rng, EQUIPMENT_MIX)
+  const equipmentType = requiredEquipment ?? weighted(rng, EQUIPMENT_MIX)
   const [wLo, wHi] = WEIGHT_BAND[equipmentType]
   // The band is the SAME function validate.js uses, so a generated rate is
   // inside the band by construction and the clamp downstream is a no-op
