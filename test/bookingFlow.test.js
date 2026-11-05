@@ -16,6 +16,7 @@ import { stopsForRow } from '../src/modules/brokerChat/stops.js'
 import { s9Mc, s9WrongMc, s9Email, s9Ask } from '../scripts/scenarioChecks.js'
 import { pdfText } from './helpers/pdfText.js'
 import { makeFakeBrokerRepo, fakePosting, FAKE_IDS } from './helpers/fakeBrokerRepo.js'
+import { brokerReplyProblem } from '../src/modules/brokerChat/replyProblem.js'
 
 const CARRIER = {
   name: 'Cedar Ridge Transport Services', mcNumber: 'MC-741309', dotNumber: '3456789',
@@ -85,6 +86,7 @@ test('S9b: wrong MC is turned away at agree, and again at accept', async () => {
 // or a paper that leaves out a side of the deal
 test('S9a: right MC agrees, the paper names everyone, accept books', async () => {
   const t = setup([intro, `MC ${s9Mc(CARRIER)}`, truckLine, price, middle, bookIt])
+  t.fake.forceAgreed(ask) // An existing chat handshake; /agree cannot create one.
   const agreed = await agreeAt(t)
   assert.equal(agreed.status, 'agreed')
   assert.equal(agreed.awaitingReply, true)
@@ -102,7 +104,7 @@ test('S9a: right MC agrees, the paper names everyone, accept books', async () =>
   }
 
   const out = await acceptRateCon(t.ids, { deps: t.deps })
-  assert.deepEqual(t.booked, [{ postingId: posting.id, userId: FAKE_IDS.user, driverId: null }])
+  assert.deepEqual(t.booked, [{ postingId: posting.id, userId: FAKE_IDS.user, driverId: null, agreement: { conversationId: FAKE_IDS.conversation, revision: 0 } }])
   assert.equal(out.conversation.status, 'booked')
   assert.equal(out.alreadyAccepted, false)
 })
@@ -112,4 +114,33 @@ test('an out-of-band rate is refused before the MC gate', async () => {
   const t = setup([intro, 'just book it'])
   const err = await rejection(agreeAt(t, posting.distanceMi * 5 + 1))
   assert.equal(err.code, 'RATE_OUT_OF_BAND')
+})
+
+test('only delivered canonical paper permits an attachment claim, never an email claim', async () => {
+  const t = setup([intro, `MC ${s9Mc(CARRIER)}`, truckLine, bookIt])
+  t.fake.forceAgreed(ask)
+  await agreeAt(t)
+  const delivered = t.fake.repo.rateConDelivered
+  // An agreement can exist while the delayed card is still invisible.
+  t.fake.repo.rateConDelivered = async () => false
+  const pending = { status: t.fake.state.conversation.status, delivered: await t.fake.repo.rateConDelivered() }
+  assert.equal(brokerReplyProblem('Rate confirmation attached.', { paper: pending })?.unusable, true)
+  const err = await rejection(getRateConfirmation(t.ids, { deps: t.deps }))
+  assert.equal(err.code, 'RATE_CON_NOT_ARRIVED')
+  t.fake.repo.rateConDelivered = delivered
+  const paper = { status: t.fake.state.conversation.status, delivered: await delivered() }
+  const card = t.fake.state.messages.find((m) => m.kind === 'rate_con')
+  assert.equal(brokerReplyProblem(card.content, { paper }), null)
+  assert.equal(brokerReplyProblem('Rate confirmation sent to carrier@example.com.', { paper })?.unusable, true)
+  assert.equal(t.booked.length, 0)
+})
+
+// A hidden legacy form/API must not bypass broker economics.
+test('legacy agree cannot create a rate or replace the chat handshake', async () => {
+  const t = setup([intro, `MC ${s9Mc(CARRIER)}`])
+  assert.equal((await rejection(agreeAt(t))).code, 'NOT_AGREED_YET')
+  assert.equal(t.fake.state.conversation.status, 'open')
+  t.fake.forceAgreed(posting.rateUsd)
+  assert.equal((await rejection(agreeAt(t))).code, 'NOT_AGREED_YET')
+  assert.equal(t.fake.state.conversation.agreedRateUsd, posting.rateUsd)
 })

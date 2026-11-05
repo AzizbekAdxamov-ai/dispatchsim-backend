@@ -13,7 +13,19 @@
 
 import { findCity, roadMiles } from '../../../scripts/seed/cities.js'
 import { AVG_HIGHWAY_MPH } from '../../../scripts/seed/facilities.js'
-import { DRIVING_LIMIT_HOURS, BREAK_AFTER_DRIVING_HOURS, BREAK_MINUTES, REQUIRED_REST_HOURS } from '../../constants/hosClock.js'
+import { DRIVING_LIMIT_HOURS, DUTY_WINDOW_HOURS, BREAK_AFTER_DRIVING_HOURS, BREAK_MINUTES, REQUIRED_REST_HOURS } from '../../constants/hosClock.js'
+
+// Strings a template literal produces from a missing value. A place made of
+// one of these is a bug upstream, never a city.
+export const INVALID_PLACE_TOKENS = ['undefined', 'null']
+
+// "City, ST", or null when either part is missing, not a string, empty or
+// a stringified missing value. The one way to build a location label.
+export function placeLabel(city, state) {
+  const parts = [city, state].map((v) => (typeof v === 'string' ? v.trim() : ''))
+  if (parts.some((v) => !v || INVALID_PLACE_TOKENS.includes(v.toLowerCase()))) return null
+  return `${parts[0]}, ${parts[1]}`
+}
 
 // Where a delivered load leaves its driver: the destination, as a place
 // the city list knows (lat/lon included, so the board's road_miles can
@@ -22,7 +34,7 @@ import { DRIVING_LIMIT_HOURS, BREAK_AFTER_DRIVING_HOURS, BREAK_MINUTES, REQUIRED
 export function deliveredTo(load) {
   const c = findCity(load?.destinationCity, load?.destinationState)
   if (!c) return null
-  return { city: c.city, state: c.state, lat: c.lat, lon: c.lon, label: `${c.city}, ${c.state}` }
+  return { city: c.city, state: c.state, lat: c.lat, lon: c.lon, label: placeLabel(c.city, c.state) }
 }
 
 // The empty run from where the driver is parked to a load's pickup: road
@@ -56,6 +68,29 @@ export function legalTransitHours(miles, firstDayDriveMin = DRIVING_LIMIT_HOURS 
     hours += REQUIRED_REST_HOURS
     todayCap = DRIVING_LIMIT_HOURS
   }
+}
+
+// The most driving hours any legal schedule can fit into `hours` of wall
+// clock, if the driver could start right now with a full clock. An upper
+// bound, not a schedule: it takes the tighter of the 11-hour driving limit
+// and the 14-hour duty window per day (49 CFR 395.3(a)(2) and (a)(3)(i))
+// followed by the 10 consecutive hours off of 395.3(a)(1), and ignores the
+// 30-minute break and the 60/70-hour cycle, which can only lower the real
+// figure. 0 for a span that is not positive.
+export function maxLegalDrivingHours(hours) {
+  if (!(hours > 0)) return 0
+  const perWindow = Math.min(DRIVING_LIMIT_HOURS, DUTY_WINDOW_HOURS)
+  const cycle = perWindow + REQUIRED_REST_HOURS
+  const full = Math.floor(hours / cycle)
+  const rem = hours - full * cycle
+  return full * perWindow + Math.min(rem, perWindow)
+}
+
+// True when `miles` cannot be driven in `hours` even on that best case, at
+// AVG_HIGHWAY_MPH (the planning speed, facilities.js). Strict and without
+// slack: a borderline run is never called unreachable.
+export function exceedsLegalReach(miles, hours) {
+  return miles > maxLegalDrivingHours(hours) * AVG_HIGHWAY_MPH
 }
 
 function hoursText(h) {

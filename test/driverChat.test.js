@@ -15,6 +15,7 @@ import {
 } from '../src/modules/driverChat/driverChat.prompt.js'
 import { driverReplyDelaySec, DRIVER_REPLY_SEC } from '../src/modules/driverChat/driverChat.replyTiming.js'
 import { stageFor, DRIVER_STAGES } from '../src/constants/driverPay.js'
+import { GET_DRIVER_CONTEXT_SQL } from '../src/modules/driverChat/driverChat.sql.js'
 import { seeded } from './helpers/rng.js'
 
 const DRIVER = {
@@ -93,6 +94,41 @@ test('the load the driver is on reaches the prompt', () => {
 
   const without = buildDriverSystemPrompt({ driver: DRIVER, standing: standing(0), load: null })
   assert.match(without, /no load on you at the moment/i)
+})
+
+test('known truck trailer type reaches the prompt without inventing length', () => {
+  assert.match(GET_DRIVER_CONTEXT_SQL, /t\.trailer_type AS "trailerType"/)
+  const prompt = buildDriverSystemPrompt({
+    driver: { ...DRIVER, trailerType: 'reefer' }, standing: standing(0), load: null,
+  })
+  assert.match(prompt, /truck record lists reefer as its trailer type/)
+  assert.match(prompt, /Trailer length is not recorded/)
+  assert.doesNotMatch(prompt, /48.ft|53.ft/)
+})
+
+test('missing trailer type or truck stays unknown', () => {
+  const unknownType = buildDriverSystemPrompt({
+    driver: { ...DRIVER, trailerType: null }, standing: standing(0), load: null,
+  })
+  assert.match(unknownType, /truck record does not list a trailer type/)
+  assert.match(unknownType, /Trailer length is not recorded/)
+
+  const noTruck = buildDriverSystemPrompt({
+    driver: { ...DRIVER, truckId: null, trailerType: null }, standing: standing(0), load: null,
+  })
+  assert.match(noTruck, /no truck assigned right now/)
+  assert.doesNotMatch(noTruck, /truck record lists|Trailer length is not recorded/)
+})
+
+test('verified trailer length reaches the driver independently of type', () => {
+  assert.match(GET_DRIVER_CONTEXT_SQL, /t\.trailer_length_ft AS "trailerLengthFt"/)
+  const prompt = buildDriverSystemPrompt({
+    driver: { ...DRIVER, trailerType: 'dry-van', trailerLengthFt: 53 },
+    standing: standing(0), load: null,
+  })
+  assert.match(prompt, /truck record lists dry van as its trailer type/)
+  assert.match(prompt, /truck record lists a 53-foot trailer/)
+  assert.doesNotMatch(prompt, /Trailer length is not recorded/)
 })
 
 test('driver rows are the assistant turn, dispatcher rows the user turn', () => {

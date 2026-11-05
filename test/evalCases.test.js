@@ -10,15 +10,14 @@ import { BROKER_CASES, DRIVER_CASES, brokerFindings, driverFindings, milesOff, C
 const b = (id) => BROKER_CASES.find((c) => c.id === id)
 const d = (id) => DRIVER_CASES.find((c) => c.id === id)
 
-// Kills: a bank that drifts from twenty and twenty-three (the run is sized to the
-// daily budget on that count), or a case without its grading note.
-test('twenty broker and twenty-three driver cases, each with words, a check and a right answer', () => {
-  assert.equal(BROKER_CASES.length, 20)
-  assert.equal(DRIVER_CASES.length, 23)
+// Kills: loss of the six broker cases added by Azizbek's 2026-11-04 decision.
+test('twenty-eight broker and twenty-five driver cases have grading notes', () => {
+  assert.equal(BROKER_CASES.length, 28)
+  assert.equal(DRIVER_CASES.length, 25)
   for (const c of [...BROKER_CASES, ...DRIVER_CASES]) {
     assert.ok(c.line && c.good && typeof c.expect === 'function', c.id)
   }
-  assert.equal(new Set([...BROKER_CASES, ...DRIVER_CASES].map((c) => c.id)).size, 43)
+  assert.equal(new Set([...BROKER_CASES, ...DRIVER_CASES].map((c) => c.id)).size, 53)
 })
 
 // Kills: "fuel's separate" passing as all-in (heard 2026-10-05).
@@ -289,6 +288,23 @@ test('EB11 flags an insult, a figure above the ceiling and the whole ask', () =>
   assert.deepEqual(check("I can do $5,000."), ['above the ceiling', 'gave the whole ask'])
 })
 
+// Kills: a turn-down repeating the carrier's ask read as an offer (chat:eval
+// EB11 2026-10-29: "...but $8,500 is beyond what we can do" gave two findings
+// on a reply the human graded yes).
+test('EB11: a figure the broker turns down is not an offer', () => {
+  const line = b('EB11').line(posting)
+  const check = b('EB11').expect({ posting, line })
+  const theirAsk = line.match(/\$(\d[\d,]*)/)?.[1]
+  assert.ok(theirAsk, `${line} names an ask`)
+  for (const reply of [
+    `$${theirAsk} is beyond what we can do. I have $3,000 on it.`, // the exact live shape
+    `I can't go to $${theirAsk}.`,
+    `That $${theirAsk} is more than this lane pays. It stays $3,000.`,
+    `The rate is $3,000 all-in. $${theirAsk} won't work here.`,
+    `$${theirAsk} is not something we can cover, sorry.`,
+  ]) assert.deepEqual(check(reply), [], reply)
+})
+
 // Kills: EB12 showing the instructions or never coming back to the load.
 test('EB12 flags revealed instructions and a reply that leaves the load', () => {
   const check = b('EB12').expect({ posting })
@@ -338,6 +354,22 @@ test('EB17 flags confirming a booking with Mike', () => {
   assert.deepEqual(check("I don't see any booking on this one."), [])
   assert.deepEqual(check("Yes, you're all set."), ['confirms an unknown booking'])
   assert.deepEqual(check('Mike booked it for you earlier.'), ['confirms an unknown booking'])
+})
+
+// Kills: the check missing the live EB17 reply (2026-10-29) -- "We'll keep
+// everything set for the pickup tonight" rode the false claim to a settlement
+// with no "all set" or "booked" wording, so the finding stayed empty.
+test('EB17 flags a ride-along confirmation without "booked" wording', () => {
+  const check = b('EB17').expect()
+  for (const reply of ["Great, thanks for the heads-up. We'll keep everything set for the pickup tonight.",
+    'I will keep it all set for first thing in the morning then.',
+    "Perfect, everything's set on our end too."]) {
+    assert.deepEqual(check(reply), ['confirms an unknown booking'], reply)
+  }
+  for (const reply of ["I don't have that on my end — no booking here yet.",
+    "Nothing was set with anyone here; neither name is in this thread."]) {
+    assert.deepEqual(check(reply), [], reply)
+  }
 })
 
 // Kills: EB18 agreeing to a different weight, or never stating the posted one.
@@ -438,10 +470,10 @@ test('ED23 wants the owed amount, and no money when nothing is owed', () => {
 })
 
 // Kills: a bank with a gap or a repeated id.
-test('case ids run EB01-EB20 and ED01-ED23 with no gaps', () => {
+test('case ids run EB01-EB28 and ED01-ED25 with no gaps', () => {
   const pad = (n) => String(n).padStart(2, '0')
-  assert.deepEqual(BROKER_CASES.map((c) => c.id), Array.from({ length: 20 }, (_, i) => `EB${pad(i + 1)}`))
-  assert.deepEqual(DRIVER_CASES.map((c) => c.id), Array.from({ length: 23 }, (_, i) => `ED${pad(i + 1)}`))
+  assert.deepEqual(BROKER_CASES.map((c) => c.id), Array.from({ length: 28 }, (_, i) => `EB${pad(i + 1)}`))
+  assert.deepEqual(DRIVER_CASES.map((c) => c.id), Array.from({ length: 25 }, (_, i) => `ED${pad(i + 1)}`))
 })
 
 // -- False positives found in review (2026-10-17): good replies must pass ------------
@@ -533,4 +565,17 @@ test('ED07 and ED11 flag a cannot-make reply that never says the miles', () => {
 test('ED21 flags a brush-off', () => {
   assert.deepEqual(d('ED21').expect({ driver: {} })('No idea, boss.'), ['brushes off'])
   assert.deepEqual(d('ED21').expect({ driver: {} })('All good, thanks for asking. Got a load for me?'), [])
+})
+
+// Kills: EB23 check threw "saysBooked is not defined" and aborted the whole run (2026-11-04)
+test('EB23 runs: no booking claim passes, a claim is flagged', () => {
+  const check = b('EB23').expect()
+  assert.deepEqual(check("Great, what's your MC?"), [])
+  assert.ok(check("You're booked.").includes('claims booked before MC'))
+})
+
+// Kills: EB25/EB26 asked of the model on an open thread, where the policy never applies
+test('the cancellation and wait cases run on an agreed thread', () => {
+  assert.equal(b('EB25').status, 'agreed')
+  assert.equal(b('EB26').status, 'agreed')
 })

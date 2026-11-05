@@ -80,6 +80,13 @@ On success:
 DispatchSim API → http://localhost:4000
 ```
 
+### Local start (Windows)
+
+Double-click `start-dev.cmd` in the project root. It stops stale API/web
+processes, opens the API in its own "DispatchSim API" window, waits for
+`GET /health`, then opens the web app ("DispatchSim Web", port 5173).
+Options: `-ApiOnly` (backend only), `-NoBrowser`. `stop-dev.cmd` stops both.
+
 ## First administrator
 
 Registration never grants admin access — `POST /auth/register` always

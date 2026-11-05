@@ -48,7 +48,7 @@ test('a time names its day only when it is not today', () => {
 // runs in, the prompt must say what the board says.
 test('the broker is told pickup and delivery on the board\'s clock, never the server\'s', () => {
   const prompt = buildBrokerSystemPrompt({ broker: BROKER, posting: POSTING, now: NOW })
-  assert.match(prompt, /Pickup: Fri, Oct 2, 5:06 AM \(in 2 days\)\n  Delivery: Fri, Oct 2, 9:00 PM \(in 2 days\)\n  \(Central time/)
+  assert.match(prompt, /Pickup: Fri, Oct 2, 5:06 AM \(in 2 days\)\n  Delivery: Fri, Oct 2, 9:00 PM \(in 2 days\)\n  \(Central Time/)
   assert.doesNotMatch(prompt, /GMT|Standard Time|15:06/, 'server vaqt zonasidagi sana promptga tushdi')
 })
 

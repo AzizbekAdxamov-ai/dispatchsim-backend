@@ -11,6 +11,13 @@ import { leaksReasoning as driverLeaks } from '../src/modules/driverChat/driverC
 // The EB02 broker reply, verbatim (reports/eval, run 2026-10-14-08-46-58).
 const EB02_NEMOTRON = "What they're asking about isn't on the sheet. A broker who's moved flatbed before would say the posted rate covers linehaul and fuel together -- there's no separate RPM figure. I'd say something like: \"The rate I posted is all-in. Linehaul and fuel together.\" That answers once, and if they push I can add it's the total they see. But I shouldn't volunteer numbers that aren't clearly there. Since they asked, I'll give the direct answer from what's posted. I'll keep it brief and see if they come back on something about the pickup window or equipment.The rate I posted is all-in. Linehaul and fuel together. That's the number they see."
 
+test('live email deliberation and response-control annotations are leaks', () => {
+  assert.equal(brokerLeaks("Understood. We need to ask for email now? Actually they said not to book yet, we can wait. No further action. Sure, just ping me when you're ready."), true)
+  assert.equal(brokerLeaks('No driver-assist needed. [No further response needed]'), true)
+  assert.equal(brokerLeaks('We need your contact email.'), false)
+  assert.equal(brokerLeaks('No further equipment is needed.'), false)
+})
+
 // Kills: a leak check anchored only to the start of the reply (EB02 Nemotron, 2026-10-14)
 test('reasoning that follows the opening sentence is a leak', () => {
   assert.equal(leaksReasoning(EB02_NEMOTRON, { roleWord: 'carrier' }), true)

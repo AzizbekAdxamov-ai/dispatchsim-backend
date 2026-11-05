@@ -5,7 +5,7 @@
 import { z } from 'zod'
 import { EQUIPMENT_KEYS } from '../../constants/equipment.js'
 
-const LOAD_STATUSES = ['ontime', 'warn', 'crit', 'neutral', 'done']
+const LOAD_STATUSES = ['ontime', 'warn', 'crit', 'neutral', 'done', 'cancelled']
 
 // POST /loads/:id/dispatch — the truck is not accepted from the client;
 // it is whichever truck the driver is assigned to, resolved server-side.

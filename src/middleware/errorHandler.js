@@ -74,7 +74,13 @@ export function errorHandler(err, req, res, next) {
   // a dispatcher who only sees "not accepting work right now" has been
   // told a person's decision without its reason. Those ship everywhere.
   const detailsArePartOfTheAnswer = CODES_WITH_PUBLIC_DETAILS.has(appError.code)
-  if (appError.details && (detailsArePartOfTheAnswer || !config.isProd)) {
+  if (appError.code === 'RATE_LIMITED') {
+    // Only the bounded public cooldown is safe, even outside production.
+    const seconds = appError.details?.retryAfterSeconds
+    if (Number.isInteger(seconds) && seconds >= 1 && seconds <= 900) {
+      body.error.details = { retryAfterSeconds: seconds }
+    }
+  } else if (appError.details && (detailsArePartOfTheAnswer || !config.isProd)) {
     body.error.details = appError.details
   }
 

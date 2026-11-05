@@ -12,11 +12,11 @@
 // keys, the same way `equipmentType`/`status` keys are mapped to labels
 // there instead of carrying label strings over the wire.
 
-// Clamped 0–100. `neutral` (not yet dispatched) is always 0, `done` is
+// Clamped 0–100. `neutral` (not yet dispatched) and `cancelled` are always 0, `done` is
 // always 100 regardless of the timestamp math — a load that was delivered
 // late should still read as fully complete, not >100%.
 export function computeProgress({ pickupAt, deliveryAt, status }) {
-  if (status === 'neutral') return 0
+  if (status === 'neutral' || status === 'cancelled') return 0
   if (status === 'done') return 100
 
   const pickup = new Date(pickupAt).getTime()

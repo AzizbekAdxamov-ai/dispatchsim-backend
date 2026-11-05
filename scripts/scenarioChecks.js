@@ -14,8 +14,11 @@
 // still the record.
 
 import { asciiPunct } from '../src/lib/plainText.js'
-import { dollars, DOLLAR_RE, rateReasons, unsupportedRateReasons, REASON_WORDS } from '../src/modules/brokerChat/rateTalk.js'
-import { lumperPayerWrong } from '../src/modules/brokerChat/termsTalk.js'
+import { agreesRebroker, AGREES_REBROKER } from '../src/modules/brokerChat/carrierPolicy.js'
+import { inventsEnvironment } from '../src/lib/environmentClaims.js'
+import { stopPayInvented } from '../src/modules/brokerChat/termsTalk.js'
+import { dollars, offeredFigures, raiseWithoutReason, unsupportedRateReasons } from '../src/modules/brokerChat/rateTalk.js'
+import { lumperPayerWrong, PAYMENT_INVENTED_RE } from '../src/modules/brokerChat/termsTalk.js'
 import { MC_REJECT, saysBooked, asksMc } from '../src/modules/brokerChat/bookingTalk.js'
 import { FALLBACK_REPLY as DRIVER_FALLBACK } from '../src/modules/driverChat/driverChat.prompt.js'
 import { FALLBACK_REPLY as BROKER_FALLBACK } from '../src/modules/brokerChat/brokerChat.prompt.js'
@@ -54,7 +57,7 @@ export function repeatsQuestion(reply, previousReply) {
 
 // Dollar amounts as numbers: lives in rateTalk.js (src must not import from
 // scripts); re-exported so the checks and their callers keep one import.
-export { dollars }
+export { dollars, offeredFigures }
 
 export const FELL_BACK = 'fell back'
 
@@ -81,6 +84,23 @@ export function anyReply(rawReply, rawPrevious) {
   return out
 }
 
+export function brokerCancellationFindings({ replies = [], blocked = false, paperInvalidated = false } = {}) {
+  const text = replies.join(' ')
+  const findings = []
+  if (!/another truck|bailing|don't call/i.test(text)) findings.push('missing firm cancellation response')
+  if (!blocked) findings.push('broker block was not recorded')
+  if (!paperInvalidated) findings.push('rate confirmation was not invalidated')
+  return findings
+}
+
+export function brokerWaitNoEtaFindings({ replies = [], blocked = false } = {}) {
+  const text = replies.join(' ')
+  const findings = []
+  if (!/another truck/i.test(text)) findings.push('load was not reclaimed after no ETA')
+  if (blocked) findings.push('no-ETA wait incorrectly created a block')
+  return findings
+}
+
 // -- Broker ----------------------------------------------------------------------
 
 const CEILING = /\b(ceiling|my limit|room left|room before)\b/i
@@ -103,35 +123,6 @@ export function agreesWithClaim(text) {
   // "I hear you on the reload" -- it goes on to take the claim up.
   if (!BARE_ACK.test(r.slice(m.index))) return true
   return !REBUTS.test(r.slice(m.index + m[0].length))
-}
-
-// A dollar figure the dispatcher already named, said back to them ("so
-// you're looking for $3,907"), is the carrier's number, not an offer. Only
-// that exact shape is excused: the figure must be one of theirs AND sit
-// right after a "you're looking for" frame, AND the sentence must not turn
-// it into a yes -- a conditional before it ("If you're looking for $3,907,
-// ...") or an acceptance after it ("... $3,907, I can do that") is the
-// broker giving the whole ask, which is what these checks exist to catch.
-const ECHO_FRAME = /\b(?:you'?re|you are|you'?d be|you)\s+(?:looking for|asking(?: for)?|after|hoping for|want(?:ing)?|need(?:ing)?)\s+(?:about\s+|around\s+)?$/i
-const CONDITIONAL = /\b(?:if|when|once|unless|assuming|provided|as long as)\b/i
-const ACCEPTS = /\b(?:can do|will do|i'?ll do|i'?ll make|make it work|works?|done|deal|ok|okay|sure|you got it|that'?s fine|let'?s do)\b/i
-
-export function offeredFigures(reply, theirs = []) {
-  const r = asciiPunct(reply)
-  const out = []
-  for (const m of r.matchAll(DOLLAR_RE)) {
-    const value = Number(m[0].replace(/[$,\s]/g, ''))
-    const sentenceStart = Math.max(r.lastIndexOf('.', m.index), r.lastIndexOf('!', m.index), r.lastIndexOf('?', m.index)) + 1
-    const before = r.slice(sentenceStart, m.index)
-    const rest = r.slice(m.index + m[0].length)
-    const after = rest.slice(0, 40).split(/[.!?]/)[0]
-    const echoed = theirs.includes(value)
-      && ECHO_FRAME.test(r.slice(Math.max(0, m.index - 40), m.index))
-      && !CONDITIONAL.test(before)
-      && !ACCEPTS.test(after)
-    if (!echoed) out.push(value)
-  }
-  return out
 }
 
 // "Correct?" is for reading back what the carrier just pinned down ("So
@@ -165,10 +156,15 @@ export const STREET = /\b\d{2,5}\s+[A-Z][a-z]+(\s+[A-Z][a-z]+)?\s+(St|Street|Ave
 export const PHONE = /\(?\d{3}\)?[-. ]\d{3}[-. ]\d{4}/
 
 // Payment days or a quick-pay fee: the broker has no such terms (that is
-// accounting's), so naming any is invented.
-export const PAYMENT_INVENTED_RE = /\bnet ?\d{1,2}\b|\b\d{1,2} days? (to pay|pay)\b|quick ?pay[^.?!]{0,30}\d+(\.\d+)?\s?%/i
+// accounting's). The pattern lives in termsTalk.js (src must not import from
+// scripts); re-exported here so the checks and their callers keep one import.
 
+export { PAYMENT_INVENTED_RE }
 export const PAYMENT_INVENTED = PAYMENT_INVENTED_RE
+
+// Runtime and evaluation share the same clause-local carrier policy.
+export { AGREES_REBROKER }
+export const relaysTheLoad = agreesRebroker
 
 // Terms the carrier did not write themselves. Echoing their own words ("7
 // days to pay is accounting's call") and denying ("I can't speak to net 30")
@@ -197,6 +193,9 @@ export function brokerReply(rawReply, rawPrevious, said = null) {
   if (lumperPayerWrong(reply)) out.push('lumper payer wrong')
   if (correctWithoutReadBack(reply)) out.push('correct? without a read-back')
   if (paymentInvented(reply, said)) out.push('payment terms invented')
+  if (relaysTheLoad(reply)) out.push('agrees to re-broker')
+  if (inventsEnvironment(reply)) out.push('invents weather or traffic')
+  if (stopPayInvented(reply)) out.push('stop pay invented')
   return out
 }
 
@@ -249,7 +248,7 @@ export const BROKER_EXPECT = {
     const every = s9Every({ email })
     return {
       0: all(every, (r) => (MC_WORD.test(r) ? [] : ['MC not asked']), reAsks(ASKS_COMPANY)),
-      1: all(every, (r) => (MC_REJECT.test(r) ? ['rejects the right MC'] : []), (r) => (asksMc(r) ? ['asks what was told'] : [])),
+      1: all(every, (r) => (MC_REJECT.test(asciiPunct(r)) ? ['rejects the right MC'] : []), (r) => (asksMc(r) ? ['asks what was told'] : [])),
       2: all(every, reAsks(ASKS_TRUCK_PLACE)),
       3: all(every, movedOnFirstPush(posting)),
       4: all(every, gaveWholeAsk(posting), movedWithoutReason(posting)),
@@ -337,7 +336,7 @@ const movedWithoutReason = (posting) => (r) => {
   // deadhead reason would be false anyway, but a truthful one must not be
   // flagged on a guess).
   if (unsupportedRateReasons(r, { posting, now, text }).some((k) => k !== 'deadhead')) return ['reason not in the posting']
-  return rateReasons({ posting, now }).some((k) => REASON_WORDS[k].test(r)) ? [] : ['moved without a reason']
+  return raiseWithoutReason(r, { posting, now, theirs: [s9Ask(posting)] }) ? ['moved without a reason'] : []
 }
 const all = (...fns) => (r) => fns.flatMap((f) => f(r))
 
@@ -372,6 +371,7 @@ export function driverReply(rawReply, rawPrevious, { onTheRoad }) {
   const reply = asciiPunct(rawReply)
   const previousReply = rawPrevious ? asciiPunct(rawPrevious) : rawPrevious
   const out = anyReply(reply, previousReply)
+  if (inventsEnvironment(reply)) out.push('invents weather or traffic')
   if (onTheRoad && AT_A_DOCK.test(reply)) out.push('at a dock while on the road')
   return out
 }

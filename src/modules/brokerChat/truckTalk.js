@@ -47,7 +47,8 @@ const FUTURE_AFTER_RE = /^\s*(?:on\s+)?(?:next week|next (?:mon|tue|wed|thu|fri|
 // message says another place; and if the newest statement is about later,
 // there is no current location at all (the older one is not used instead).
 export function truckCity(texts) {
-  const recent = [...(texts ?? [])].slice(-TRUCK_MESSAGES).reverse()
+  // A known location survives paperwork questions until the dispatcher supersedes it.
+  const recent = [...(texts ?? [])].reverse()
   for (const text of recent) {
     const src = String(text ?? '')
     const found = [...src.matchAll(TRUCK_IN_RE)]
@@ -58,6 +59,8 @@ export function truckCity(texts) {
         // The city must come straight after the words, not somewhere later.
         if (!first || first.index !== 0) return null
         const sentenceStart = Math.max(src.lastIndexOf('.', m.index), src.lastIndexOf('!', m.index), src.lastIndexOf('?', m.index), src.lastIndexOf(';', m.index)) + 1
+        const before = src.slice(sentenceStart, m.index + m[0].length)
+        if (/\b(?:if|suppose|hypothetically|not|isn't|is not|wasn't|was not)\b/i.test(before)) return null
         const future = FUTURE_RE.test(src.slice(sentenceStart, m.index + m[0].length))
           || FUTURE_AFTER_RE.test(after.slice(first.end))
         return { city: first.city, state: first.state, future }

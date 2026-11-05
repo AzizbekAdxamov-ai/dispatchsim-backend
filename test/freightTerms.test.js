@@ -9,7 +9,7 @@ import assert from 'node:assert/strict'
 
 import { FREIGHT_TERMS, termsUsed, talkFacts, confirmationsFor } from '../src/constants/freightTerms.js'
 import { talkBlock, buildBrokerSystemPrompt } from '../src/modules/brokerChat/brokerChat.prompt.js'
-import { dispatcherTexts } from '../src/modules/brokerChat/brokerChat.service.js'
+import { dispatcherTexts, brokerTexts } from '../src/modules/brokerChat/brokerChat.service.js'
 
 // One real sentence per term, the way a dispatcher types it.
 const SAID = {
@@ -146,4 +146,16 @@ test('the way people actually type the words still counts', () => {
   for (const [key, sentence] of Object.entries(casual)) {
     assert.ok(termsUsed(sentence).includes(key), `"${sentence}" should count as ${key}`)
   }
+})
+
+// Kills: counting the dispatcher's words, or the rate confirmation document,
+// as things the broker said (a figure on the rate con is not a raise).
+test('only the broker\'s typed messages count as what the broker said', () => {
+  const messages = [
+    { role: 'broker', kind: 'text', content: 'it is all-in' },
+    { role: 'dispatcher', kind: 'text', content: 'what about lumper' },
+    { role: 'broker', kind: 'rate_con', content: 'RATE CON $5,000' },
+  ]
+  assert.deepEqual(brokerTexts(messages), ['it is all-in'])
+  assert.deepEqual(brokerTexts(null), [])
 })

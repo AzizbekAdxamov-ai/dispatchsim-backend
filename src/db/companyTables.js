@@ -33,6 +33,9 @@ export const KEEP = Object.freeze(new Set([
   'users',
   'invite_codes',
   'brokers',
+  // broker_blocks (067) -- broker-side safety state; it belongs to the
+  // external broker relationship and must survive a company reset.
+  'broker_blocks',
   // carrier (048) -- who this company IS, as opposed to what it has done.
   // A reset clears the loads, the trucks, the drivers and the money; it
   // does not rename the company or take away its operating authority.

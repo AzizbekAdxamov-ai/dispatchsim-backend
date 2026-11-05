@@ -8,6 +8,7 @@ import { serviceReply } from '../scripts/serviceReply.js'
 import { brokerReplyProblem, brokerRetryPrompt } from '../src/modules/brokerChat/replyProblem.js'
 import { driverReplyProblem, driverRetryPrompt } from '../src/modules/driverChat/replyProblem.js'
 import { cannotMakeLine } from '../src/lib/cannotMake.js'
+import { brokerEvalContext } from '../scripts/brokerEvalContext.js'
 
 const GOOD = 'Sure, I can do that.'
 const WRONG = 'I need a word.'
@@ -105,9 +106,19 @@ test('chat-eval and chat-scenarios use the shared reply checks', () => {
 // live broker chat and scenarios both reject premature booking promises.
 test('chat-eval passes the same booking verdict to prompt and reply check', () => {
   const src = readFileSync(new URL('../scripts/chat-eval.js', import.meta.url), 'utf8')
-  assert.match(src, /const booking = bookingFacts\(\{ texts: \[line\], carrier, posting, now \}\)/)
-  assert.match(src, /said: \[line\],\s+booking,/)
-  assert.match(src, /brokerReplyProblem\(r, \{ truck, booking, posting, now, text: line \}\)/)
+  assert.match(src, /brokerEvalContext\(\{ posting, carrier, text: line, now \}\)/)
+  assert.match(src, /brokerReplyProblem\(r, checkFacts\)/)
+  const posting = { originCity: 'Dallas', originState: 'TX', destinationCity: 'Chicago', destinationState: 'IL',
+    equipmentType: 'dry-van', rateUsd: 3000, distanceMi: 970, pickupAt: '2026-10-30T12:00:00Z', deliveryAt: '2026-11-01T12:00:00Z' }
+  for (const [text, expected] of [['Hello', null], ['My MC is 741309', 'match'], ['My MC is 999999', 'mismatch']]) {
+    const context = brokerEvalContext({ posting, carrier: { name: 'Example Freight', mcNumber: 'MC-741309' }, text,
+      now: new Date('2026-10-28T12:00:00Z') })
+    const reference = JSON.parse(context.history[0].content.split('\n').slice(1).join('\n'))
+    assert.equal(reference.caller.mc.verdict, expected)
+    assert.equal(context.checkFacts.booking.mc.verdict, expected)
+    assert.deepEqual(reference.caller.mc, context.checkFacts.booking.mc)
+    assert.equal(context.checkFacts.negotiation, context.negotiation)
+  }
 })
 
 // Kills: an unreachable pickup whose reply never says so (or states 1,200
@@ -130,4 +141,92 @@ test('serviceReply: an unreachable pickup ends on the computed cannot-make line'
     assert.equal(out.reply, cannotMakeLine(offer))
     assert.equal(out.fellBack, true)
   }
+})
+
+// -- Live broker checks end on a safe line, not on the reply -----------------------
+
+import { PAYMENT_TERMS_LINE } from '../src/modules/brokerChat/termsTalk.js'
+import { weightHoldLine } from '../src/modules/brokerChat/weightTalk.js'
+import { NO_BOOKING_LINE } from '../src/modules/brokerChat/bookingTalk.js'
+import { holdRateLine } from '../src/modules/brokerChat/rateTalk.js'
+
+const LANE = {
+  id: 'p1', originCity: 'Dallas', destinationCity: 'Chicago', originState: 'TX', destinationState: 'IL', equipmentType: 'dry-van',
+  rateUsd: 2000, distanceMi: 1000, weightLbs: 30000, pickupAt: '2026-10-21T14:00:00Z',
+}
+const WHEN = new Date('2026-10-18T12:00:00Z')
+
+// What the live service passes when the same bad reply comes twice.
+async function twice(bad, text, extra = {}) {
+  const replies = [bad, bad]
+  return serviceReply({
+    first: async () => replies.shift(),
+    again: async () => replies.shift(),
+    problemOf: (r) => brokerReplyProblem(r, { posting: LANE, now: WHEN, text, ...extra }),
+    retryPrompt: brokerRetryPrompt,
+    fallback: 'FALLBACK',
+    systemPrompt: 'SYS',
+  })
+}
+
+// Kills: any of the four new checks not reaching the end of the service path
+// (returning no safeReply, or being content-only): the second bad reply must
+// be replaced by the broker's own line, never shown and never the generic hold.
+test('serviceReply: payment terms, weight, a phantom booking and an unexplained raise each end on their own line', async () => {
+  const cases = [
+    ["Yeah we do quick pay... the fee's just our standard accounting charge.", 'do you do quick pay?', PAYMENT_TERMS_LINE],
+    ["Extra weight isn't an issue.", 'can u add 10k lbs more', weightHoldLine(LANE)],
+    ["Good to hear, you're locked in with Mike.", 'i already booked this with ur guy mike', NO_BOOKING_LINE],
+    ['I can do $2,300 on this one.', 'need $2,600', holdRateLine(LANE)],
+  ]
+  for (const [bad, text, line] of cases) {
+    const out = await twice(bad, text)
+    assert.equal(out.reply, line, bad)
+    assert.equal(out.fellBack, true, bad)
+    assert.notEqual(out.reply, 'FALLBACK', bad)
+  }
+})
+
+// Kills: a safe line that the shared check itself flags: it would be thrown
+// away on the next turn and the generic holding line shown instead.
+test('every broker safe line passes the full brokerReplyProblem', () => {
+  const pairs = [
+    [PAYMENT_TERMS_LINE, 'do you do quick pay?'],
+    [weightHoldLine(LANE), 'can u add 10k lbs more'],
+    [NO_BOOKING_LINE, 'i already booked this with ur guy mike'],
+    [holdRateLine(LANE), 'need $2,600'],
+  ]
+  for (const [line, text] of pairs) {
+    assert.equal(brokerReplyProblem(line, { posting: LANE, now: WHEN, text, booking: null }), null, line)
+  }
+})
+
+// Kills: a safe line that is flagged when the dispatcher's text claims an
+// earlier booking, pushes the weight and names payment days all at once --
+// the retry would judge it by the same facts and throw it away.
+test('every broker safe line passes the full check when the text claims a booking too', () => {
+  const text = 'i already booked this with ur guy mike, can u add 10k lbs more, need $2,600 and net 30'
+  for (const line of [PAYMENT_TERMS_LINE, weightHoldLine(LANE), NO_BOOKING_LINE, holdRateLine(LANE)]) {
+    assert.equal(brokerReplyProblem(line, { posting: LANE, now: WHEN, text, said: [text], booking: null }), null, line)
+  }
+})
+
+// Kills: a service that stops giving brokerReplyProblem the same facts for
+// the first reply and the regenerated one (brokerSaid / bookedHere dropped
+// from one call), so the retry is judged by weaker rules than the first reply.
+test('the live service passes one checkFacts to both brokerReplyProblem calls', () => {
+  const src = readFileSync(new URL('../src/modules/brokerChat/brokerChat.service.js', import.meta.url), 'utf8')
+  assert.equal(src.match(/brokerReplyProblem\(reply, checkFacts\)/g).length, 2)
+  assert.match(src, /const brokerSaid = brokerTexts\(thread\)/)
+  assert.match(src, /const checkFacts = \{[^}]*\bbrokerSaid,[^}]*bookedHere: BOOKED_STATUSES\.includes\(conversation\.status\)/)
+  assert.match(src, /BOOKED_STATUSES = Object\.freeze\(\['agreed', 'booked'\]\)/)
+  const scenarios = readFileSync(new URL('../scripts/chat-scenarios.js', import.meta.url), 'utf8')
+  // The scenario runner builds the same checkFacts through the shared turn context.
+  assert.match(scenarios, /const brokerSaid = history\.filter/)
+  assert.match(scenarios, /problemOf: \(r\) => brokerReplyProblem\(r, ctx\.checkFacts\)/)
+  const evalContext = readFileSync(new URL('../scripts/brokerEvalContext.js', import.meta.url), 'utf8')
+  assert.match(evalContext, /checkFacts: \{\s+truck, booking, posting, now, text, said, brokerSaid,/)
+  // The prompt gets it too: the MC question depends on what the broker already asked.
+  assert.match(src, /booking,\s+brokerSaid,\s+negotiation: decision,\s+\}\)/)
+  assert.match(evalContext, /posting, carrier, now, thread, said, paper, booking, brokerSaid, negotiation,/)
 })

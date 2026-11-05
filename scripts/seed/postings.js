@@ -7,11 +7,21 @@
 //
 // Determinism guarantee: timestamps are offset integers (minutes from now()),
 // so md5sum is stable across runs with the same seed. rng() is never called
-// for trailer_type (index-based) — same rule as build.js.
+// for trailer_type (index-based) — same rule as build.js. Rate rounding
+// (roundPostedRate) draws no RNG either, so every other draw stays stable.
 import { findCity, roadMiles } from './cities.js'
 import { rateBandFor } from './validate.js'
 import { drawTransitHours, EQUIP_LENGTHS } from './build.js'
 import { raw } from './render.js'
+import { hash01 } from '../../src/lib/stableHash.js'
+import { fuelPerMile } from '../../src/constants/marketRates.js'
+import { LANES, generateLoad } from './generate.js'
+import { validateLoadItem } from './validate.js'
+
+// Azizbek qarori 2026-11-04 — board coverage target. Frontend DEFAULT_RADIUS_MI
+// uses the same 150-mile search radius; five is the pending default decision.
+export const DEADHEAD_MAX_MI = 150
+export const MIN_NEAR_LOADS = 5
 
 // ---------------------------------------------------------------------
 // Configuration
@@ -44,6 +54,13 @@ import { POSTING_CONFIG } from './marketTargets.js'
 // how the rate gets negotiated rather than accepted.
 export const HIDDEN_RATE_SHARE = 0.1
 
+// Azizbek qarori 2026-11-06 — brokerlar yaxlit narx e'lon qiladi.
+// Azizbek qarori 2026-11-05 — board totals use whole hundreds.
+export const POSTED_RATE_STEP_USD = 100
+// Azizbek qarori 2026-11-06 — brokerlar yaxlit narx e'lon qiladi.
+// Linehaul never drops below $1: migration 066 requires 0 < fuel < rate.
+export const MIN_LINEHAUL_USD = 1
+
 // ---------------------------------------------------------------------
 // Tier definitions — the quality spectrum that makes the board educational
 // ---------------------------------------------------------------------
@@ -56,15 +73,16 @@ const COVERED_EQUIPMENT = new Set(['dry-van', 'reefer', 'flatbed', 'tanker'])
 const STRONG_PCT = 0.30   // closest 30%
 const MARGINAL_PCT = 0.35 // next 35% (30-65)
 // remaining = farthest 35%, split into trap-deadhead (top 20%) + rest
-const TRAP_DH_PCT = 0.20  // farthest 20%
+// Azizbek qarori 2026-11-04 — one in ten postings is a deadhead trap.
+export const TRAP_DH_PCT = 0.10
 
 export const TIER_WEIGHTS = [
   ['strong', 0.30],
   ['marginal', 0.35],
-  ['trap-deadhead', 0.20],
+  ['trap-deadhead', TRAP_DH_PCT],
   ['trap-hos', 0.05],
   ['trap-equipment', 0.05],
-  ['filler', 0.05],
+  ['filler', 0.15],
 ]
 
 const TIER_NAMES = TIER_WEIGHTS.map(([name]) => name)
@@ -75,7 +93,7 @@ const TIER_NAMES = TIER_WEIGHTS.map(([name]) => name)
 
 // Compute deadhead (distance in miles from nearest available driver to
 // the posting's origin). Returns { deadheadMi, nearestDriverId }.
-function computeDeadhead(originCity, drivers) {
+export function computeDeadhead(originCity, drivers) {
   const origin = findCity(originCity.originCity, originCity.originState)
   if (!origin) return { deadheadMi: Infinity, nearestDriverId: null }
 
@@ -91,6 +109,46 @@ function computeDeadhead(originCity, drivers) {
     }
   }
   return { deadheadMi: bestMi, nearestDriverId: bestDriver }
+}
+
+export function nearLoadCoverage(rows, { maxMiles = DEADHEAD_MAX_MI, minimum = MIN_NEAR_LOADS } = {}) {
+  if (!Array.isArray(rows) || rows.length === 0) return false
+  const counts = new Map()
+  for (const row of rows ?? []) {
+    const key = row.nearestDriverId ?? row.driverId
+    if (key == null || row.deadheadMi == null || row.deadheadMi > maxMiles) continue
+    counts.set(key, (counts.get(key) ?? 0) + 1)
+  }
+  return counts.size > 0 && [...counts.entries()].every(([, count]) => count >= minimum)
+}
+
+/**
+ * Round a posted rate to a broker-style round figure and return the new total.
+ *
+ * The $100 step is judged on the total for both all-in and split postings.
+ * Rounding is to the nearest multiple, then pulled
+ * inward to the nearest multiple inside [lowerBound, upperBound] (bounds apply
+ * to the total). If no multiple fits inside the bounds, the unrounded
+ * (already clamped) rateUsd is returned untouched. Pure: no RNG, no clock.
+ */
+export function roundPostedRate({ rateUsd, lowerBound, upperBound }) {
+  const amount = rateUsd
+  const lo = lowerBound
+  const hi = upperBound
+  const step = POSTED_RATE_STEP_USD
+  let rounded = Math.round(amount / step) * step
+  if (rounded > hi) rounded = Math.floor(hi / step) * step
+  if (rounded < lo) rounded = Math.ceil(lo / step) * step
+  if (rounded < lo || rounded > hi) return rateUsd
+  return rounded
+}
+
+// Azizbek qarori 2026-11-06 — split components must add up to a rounded total.
+export function roundFuelSurcharge(fuelUsd, total) {
+  if (!fuelUsd) return 0
+  const step = POSTED_RATE_STEP_USD
+  if (total <= step) return Math.max(MIN_LINEHAUL_USD, Math.min(total - MIN_LINEHAUL_USD, fuelUsd))
+  return Math.max(step, Math.min(total - step, Math.round(fuelUsd / step) * step))
 }
 
 // Classify items into tiers by deadhead percentile.
@@ -183,7 +241,16 @@ export function buildPostingRows({ rng, postingItems, drivers, trucks, fleetEqui
     const lowerBound = Math.max(100, item.distanceMi)
     const upperBound = Math.min(20000, item.distanceMi * 5)
     const rawRate = Math.round(item.distanceMi * item.ratePerMile)
-    const rateUsd = Math.min(upperBound, Math.max(lowerBound, rawRate))
+    const clampedRate = Math.min(upperBound, Math.max(lowerBound, rawRate))
+    // This is a declared seed allocation, not a live DAT fuel surcharge.
+    // Stable lane hashing adds variety without changing totals or RNG draws.
+    // Round fuel separately while retaining a consistent total.
+    const split = hash01(`${item.broker}:${item.originCity}:${item.destinationCity}`) < 0.25
+      && fuelPerMile(item.equipmentType) !== null
+    const rawFuelUsd = split ? Math.min(clampedRate - 1, Math.max(1, Math.round(item.distanceMi * fuelPerMile(item.equipmentType)))) : 0
+    // Brokers post round figures; see roundPostedRate. No RNG is drawn.
+    const rateUsd = roundPostedRate({ rateUsd: clampedRate, lowerBound, upperBound })
+    const fuelUsd = roundFuelSurcharge(rawFuelUsd, rateUsd)
 
     // Equipment length: pick from valid lengths for this equipment type
     const equipLengths = EQUIP_LENGTHS[item.equipmentType] || [53]
@@ -206,6 +273,8 @@ export function buildPostingRows({ rng, postingItems, drivers, trucks, fleetEqui
       broker_id: brokerIds?.get(item.broker) ?? null,
       commodity: item.commodity,
       rate_usd: rateUsd,
+      rate_basis: split ? 'linehaul-plus-fuel' : 'all-in',
+      fuel_surcharge_usd: fuelUsd,
       // The broker's number either way. rate_hidden decides whether the
       // board prints it; see migration 030.
       rate_hidden: item.rateHidden === true,
@@ -222,5 +291,44 @@ export function buildPostingRows({ rng, postingItems, drivers, trucks, fleetEqui
     }
   })
 
+  return rows
+}
+
+// Create immediately visible rows for every known active driver location.
+// A nearest-driver grouping cannot establish coverage for overlapping trucks.
+export function buildNearCoverageRows({ rng, drivers, brokerIds }) {
+  const active = drivers.filter((d) => d.duty_status !== 'off' && d.current_lat != null && d.current_lon != null)
+  const items = []
+  for (const driver of active) {
+    const nearby = LANES.filter((lane) => roadMiles({ lat: driver.current_lat, lon: driver.current_lon }, lane.origin) <= DEADHEAD_MAX_MI)
+    const destinations = new Set(driver.coveredDestinationStates ?? [])
+    // A row created for an overlapping truck can serve this truck too, but
+    // only when its trailer matches. Avoid duplicate coverage in one batch.
+    for (const item of items) {
+      if (driver.trailer_type && item.equipmentType !== driver.trailer_type) continue
+      const origin = findCity(item.originCity, item.originState)
+      if (origin && roadMiles({ lat: driver.current_lat, lon: driver.current_lon }, origin) <= DEADHEAD_MAX_MI) destinations.add(item.destinationState)
+    }
+    if (destinations.size >= MIN_NEAR_LOADS) continue
+    for (const lane of nearby) {
+      if (destinations.has(lane.destination.state)) continue
+      const base = generateLoad(rng, { equipmentType: driver.trailer_type ?? null })
+      const [low, high] = rateBandFor(base.equipmentType, lane.distanceMi, lane.origin.state)
+      const candidate = { ...base, originCity: lane.origin.city, originState: lane.origin.state,
+        destinationCity: lane.destination.city, destinationState: lane.destination.state,
+        ratePerMile: Math.round(((low + high) / 2) * 100) / 100 }
+      const checked = validateLoadItem(candidate)
+      if (!checked.ok) continue
+      items.push(checked.item)
+      destinations.add(lane.destination.state)
+      if (destinations.size >= MIN_NEAR_LOADS) break
+    }
+    if (destinations.size < MIN_NEAR_LOADS) throw new Error(`Cannot provide nearby postings for driver ${driver.id}`)
+  }
+  // Each batch is within the immediately visible backfill segment.
+  const rows = []
+  for (let start = 0; start < items.length; start += POSTING_CONFIG.visibleTarget) {
+    rows.push(...buildPostingRows({ rng, postingItems: items.slice(start, start + POSTING_CONFIG.visibleTarget), drivers, brokerIds }))
+  }
   return rows
 }

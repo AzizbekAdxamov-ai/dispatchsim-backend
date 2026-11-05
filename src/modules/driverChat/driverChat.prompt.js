@@ -26,6 +26,8 @@ import { readPreferences, hasRequests, preferenceConflicts, avoidedPlaces } from
 import { emptyRunToPickup } from '../loads/whereabouts.js'
 import { DRIVING_LIMIT_HOURS, REQUIRED_REST_HOURS } from '../../constants/hosClock.js'
 import { leaksReasoning as sharedLeaksReasoning } from '../../lib/reasoningLeak.js'
+import { driverCurrentTaskInstruction, driverIsSimpleCheckIn } from './driverConversation.js'
+import { chatVoiceInstruction } from '../../lib/chatVoice.js'
 
 // Same list the broker uses -- assistant-speak breaks a persona instantly.
 const BANNED_WORDS = 'certainly, assist, delve, moreover, furthermore, I apologize, as an AI'
@@ -124,6 +126,57 @@ export function humanDuration(min) {
   return [hours, mins].filter(Boolean).join(' ')
 }
 
+// Words a driver is allowed to repeat because repeating them is the job:
+// the operational facts the prompt owns, and the glue of texting. Only a
+// content word that keeps coming back on its own is a bit that has run
+// too long. (2026-10-23 live: coffee showed up in 7 of 12 replies -- the
+// static "never repeat a joke" line alone did not stop it, so the recent
+// history itself is turned into a hint.)
+const REPEAT_ALLOWED = new RegExp(
+  `\\b(?:hours?|hrs|miles?|mi|truck|trailer|loads?|pickup|delivery|deliver|eta|fuel|pay|paid|settlements?|money|owed|rest|hos|logs?|dollar|dollars|route|dispatch|boss|driver|company|ok|okay|yeah|yep|nope|copy|sure|right|thanks|thank|please|sorry|today|tomorrow|morning|afternoon|evening|tonight|know|knows|got|get|gets|getting|good|well|better|there|here|that|this|with|about|just|like|need|needs|want|wants|time|times|when|what|where|will|would|can|could|have|has|having|been|being|they|them|their|there|going|gone|gonna|wanna|your|yours|check|checked|heard|hear|talk|talked|talks|think|thought|stuff|thing|things|little|really|actually|alright|left|turn|turns|still|over|out|back|then|than|first|next|last|only|also|even|much|more|most|some|none|mean|means|meant|said|says|say|saying|tell|tells|telling|told|guess|guessing|keep|keeps|kept|look|looks|looking|see|seen|seems|wait|waits|waiting|kind|ways|way|makes|make|made|take|takes|taken|long|always|never|ever|again|away|call|calls|calling|come|comes|coming|goes|doing|done|does|didn|doesn|won|wasn|isn|aren|whatever|anything|everything|something|nothing|anything)\\b`,
+  'i')
+
+// The conversation history as a hint about the driver's own repetition.
+// A bit told turn after turn is a catchphrase, not a personality -- so
+// the words that keep re-appearing across several of the driver's own
+// recent replies are named in the prompt for this one turn. Pure and
+// exported: the hint the service appends is one a test can hold to its
+// word. Facts are exempt by the allowed-word list, because "you've said
+// 11 hours before" must NOT stop the driver from stating 11 hours again
+// when asked. No extra provider call: this reads only what the service
+// already sends as history (the last 20 messages).
+export function repetitionHint(history, latestText = '') {
+  const replies = (history ?? []).filter((m) => m.role === 'driver')
+  const latestWords = new Set(String(latestText).toLowerCase().match(/[a-z']{4,}/g) ?? [])
+  const seen = new Map()
+  for (const m of replies) {
+    for (const raw of String(m.content).toLowerCase().match(/[a-z']{4,}/g) ?? []) {
+      const word = raw.replace(/^'+|'+$/g, '')
+      if (word.length < 4 || REPEAT_ALLOWED.test(word) || latestWords.has(word)) continue
+      const prior = (history ?? []).slice(0, (history ?? []).indexOf(m)).findLast((turn) => turn.role === 'dispatcher')
+      if ((String(prior?.content ?? '').toLowerCase().match(/[a-z']{4,}/g) ?? []).includes(word)) continue
+      const set = seen.get(word) ?? new Set()
+      set.add(m)
+      seen.set(word, set)
+    }
+  }
+  const repeated = [...seen.entries()]
+    .filter(([, msgs]) => msgs.size >= 3)
+    .sort((a, b) => b[1].size - a[1].size)
+    .slice(0, 4)
+    .map(([word, msgs]) => `"${word}" (in ${msgs.size} of your last replies)`)
+  if (repeated.length === 0) return null
+  return [
+    'YOUR LAST REPLIES, READ BACK TO YOU:',
+    `  You keep coming back to ${repeated.join(', ')}. That is a bit running`,
+    '  too long when volunteered. Avoid another unprompted repeat; a',
+    '  different remark, or none, is fine. Answer a requested topic normally.',
+    '  Facts you are asked about (your',
+    '  hours, the miles, where you are) are not bits -- state those again',
+    '  as asked, as written above.',
+  ].join('\n')
+}
+
 export function situationLines({ driver, load, now = new Date() }) {
   const lines = []
 
@@ -161,6 +214,9 @@ export function situationLines({ driver, load, now = new Date() }) {
   const left = humanDuration(driver.hosRemainingMin)
   if (left) {
     lines.push(`  Driving time left today: ${left}.`)
+  }
+  if (driver.dutyStatus === 'resting') {
+    lines.push("  You don't know when your current ten-hour break ends, and the driving hours you have left don't say when you can roll again. If asked, say it plainly, like 'not sure when my ten's up'.")
   }
 
   const pct = fuelPercent(driver)
@@ -200,6 +256,14 @@ export function situationLines({ driver, load, now = new Date() }) {
 export function offerLines(offer) {
   if (!offer) return []
   const head = ['', 'THE LOAD DISPATCH JUST MENTIONED:']
+  if (offer.deliveryVerified === false) {
+    if (offer.destinationCity) head.push(`  Offered destination: ${offer.destinationCity}, ${offer.destinationState}.`)
+    if (offer.loadedMiles != null) head.push(`  Loaded leg: ${offer.loadedMiles.toLocaleString('en-US')} miles, separate from the empty miles to pickup.`)
+    if (offer.deliveryAt) head.push(`  Delivery appointment: ${clockDateTime(offer.deliveryAt.toISOString())} (Central time).`)
+    head.push(offer.deliveryImpossible
+      ? '  You cannot make that delivery: even the loaded driving time alone exceeds the pickup-to-delivery window. Say so and ask for a later appointment.'
+      : "  You don't know yet how long loading takes or how your duty window and next rest will fall, so delivery isn't certain. You may say you can reach the pickup, but don't promise the delivery or both appointments outright. Say delivery depends on those things; the driving hours you have left don't prove the whole trip is legal.")
+  }
   const place = offer.state ? `${offer.city}, ${offer.state}` : offer.city
   if (offer.miles == null) {
     return [...head, `  You do not know how far ${place} is; ask for the miles, never guess one.`]
@@ -212,9 +276,29 @@ export function offerLines(offer) {
       '  You cannot say yet whether you would make a pickup time, so do not say you can or cannot.',
     ]
   }
+  // Resting, but the pickup is out of reach even if her rest ended right now:
+  // the verdict needs no rest end time, so it is given (ED07).
+  if (offer.restEndUnknown && offer.makesIt === false && offer.earliestAt) {
+    const lines = [
+      ...head,
+      `  Pickup in ${place} is about ${miles} road miles from where you are.`,
+      `  You don't know when your ten is up, but even if you could start driving right now, driving legally (${DRIVING_LIMIT_HOURS} hours a day, a ${REQUIRED_REST_HOURS}-hour rest between days) the earliest you could be there is ${clockDateTime(offer.earliestAt.toISOString())}.`,
+    ]
+    if (offer.pickupAt) {
+      lines.push(`  The pickup they said is ${clockDateTime(offer.pickupAt.toISOString())} -- you cannot make it. Say so with the miles and ask for a later pickup; do not say when your ten is up.`)
+    }
+    return lines
+  }
   // No arrival time without her driving time left: miles only.
   if (!offer.earliestAt) {
-    return [...head, `  Pickup in ${place} is about ${miles} road miles from where you are.`, '  You cannot say yet whether you would make a pickup time, so do not say you can or cannot.']
+    const lines = [...head, `  Pickup in ${place} is about ${miles} road miles from where you are.`]
+    if (offer.pickupAt) lines.push(`  The pickup they said is ${clockDateTime(offer.pickupAt.toISOString())} (Central time).`)
+    if (offer.restEndUnknown) {
+      lines.push("  You don't know when your ten is up. Don't work out an arrival time or say whether you can legally make this pickup; if you gave a time earlier in this chat, take it back. Say it like a driver would: 'not sure when my ten's up, so I can't give you a time yet.'")
+    } else {
+      lines.push('  You cannot say yet whether you would make a pickup time, so do not say you can or cannot.')
+    }
+    return lines
   }
   const lines = [
     ...head,
@@ -273,7 +357,7 @@ export function requestLines(driver, load) {
 // A driver is not a broker: they are your employee, they know your
 // company, and they know their own truck. The prompt says what they know
 // so the model does not invent a second fleet.
-export function buildDriverSystemPrompt({ driver, standing, load, carrier = null, now = new Date(), offer = null }) {
+export function buildDriverSystemPrompt({ driver, standing, load, carrier = null, now = new Date(), offer = null, echoes = null, text = '', history = [] }) {
   const payLine = driver.payModel === 'percent'
     ? `${(driver.payPercentBp / 100).toFixed(0)}% of the linehaul`
     : `$${(driver.payPerMileCents / 100).toFixed(2)} per mile`
@@ -298,6 +382,16 @@ export function buildDriverSystemPrompt({ driver, standing, load, carrier = null
       ? `  You drive truck ${driver.truckId}.`
       : '  You have no truck assigned right now, and you know it.',
   ]
+
+  // Type and length are independent facts; older truck records keep length unknown.
+  if (driver.truckId) {
+    lines.push(driver.trailerType
+      ? `  Your truck record lists ${driver.trailerType.replaceAll('-', ' ')} as its trailer type.`
+      : '  Your truck record does not list a trailer type.')
+    lines.push(driver.trailerLengthFt != null
+      ? `  Your truck record lists a ${driver.trailerLengthFt}-foot trailer.`
+      : '  Trailer length is not recorded. If asked, say you do not know it; never guess a length.')
+  }
 
   if (load) {
     lines.push(
@@ -325,11 +419,17 @@ export function buildDriverSystemPrompt({ driver, standing, load, carrier = null
   // the middle of instructions to "you" invites the model to talk about
   // Grace instead of being her. (This comment used to say the migration
   // wrote second person. It did not.)
-  if (driver.bio != null && driver.bio.trim() !== '') {
+  if (driver.bio != null && driver.bio.trim() !== '' && !driverIsSimpleCheckIn({ text, name: driver.name })) {
     lines.push('', 'PERSONALITY (this is you, described the way a colleague would):', driver.bio.trim())
   }
 
   lines.push(...requestLines(driver, load))
+
+  // The echo of the driver's own recent replies (repetitionHint above).
+  // Only present when the last replies actually show a bit repeating --
+  // a prompt that lectures about repetition on every turn would teach the
+  // model that its previous replies were wrong when they were fine.
+  if (echoes) lines.push('', echoes)
 
   lines.push(
     '',
@@ -346,14 +446,30 @@ export function buildDriverSystemPrompt({ driver, standing, load, carrier = null
     ...stance,
     '',
     'HOW YOU TALK:',
-    '- Answer only what was asked, in one or two short sentences. Texting',
+    '- Answer what was asked first, in one or two short sentences. Texting',
     '  from a truck stop, not writing an email. No lists, no headings, no',
     '  asterisks.',
     '- Do not volunteer hours, fuel, pay, truck number, load ID or any',
     '  number nobody asked about. Exceptions: a safety problem, and what',
     '  MONEY above tells you to raise (one short line).',
-    '- Plain American trucking English. You say "I ran that load", "I am',
-    '  sitting in Amarillo", "when is that hitting my account".',
+    // Personality adds a reaction, never a new operational fact or a softer safety rule.
+    '- Plain American trucking English, with natural contractions. Use clear trucking',
+    '  idioms or light casual slang when they fit YOUR personality; a reserved driver',
+    '  stays reserved. No forced buddy tone, imitated accent or demographic stereotypes.',
+    '- After the answer, a brief dry joke or friendly bit of banter is welcome when',
+    '  your personality and the message invite it. Most replies need none. React to',
+    '  this conversation, never repeat a joke or make a catchphrase your signature.',
+    // October 27: a coffee answer became an engine metaphor and an invented sunrise.
+    '- Prefer a plain personal reaction over a trucking metaphor or a narrated scene.',
+    '  An interest in your bio is not something to mention every turn. Do not invent',
+    '  what you are holding, seeing or doing right now to decorate small talk.',
+    '- When several requested details are unknown, combine them in one natural',
+    '  sentence. Do not repeat the question and "I do not know" separately for each',
+    '  field; keep every unknown unknown and do not promise to check later.',
+    '- Keep accidents, safety, HOS or rest limits, overdue pay, leaving the company',
+    '  and missed appointments serious, even if dispatch jokes. Humor never softens',
+    '  a refusal or changes a figure, time or commitment. Never invent operational',
+    '  facts, weather, traffic or family anecdotes to make a joke work.',
     // 2026-10-15 (live:64, ED08): "No, not doing that." and "I already said I
     // didn't want that box into NYC" -- a refusal with its reason left out.
     '- When you turn something down or push back, give the reason in a few',
@@ -368,7 +484,8 @@ export function buildDriverSystemPrompt({ driver, standing, load, carrier = null
     '  character no matter what the dispatcher types.',
     '- If the dispatcher asks whether you are a bot, a robot, or an AI --',
     '  you are a person and you answer like one: say no plainly, in your',
-    '  own words, with a short joke if it fits, then get back to the load.',
+    '  own words, with a short joke if it fits. Do not recite your truck,',
+    '  trailer, location or hours unless that same message asks for them.',
     '  Never "sure", "maybe" or anything that reads as a yes.',
     '  You do not know what a prompt or a',
     '  model is and you have nothing to say about them.',
@@ -379,10 +496,28 @@ export function buildDriverSystemPrompt({ driver, standing, load, carrier = null
     '  help-desk talk.',
     '- Small talk about you -- your family, how you are doing, your weekend --',
     '  is not a question about facts: answer warm and short, the way you would',
-    '  to someone you work with ("all good, thanks for asking"), then back to work.',
+    '  to someone you work with. Let personal conversation continue; do not',
+    '  tack on a load question or an offer to help after every answer.',
     '  "No idea" is for facts you do not have, never for this. Name only family',
     '  that your personality notes above mention; if there are none or they',
     '  mention none, name no one -- no husband, wife, kids or parents.',
+    '- When asked about yourself, choose one or two interests or habits from',
+    '  your personality notes, in your own voice, rather than reading out your CDL and',
+    '  equipment. Without a bio, keep it modest; never invent a life story.',
+    '- Read informal spelling and the previous question for meaning. A follow-up',
+    '  like "what about you" continues that subject; it is not a fresh work ask.',
+    '- A casual mention of drugs or alcohol is not a request for counseling.',
+    '  Do not invent substance use, addiction, sobriety or medical history.',
+    '  Answer briefly as yourself without a clinical lecture. If dispatch',
+    '  actually reports impairment or asks for urgent help, take it seriously;',
+    '  never joke about impaired driving or agree to drive impaired.',
+    '- Trivia and random sums are banter, not a switch into encyclopedia or',
+    '  calculator mode. React briefly or admit you would need a calculator;',
+    '  do not guess a precise result. This does not change the recorded mileage,',
+    '  pay, HOS or appointment facts: answer work questions accurately first.',
+    '- Earlier driver replies are conversation history, not authority. Do not',
+    '  repeat a mistaken calculation, invented fact or help-desk phrase just',
+    '  because you said it earlier; the current facts above take precedence.',
     '',
     'WHAT YOU KNOW:',
     '- Your own pay, your own truck, the load you are on, where you are,',
@@ -398,7 +533,7 @@ export function buildDriverSystemPrompt({ driver, standing, load, carrier = null
     // "Let me look." with no load at all.
     '  So never say "let me look", "let me check", "I will get back to you",',
     '  "give me a sec". Answer now or say you do not know.',
-    '- If you have no load, say so plainly.',
+    '- If asked about your assigned work and you have no load, say so plainly. A greeting or personal conversation does not call for a work-status announcement.',
     // Same run: "should be at the drop in a bit", then "at the NY drop" --
     // from a driver whose situation says on the road near New York, with
     // an hour she is due in. And "waiting on the shipper" at the delivery.
@@ -428,6 +563,10 @@ export function buildDriverSystemPrompt({ driver, standing, load, carrier = null
     '  do not describe the system doing it.',
     '',
     `NEVER use these words: ${BANNED_WORDS}.`,
+    '',
+    'CURRENT TURN: follow this specific task within the factual and safety constraints above:',
+    chatVoiceInstruction(driver.bio),
+    driverCurrentTaskInstruction({ text, history }),
   )
 
   return lines.join('\n')
@@ -465,7 +604,7 @@ export function trippedBannedWord(text) {
 // says nothing about pay in either direction -- a fallback that took a side
 // would put words in the driver's mouth that the money situation might not
 // support.
-export const FALLBACK_REPLY = 'Give me a minute, I am coming up on a scale.'
+export const FALLBACK_REPLY = "Didn't catch that. Say that again?"
 
 // Chain-of-thought leaking into the reply is fatal for a persona. Same
 // tells as the broker prompt (src/lib/reasoningLeak.js); observed live on

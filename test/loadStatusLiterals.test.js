@@ -17,9 +17,17 @@ const here = dirname(fileURLToPath(import.meta.url))
 const srcDir = join(here, '..', 'src')
 
 function allowedStatuses() {
-  const sql = readFileSync(join(srcDir, 'db', 'migrations', '007_loads.sql'), 'utf8')
-  const m = sql.match(/loads_status_valid\s+CHECK\s*\(status IN \(([^)]+)\)\)/)
-  assert.ok(m, 'loads_status_valid CHECK not found in 007_loads.sql')
+  // The LATEST migration that (re)defines the constraint wins -- 072 added
+  // 'cancelled' to the set 007 created.
+  const dir = join(srcDir, 'db', 'migrations')
+  const files = readdirSync(dir).filter((f) => f.endsWith('.sql')).sort()
+  const pattern = /loads_status_valid\s+CHECK\s*\(status IN \(([^)]+)\)\)/
+  let m = null
+  for (const f of files) {
+    const hit = readFileSync(join(dir, f), 'utf8').match(pattern)
+    if (hit) m = hit
+  }
+  assert.ok(m, 'loads_status_valid CHECK not found in any migration')
   return new Set(m[1].split(',').map((x) => x.trim().replace(/^'|'$/g, '')))
 }
 

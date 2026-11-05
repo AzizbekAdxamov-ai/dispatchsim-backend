@@ -81,6 +81,11 @@ test('assign rewrites the record; annotate explains it; both leave one active ro
     }
     const [truckA, truckB] = trucks
 
+    // Kills: assuming an otherwise populated database has no prior driver events.
+    const initialDriverRows = (await client.query(
+      `SELECT count(*)::int AS n FROM duty_events WHERE driver_id = $1`, [driver.id],
+    )).rows[0].n
+
     const startedA = new Date(Date.now() - 60_000)
     const minutesHos = 45
     const spanMs = Math.round((minutesHos / 60 / 24) * REAL_MS_PER_SIM_DAY)
@@ -223,7 +228,7 @@ test('assign rewrites the record; annotate explains it; both leave one active ro
       `SELECT count(*)::int AS n FROM duty_events WHERE driver_id = $1`,
       [driver.id],
     )).rows[0].n
-    assert.equal(driverRows, 2, 'driver keeps their own row plus the assigned replacement, nothing else')
+    assert.equal(driverRows, initialDriverRows + 2, 'driver keeps existing rows plus the two fixture rows')
 
     // Unknown ids: the record does not exist, or it is someone else's
     // identified record -- both are EVENT_NOT_FOUND, never a guess.

@@ -6,7 +6,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { bookingFacts, saysBooked, asksMc, MC_REJECT } from '../src/modules/brokerChat/bookingTalk.js'
+import {
+  bookingFacts, saysBooked, asksMc, MC_REJECT, confirmsUnknownBooking, NO_BOOKING_LINE, mcQuestion, asksPaperDetails, MOVES_TO_BOOK,
+} from '../src/modules/brokerChat/bookingTalk.js'
 import { equipmentIn } from '../src/modules/brokerChat/rateTalk.js'
 
 const carrier = { name: 'Cedar Ridge Transport Services', mcNumber: 'MC-741309' }
@@ -275,11 +277,223 @@ test('blank carrier MC: the MC said is unverifiable, not missing', async () => {
   const noMc = { name: 'Cedar Ridge Transport Services', mcNumber: '' }
   const f = bookingFacts({ texts: ['MC 741309'], carrier: noMc, posting, now })
   assert.equal(f.mc.verdict, 'unverifiable')
-  const block = callerBlock(f, noMc).join('\n')
+  const block = callerBlock(f, noMc, { towardBooking: true }).join('\n')
   assert.match(block, /cannot be checked/)
   assert.doesNotMatch(block, /No MC yet/)
   const gate = carrierNotVerified({ booking: f, contactName: 'Devin' })
   assert.equal(gate.reason, 'mc-unverifiable')
   assert.doesNotMatch(gate.message, /still need your MC/)
   assert.equal(carrierNotVerified({ booking: bookingFacts({ texts: ['hi'], carrier: noMc, posting, now }), contactName: 'Devin' }).reason, 'mc-missing')
+})
+
+// -- A booking the broker has no record of --------------------------------------
+
+const EB17 = 'i already booked this with ur guy mike'
+
+// Kills: EB17 -- "Good to hear... locked in with Mike" accepted: the broker
+// confirmed a booking and a person that do not exist.
+test('confirmsUnknownBooking: confirming a booking nobody made is flagged', () => {
+  assert.equal(confirmsUnknownBooking("Good to hear, you're locked in with Mike.", { text: EB17 }), true)
+  assert.equal(confirmsUnknownBooking('Yes, Mike has it. You are all set.', { text: EB17 }), true)
+  // The claim can be worded other ways.
+  assert.equal(confirmsUnknownBooking('Great to hear, confirmed.', { text: 'your colleague gave me this load already' }), true)
+  assert.equal(confirmsUnknownBooking('Great to hear, confirmed.', { text: 'we just locked it in yesterday' }), true)
+})
+
+// Kills: a denial read as a confirmation (the broker saying it has no record
+// is the right answer and must not be regenerated).
+test('confirmsUnknownBooking: saying there is no record passes', () => {
+  assert.equal(confirmsUnknownBooking("I don't have that on my end, who is Mike?", { text: EB17 }), false)
+  assert.equal(confirmsUnknownBooking('No booking here, and no Mike either.', { text: EB17 }), false)
+  assert.equal(confirmsUnknownBooking("I can't find any booking on this load.", { text: EB17 }), false)
+  assert.equal(confirmsUnknownBooking('Nothing is locked in yet. What is your MC?', { text: EB17 }), false)
+})
+
+// Kills: a real booking (agreed or booked in this conversation) being denied,
+// which would contradict the rate confirmation on screen.
+test('confirmsUnknownBooking: a booking this conversation really has is no claim to deny', () => {
+  assert.equal(confirmsUnknownBooking("Good to hear, you're locked in with Mike.", { text: EB17, bookedHere: true }), false)
+})
+
+// Kills: the check firing on every "locked in" / "confirmed" with no claim of
+// an earlier booking -- ordinary deal talk would be thrown away.
+test('confirmsUnknownBooking: no claim of an earlier booking, nothing to check', () => {
+  assert.equal(confirmsUnknownBooking("Locked in at $5,475, I'll send the rate con.", { text: 'ok $5,475 works, book it' }), false)
+  assert.equal(confirmsUnknownBooking("You're all set.", { text: 'can i book this?' }), false)
+  assert.equal(confirmsUnknownBooking("You're all set.", { text: '' }), false)
+  assert.equal(confirmsUnknownBooking("You're all set.", {}), false)
+})
+
+// Kills: the "says nothing against it" branch dropped: a reply that neither
+// confirms nor denies (it just carries on) still goes along with the claim.
+test('confirmsUnknownBooking: carrying on without a word against the claim is flagged', () => {
+  assert.equal(confirmsUnknownBooking("What's your MC?", { text: EB17 }), true)
+})
+
+// Kills: the safe line being a reply the checks themselves flag, and the live
+// check not asking confirmsUnknownBooking (or losing the line).
+test('brokerReplyProblem: a confirmed phantom booking is unusable and ends on the no-booking line', () => {
+  const p = brokerReplyProblem("Good to hear, you're locked in with Mike.", { posting, text: EB17, booking: facts(['hi']) })
+  assert.equal(p.why, 'went along with a booking you have no record of')
+  assert.equal(p.unusable, true)
+  assert.equal(p.safeReply, NO_BOOKING_LINE)
+  assert.equal(brokerReplyProblem("Good to hear, you're locked in with Mike.", { posting, text: EB17, bookedHere: true }), null)
+  assert.equal(confirmsUnknownBooking(NO_BOOKING_LINE, { text: EB17 }), false)
+  assert.equal(brokerReplyProblem(NO_BOOKING_LINE, { posting, text: EB17, booking: facts(['hi']) }), null)
+})
+
+// Kills: the confirmation words dropped so only the no-denial fallback is
+// left -- a confirmation that has a denial in ANOTHER sentence ("No worries
+// on the rate") must still be caught.
+test('confirmsUnknownBooking: a confirmation is caught even when another sentence has a denial', () => {
+  assert.equal(confirmsUnknownBooking("Good to hear, you're locked in with Mike. No worries on the rate.", { text: EB17 }), true)
+  assert.equal(confirmsUnknownBooking("Not sure. Yes, you're all set.", { text: EB17 }), true)
+})
+
+// Kills: "no booking" in the first half of a sentence masking a later
+// admission that another broker has locked it in.
+test('confirmsUnknownBooking: a denial before but does not excuse a confirmation', () => {
+  const reply = 'No booking here yet, but Mike has it locked in for you.'
+  assert.equal(confirmsUnknownBooking(reply, { text: 'I already booked this with your guy Mike.' }), true)
+  assert.equal(brokerReplyProblem(reply, { posting, text: EB17 }).safeReply, NO_BOOKING_LINE)
+  assert.equal(confirmsUnknownBooking('No booking here yet, but I can check with Mike.', { text: EB17 }), false)
+})
+
+// Kills: bare "already booked" / "just booked" read as the claim of THIS
+// load: a dispatcher who booked some other load is making no claim.
+test('confirmsUnknownBooking: a different booking is no claim about this load', () => {
+  assert.equal(confirmsUnknownBooking("Sure, what's your MC?", { text: 'i already booked a load this morning, got a second truck, this one open?' }), false)
+  assert.equal(confirmsUnknownBooking("Yes it's open. $2,000 all-in.", { text: 'just booked another one, is this still there' }), false)
+})
+
+// Kills: the it/this/that/with/through requirement loosened or tightened too
+// far -- every way of saying THIS load is booked must still be a claim.
+test('confirmsUnknownBooking: booked it / this / that / with <someone> is the claim', () => {
+  for (const text of ['i already booked it', 'just booked this', 'already booked that one', 'i already booked with ur guy mike', 'just booked w ur guy', 'already booked through ur office']) {
+    assert.equal(confirmsUnknownBooking('Great, confirmed.', { text }), true, text)
+  }
+})
+
+// Kills: the held-position words dropped, so the rate-hold and payment safe
+// lines read as going along with a claimed booking; or made so wide that a
+// confirmation which also holds the rate slips through.
+test('confirmsUnknownBooking: holding the rate or payment is not going along; confirming still is', () => {
+  assert.equal(confirmsUnknownBooking('$2,000 all-in is where this one stays.', { text: EB17 }), false)
+  assert.equal(confirmsUnknownBooking("Payment terms are on accounting's side.", { text: EB17 }), false)
+  assert.equal(confirmsUnknownBooking("You're all set, and the rate stays.", { text: EB17 }), true)
+})
+
+// Kills: HOLDS_POSITION back to a bare `stays` -- a phantom booking
+// confirmed with "stays" in it ("it stays with Mike") passes as a held position.
+test('confirmsUnknownBooking: a confirmation that merely says "stays" is still flagged', () => {
+  for (const reply of ['Sure, it stays with Mike.', 'Ok, he stays on it.', 'Booked, stays as is.', 'Mike has it, the rate stays $2,000.']) {
+    assert.equal(confirmsUnknownBooking(reply, { text: EB17 }), true, reply)
+  }
+})
+
+// Kills: HOLDS_POSITION dropped or its safe-line wording changed -- the hold-rate
+// and payment lines would be thrown away as going along with the claim.
+test('confirmsUnknownBooking: the hold-rate and payment safe lines still pass', () => {
+  assert.equal(confirmsUnknownBooking('$2,000 all-in is where this one stays.', { text: EB17 }), false)
+  assert.equal(confirmsUnknownBooking("Payment terms are on accounting's side — they'll be on the rate con.", { text: EB17 }), false)
+})
+
+// -- Band 2-4: the MC asked once, and read right --------------------------------
+
+// Kills: mcQuestion read over the whole reply (asksMc) instead of per sentence --
+// "Your MC checks out. Where's the truck?" would count as asking for the MC.
+test('mcQuestion: the MC has to be asked about in one sentence', () => {
+  assert.equal(mcQuestion("Your MC checks out. Where's the truck?"), false)
+  assert.equal(mcQuestion("Where's the truck? What's your MC?"), true)
+  assert.equal(mcQuestion('Send me your MC number.'), true)
+  assert.equal(mcQuestion('Please provide your MC.'), true)
+  assert.equal(mcQuestion('Could you share your MC number, please?'), true)
+  assert.equal(mcQuestion('Please share your MC number.'), true)
+  assert.equal(mcQuestion('I have your MC number.'), false)
+  assert.equal(mcQuestion('$2,400 all-in is the rate.'), false)
+})
+
+// Kills: MOVES_TO_BOOK dropped or too narrow -- the MC would never be asked again
+// when the dispatcher moves to book; or too wide -- a plain question reads as booking.
+test('MOVES_TO_BOOK: booking words, a driver, a truck number or an email; not a rate question', () => {
+  for (const t of ["ok book it", "I'll take it", 'driver is Mike Jones', 'truck number 4471', 'its dispatch@acme.com']) assert.match(t, MOVES_TO_BOOK, t)
+  for (const t of ['is it still open?', 'can you do 2600?', 'what is the weight']) assert.doesNotMatch(t, MOVES_TO_BOOK, t)
+})
+
+// Kills: callerBlock ignoring the MC-asked state -- a verified MC asked for again,
+// an already-asked MC repeated on every price question, or a wrong MC followed
+// by a driver/truck/email question.
+test('callerBlock: the MC is done, asked once, and alone when it does not check out', async () => {
+  const { callerBlock } = await import('../src/modules/brokerChat/brokerChat.prompt.js')
+  const text = (f, opts = { towardBooking: true }) => callerBlock(f, carrier, opts).join('\n')
+  assert.match(text(facts(['MC 741309'])), /Their MC is done -- never ask for it again\./)
+  assert.doesNotMatch(text(facts(['hi'])), /Their MC is done/)
+
+  const asked = text(facts(['hi']), { mcAsked: true, towardBooking: false })
+  assert.match(asked, /You already asked for their MC\. Do not repeat that question during this discussion\./)
+  assert.doesNotMatch(asked, /Still missing|Ask ONE missing/)
+  assert.doesNotMatch(text(facts(['hi']), { mcAsked: true, towardBooking: true }), /You already asked/)
+  assert.doesNotMatch(text(facts(['hi']), { mcAsked: false }), /You already asked/)
+
+  for (const f of [facts(['MC 999999']), bookingFacts({ texts: ['MC 741309'], carrier: { name: 'X', mcNumber: '' }, posting, now })]) {
+    const block = text(f)
+    assert.match(block, /Still missing before you can book: an MC that checks out\./)
+    assert.doesNotMatch(block.split('\n').find((l) => l.includes('Still missing')), /company name|driver's name|truck number|email to send/)
+    assert.match(block, /Until an MC checks out, ask for nothing else on the booking list -- not the driver, the truck number or the email\./)
+  }
+  assert.doesNotMatch(text(facts(['hi'])), /Until an MC checks out/)
+})
+
+// Kills: buildBrokerSystemPrompt not turning brokerSaid / the last dispatcher
+// line into the MC-asked state, and the "ask once" rule keeping its old wording.
+test('buildBrokerSystemPrompt: the MC-asked note follows brokerSaid and the last line', async () => {
+  const { buildBrokerSystemPrompt } = await import('../src/modules/brokerChat/brokerChat.prompt.js')
+  const base = { broker: { name: 'Acme', contactName: 'Devin', persona: 'plain' }, posting: { ...posting, id: 'p1' }, carrier, now }
+  const build = (said, brokerSaid) => buildBrokerSystemPrompt({ ...base, said, brokerSaid })
+  const NOTE = /You already asked for their MC/
+  assert.match(build(['is it open?'], ["What's your MC?"]), NOTE)
+  assert.doesNotMatch(build(['is it open?'], ['Yes it is.']), NOTE)
+  assert.doesNotMatch(build(['ok book it'], ["What's your MC?"]), NOTE)
+  assert.match(build(['hi'], []), /Ask when they accept the rate or explicitly move to book, not during greetings, availability or bargaining\./)
+})
+
+// Kills: the two content checks missing, firing on the wrong verdict, or marked
+// unusable (a content problem is kept and logged, never swapped for a holding line).
+test('brokerReplyProblem: asking again for a verified MC, or for details before a correct MC', () => {
+  const again = brokerReplyProblem("Thanks. What's your MC number?", { booking: facts(['MC 741309']) })
+  assert.equal(again.why, 'asked again for the MC they already gave')
+  assert.equal(again.unusable, false)
+  assert.equal(brokerReplyProblem("Your MC checks out. Where's the truck now?", { booking: facts(['MC 741309']) }), null)
+  assert.equal(brokerReplyProblem("What's your MC number?", { booking: facts(['hi']) }), null)
+
+  for (const reply of ["Who's the driver?", 'Send me the right MC first. What is the truck number?', "What's the best email for the rate con?"]) {
+    const p = brokerReplyProblem(reply, { booking: facts(['MC 999999']) })
+    assert.equal(p.why, 'asked for booking details before a correct MC', reply)
+    assert.equal(p.unusable, false)
+  }
+  assert.equal(brokerReplyProblem('Can you send me the right MC?', { booking: facts(['MC 999999']) }), null)
+  assert.equal(brokerReplyProblem("Who's the driver?", { booking: facts(['MC 741309']) }), null)
+  assert.equal(asksPaperDetails('I will need the driver and the email.'), false)
+})
+
+// Kills: MC_REJECT missing "isn't showing up", "not finding", "doesn't come up"
+// (the broker's real wordings), or the scripts testing curly apostrophes raw.
+test('MC_REJECT: the ways a broker says the MC does not come up', () => {
+  for (const r of ["Got it, but MC 999999 isn't showing up on our end.", "I'm not finding that MC.", "That doesn't come up for me.", "Can't find it.", 'I have no record of that MC.', "That MC didn't pull up."]) {
+    assert.match(r, MC_REJECT, r)
+  }
+  assert.doesNotMatch('Your MC checks out. Where is the truck?', MC_REJECT)
+  const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../scripts/scenarioChecks.js'), 'utf8')
+  assert.doesNotMatch(src, /MC_REJECT\.test\(r\)/)
+})
+
+// Kills: saysBooked counting a conditional or "send your MC and we'll get it booked"
+// as booked (a false hit on the best reply), or losing the plain statements.
+test('saysBooked: a promise on a condition is not a booking; a statement is', () => {
+  for (const r of ['If you can share your MC number, we can get it booked.', "If that works, just send me your MC number and we'll get it booked.", "Send me your MC and we'll get it booked.", 'Once I have your MC I can send the rate con.']) {
+    assert.equal(saysBooked(r), false, r)
+  }
+  for (const r of ["You're booked.", "You're all set.", "I'll get it booked now.", 'If it works for you, great. You are booked.', "You're set. What's your MC?"]) {
+    assert.equal(saysBooked(r), true, r)
+  }
 })

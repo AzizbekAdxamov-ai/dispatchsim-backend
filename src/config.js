@@ -93,6 +93,20 @@ if (rawEffort !== '' && !['low', 'medium', 'high'].includes(rawEffort)) {
   errors.push(`CHAT_GROQ_REASONING_EFFORT must be 'low', 'medium' or 'high' (or left blank, which means low) (got: ${process.env.CHAT_GROQ_REASONING_EFFORT})`)
 }
 
+// CHAT_DRIVER_REASONING_EFFORT: the driver chat's own effort (groqReasoningEffort).
+// Blank means CHAT_GROQ_REASONING_EFFORT, else medium. Same typo rule.
+const rawDriverEffort = (process.env.CHAT_DRIVER_REASONING_EFFORT ?? '').trim().toLowerCase()
+if (rawDriverEffort !== '' && !['low', 'medium', 'high'].includes(rawDriverEffort)) {
+  errors.push(`CHAT_DRIVER_REASONING_EFFORT must be 'low', 'medium' or 'high' (or left blank, which means CHAT_GROQ_REASONING_EFFORT, else medium) (got: ${process.env.CHAT_DRIVER_REASONING_EFFORT})`)
+}
+
+// Broker effort can change without increasing the driver or seed workload.
+// Blank preserves the shared setting and the existing low default.
+const rawBrokerEffort = (process.env.CHAT_BROKER_REASONING_EFFORT ?? '').trim().toLowerCase()
+if (rawBrokerEffort !== '' && !['low', 'medium', 'high'].includes(rawBrokerEffort)) {
+  errors.push(`CHAT_BROKER_REASONING_EFFORT must be 'low', 'medium' or 'high' (or left blank, which means CHAT_GROQ_REASONING_EFFORT, else low) (got: ${process.env.CHAT_BROKER_REASONING_EFFORT})`)
+}
+
 const rawFast = process.env.CHAT_FAST_REPLIES
 const fast = rawFast && rawFast.trim() !== '' ? rawFast.trim().toLowerCase() : 'off'
 if (fast !== 'on' && fast !== 'off') {

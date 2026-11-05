@@ -224,7 +224,7 @@ test('a dataset row carries requests, attempts and summed usage', () => {
   assert.equal(f.requests, 2)
   assert.deepEqual(f.attempts, [TPM_429, FALLBACK_OK])
   assert.deepEqual(f.usage, FALLBACK_OK.usage)
-  assert.deepEqual(attemptFields(undefined), { requests: 0, attempts: [], usage: null })
+  assert.deepEqual(attemptFields(undefined), { requests: 0, attempts: [], usage: null, latencyMs: null })
   // Two answered attempts: the usage is their sum, each counted once.
   const two = attemptFields([
     { n: 1, model: 'a', status: 200, outcome: 'ok', usage: { prompt: 100, completion: 10, reasoning: 5, cached: 0, total: 110 } },

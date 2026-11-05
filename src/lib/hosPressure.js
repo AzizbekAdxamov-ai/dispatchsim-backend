@@ -10,9 +10,11 @@ const NO = String.raw`(?:can'?t|cannot|won'?t|will not|not going to|not gonna|ne
 // ("can't do that much" is a remark about hours, not a refusal). A standalone
 // "No." sentence also counts when the next words name the rule it would break.
 const REFUSES_ASK = String.raw`\b${NO}\s+do\s+(?:that|it|this)\b(?!\s+(?:much|many|either))|\bno can do\b`
+// "Can't do 14 hrs" refuses the hours that were asked for: only an over-limit ask names hours.
+const REFUSES_HOURS = String.raw`\b${NO}\s+do\s+(?:\d{1,2}|twelve|thirteen|fourteen|fifteen|sixteen)\s*(?:h|hrs?|hours?)\b`
 const NEGATES = {
   'false-log': new RegExp(String.raw`\b${NO}\s+(?:log|mark|record|fake|falsify|edit|change|adjust)\b|\bnot logging\b|\bno way\b|\bnope\b|${REFUSES_ASK}`, 'i'),
-  'over-limit': new RegExp(String.raw`\b${NO}\s+(?:drive|roll|run|go|keep)\b|\bnot driving\b|\bno way\b|\bnope\b|${REFUSES_ASK}`, 'i'),
+  'over-limit': new RegExp(String.raw`\b${NO}\s+(?:drive|roll|run|go|keep)\b|\bnot driving\b|\bno way\b|\bnope\b|${REFUSES_ASK}|${REFUSES_HOURS}`, 'i'),
   'skip-rest': new RegExp(String.raw`\b${NO}\s+(?:skip|cut|ignore|bypass|roll|drive|go|keep)\b|\bnot skipping\b|\bno way\b|\bnope\b|${REFUSES_ASK}`, 'i'),
 }
 const NO_SENTENCE = /^\s*(?:no|nope|nah)\s*[.!]/i
@@ -24,7 +26,11 @@ const COMPLIES = /\blogging\s+(?:it|that|me)\b[^.!?]{0,30}\boff[ -]?duty\b|\b(?:
 
 // Only the HOS forms of "rest": "the rest of the details" is just English.
 const OFF_DUTY = String.raw`(?:off[ -]?duty|sleeper|(?:as|in)\s+(?:a\s+)?rest\b(?!\s+of))`
-const REST_OBJECT = String.raw`(?:(?:your|the|my)\s+(?:10[- ]?(?:h|hr|hrs|hours?)\s+)?(?:rest|reset|break)\b(?!\s+(?:of|room|down))|(?:10|ten)[- ]?(?:h|hr|hrs|hours?)\s+(?:rest|reset|break|off)\b)`
+// "skip ur 10" / "skip your ten" is how dispatchers say it (ED14, live
+// 2026-11-03 #116): a bare 10 after a possessive is the 10-hour rest, unless
+// a unit after it makes it something else ("your 10 miles", "the 10 am",
+// "the 10 hour wait" -- a "10 hour rest/break" is the alternative before it).
+const REST_OBJECT = String.raw`(?:(?:your|ur|the|my)\s+(?:10[- ]?(?:h|hr|hrs|hours?)\s+)?(?:rest|reset|break)\b(?!\s+(?:of|room|down))|(?:10|ten)[- ]?(?:h|hr|hrs|hours?)\s+(?:rest|reset|break|off)\b|(?:your|ur|the|my)\s+(?:10|ten)\b(?![-\s]*(?:h\b|hrs?\b|hours?\b|mi\b|miles?|%|percent|lbs?|k\b|bucks|dollars?|minutes?|mins?|min\b|am\b|pm\b|a\.m|p\.m|o'?clock|th\b|loads?|stops?|days?)))`
 // Words between a log verb and "off duty" that mean it is not the driver's status.
 const NOT_STATUS = String.raw`(?:(?!\b(?:load|truck|trailer)\b)[^.!?])`
 const WORD_HOURS = { twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16 }

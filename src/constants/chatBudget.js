@@ -122,6 +122,14 @@ export function isGroq(baseUrl) {
 // and stops, and is charged for three sentences.
 export const CHAT_REPLY_TOKENS = 220
 
+// How long one chat request may take before it is abandoned. Measured live
+// on 2026-11-04: a single request took 2.5 s at most and 1.2 s on average, so
+// 15 s is about 6x the worst seen. A turn can send up to 4 requests (reply,
+// regeneration, fallback model, second try); at 15 s each the worst turn is
+// about 60 s, the longest a person is meant to wait on a desk reply. Chat
+// only: the seed generator passes no timeout (null keeps its old behaviour).
+export const CHAT_REQUEST_TIMEOUT_MS = 15000
+
 // How much thinking a reply is allowed to cost, as a multiple of the reply
 // itself. Stated as a ratio rather than a total so it means something:
 // "a model may think three times as long as it speaks". A model that needs
@@ -170,11 +178,28 @@ export function chatReasoningCap(baseUrl) {
   return Math.max(0, chatMaxTokens() - CHAT_REPLY_TOKENS)
 }
 
-// How hard a gpt-oss model thinks (CHAT_GROQ_REASONING_EFFORT, checked at
-// start-up in src/config.js). Low unless the .env says medium or high.
-export function groqReasoningEffort() {
-  const raw = String(process.env.CHAT_GROQ_REASONING_EFFORT ?? '').trim().toLowerCase()
-  return raw === 'medium' || raw === 'high' ? raw : 'low'
+// How hard a gpt-oss model thinks. The broker: CHAT_BROKER_REASONING_EFFORT,
+// else CHAT_GROQ_REASONING_EFFORT, else low. The driver (`chat` 'driver'): its
+// own CHAT_DRIVER_REASONING_EFFORT, else CHAT_GROQ_REASONING_EFFORT, else
+// medium -- a driver weighs hours of service and the clock, and low missed
+// them. A value that is none of low/medium/high is the default. Checked at
+// start-up in src/config.js.
+export const REASONING_EFFORTS = Object.freeze(['low', 'medium', 'high'])
+export const DEFAULT_REASONING_EFFORT = Object.freeze({ broker: 'low', driver: 'medium' })
+
+const effortFrom = (name) => {
+  const raw = String(process.env[name] ?? '').trim().toLowerCase()
+  return REASONING_EFFORTS.includes(raw) ? raw : null
+}
+
+export function groqReasoningEffort(chat = null) {
+  if (chat === 'broker') {
+    return effortFrom('CHAT_BROKER_REASONING_EFFORT') ?? effortFrom('CHAT_GROQ_REASONING_EFFORT') ?? DEFAULT_REASONING_EFFORT.broker
+  }
+  if (chat === 'driver') {
+    return effortFrom('CHAT_DRIVER_REASONING_EFFORT') ?? effortFrom('CHAT_GROQ_REASONING_EFFORT') ?? DEFAULT_REASONING_EFFORT.driver
+  }
+  return effortFrom('CHAT_GROQ_REASONING_EFFORT') ?? DEFAULT_REASONING_EFFORT.broker
 }
 
 // Groq's way to keep thinking out of the reply and short
@@ -184,16 +209,51 @@ export function groqReasoningEffort() {
 //            reasoning_effort 'none' turns it off, 'low' keeps it brief.
 //   gpt-oss  reasoning_effort low/medium/high only (low unless
 //            CHAT_GROQ_REASONING_EFFORT says otherwise); it rejects both
-//            reasoning_format and 'none'.
+//            reasoning_format and 'none'. `chat` ('broker' or 'driver') picks
+//            which chat's effort applies; null (the seed generator) retains
+//            the shared setting, independently of the broker override.
 // Anything else on Groq (llama and the like) does not reason: send nothing.
-export function groqReasoningParams(baseUrl, model) {
+export function groqReasoningParams(baseUrl, model, chat = null) {
   if (!isGroq(baseUrl)) return {}
   const name = String(model ?? '')
   if (/qwen/i.test(name)) {
     return { reasoning_format: 'parsed', reasoning_effort: chatReasoningMode() === 'off' ? 'none' : 'low' }
   }
-  if (/gpt-oss/i.test(name)) return { reasoning_effort: groqReasoningEffort() }
+  if (/gpt-oss/i.test(name)) return { reasoning_effort: groqReasoningEffort(chat) }
   return {}
+}
+
+// OpenRouter's reasoning control for the model families under A/B test
+// (https://openrouter.ai/docs/use-cases/reasoning-tokens and
+// https://openrouter.ai/deepseek/deepseek-v4-flash/api, checked 2026-11-02).
+// A request may carry reasoning.effort OR reasoning.max_tokens, not both, so a
+// family that gets an effort here must not also get the max_tokens cap: the
+// caller passes reasoningMaxTokens null when this returns an object.
+//   gpt-oss   effort low/medium/high, the same per-chat choice as on Groq.
+//             It reasons always and rejects 'none', so CHAT_REASONING=off is
+//             ignored for it.
+//   deepseek  effort 'high' (V4 Flash page lists high/xhigh only; assumed to
+//             hold for V4.1 -- inferred, not read from a V4.1 page).
+//             CHAT_REASONING=off sends { enabled: false } instead.
+// Any other family, and any other provider: null (the max_tokens cap path).
+export function openRouterReasoningParams(baseUrl, model, chat = null) {
+  if (providerFor(baseUrl).id !== 'openrouter') return null
+  const name = String(model ?? '')
+  if (/gpt-oss/i.test(name)) return { reasoning: { effort: groqReasoningEffort(chat) } }
+  if (/deepseek/i.test(name)) {
+    return { reasoning: chatReasoningMode() === 'off' ? { enabled: false } : { effort: 'high' } }
+  }
+  return null
+}
+
+// Pin a request to named OpenRouter providers, without silent fallback to
+// others (https://openrouter.ai/docs/guides/routing/provider-selection,
+// checked 2026-11-02). Only on OpenRouter and only for a non-empty list;
+// otherwise nothing is added and routing stays the provider's default.
+export function providerRouting(baseUrl, order) {
+  if (providerFor(baseUrl).id !== 'openrouter') return {}
+  if (!Array.isArray(order) || order.length === 0) return {}
+  return { provider: { order, allow_fallbacks: false } }
 }
 
 // The reply's own limit, in characters, because that is what we can

@@ -14,9 +14,87 @@ import { pool } from '../src/db/pool.js'
 import { generateLoad, generateApplicant, generateTruckListing } from './seed/generate.js'
 import { LoadItem, ApplicantItem, TruckListingItem, BROKERS } from './seed/schemas.js'
 import { validateLoadItem, validateApplicantItem, validateTruckListingItem } from './seed/validate.js'
-import { buildPostingRows, POSTING_CONFIG, TIER_WEIGHTS, HIDDEN_RATE_SHARE } from './seed/postings.js'
+import { buildPostingRows, buildNearCoverageRows, POSTING_CONFIG, TIER_WEIGHTS, HIDDEN_RATE_SHARE, DEADHEAD_MAX_MI } from './seed/postings.js'
 import { buildApplicantRows, APPLICANT_CONFIG, APPLICANT_TIERS } from './seed/applicants.js'
 import { buildTruckRows, TRUCK_CONFIG, TRUCK_TIERS } from './seed/trucks.js'
+import { findCity } from './seed/cities.js'
+import { EQUIPMENT_KEYS } from '../src/constants/equipment.js'
+
+// Azizbek qarori 2026-11-04: active trucks define coverage, including a
+// parked truck whose recorded location is available without a driver.
+export async function activeTruckLocations(runner = pool) {
+  const { rows } = await runner.query(`SELECT t.id, t.current_location, t.trailer_type, d.current_lat, d.current_lon
+    FROM trucks t LEFT JOIN drivers d ON d.id = t.driver_id WHERE t.status = 'active'`)
+  return rows.map((row) => {
+    // A legacy label (for example "Dry Van") is not an equipment key.
+    // Treat it as unknown rather than passing an invalid key to the
+    // generator or incorrectly claiming a trailer-compatible match.
+    const trailerType = EQUIPMENT_KEYS.includes(row.trailer_type) ? row.trailer_type : null
+    if (row.trailer_type && !trailerType) console.warn(`[posting refresh] unknown trailer type for truck ${row.id}`)
+    if (row.current_lat != null && row.current_lon != null) return { ...row, trailer_type: trailerType, duty_status: 'on' }
+    const parts = String(row.current_location ?? '').split(',').map((x) => x.trim())
+    const city = parts.length === 2 ? findCity(parts[0], parts[1]) : null
+    if (!city) throw new Error(`No known coordinates for active truck ${row.id}`)
+    return { ...row, trailer_type: trailerType, current_lat: city.lat, current_lon: city.lon, duty_status: 'on' }
+  })
+}
+
+// Count visible destinations already in the market before adding coverage.
+// Expired, not-yet-visible, and booked postings cannot fill a truck's need.
+export async function withCoveredDestinations(drivers, runner = pool) {
+  return Promise.all(drivers.map(async (driver) => {
+    const result = await runner.query(`SELECT DISTINCT destination_state FROM load_postings
+      WHERE status = 'open' AND posted_at <= now() AND expires_at > now()
+        AND road_miles($1, $2, origin_lat, origin_lon) <= $3
+        AND ($4::text IS NULL OR equipment_type = $4)`,
+    [driver.current_lat, driver.current_lon, DEADHEAD_MAX_MI, driver.trailer_type ?? null])
+    return { ...driver, coveredDestinationStates: result.rows.map((row) => row.destination_state).filter(Boolean) }
+  }))
+}
+
+const POSTING_COLUMNS = [
+  'origin_lat', 'origin_lon', 'destination_lat', 'destination_lon',
+  'origin_city', 'origin_state', 'destination_city', 'destination_state',
+  'broker', 'broker_id', 'commodity', 'rate_usd', 'distance_mi', 'weight_lbs',
+  'equipment_type', 'equipment_length_ft', 'posted_at', 'expires_at', 'pickup_at', 'delivery_at', 'status',
+  'rate_hidden', 'rate_basis', 'fuel_surcharge_usd',
+]
+
+// A bounded additive market update: no cleanup, applicants, trucks or edits
+// to existing freight. The ordinary daily refresh below keeps its behavior.
+export async function runPostingRefresh({ count = 12, runner = pool } = {}) {
+  assertLocalHost()
+  if (!Number.isInteger(count) || count < 1 || count > 60) throw new RangeError('Posting count must be 1–60')
+  const brokerIds = new Map((await runner.query('SELECT id, name FROM brokers')).rows.map((b) => [b.name, b.id]))
+  const drivers = await activeTruckLocations(runner)
+  const items = []
+  const seen = new Set()
+  for (let n = 0; n < count; n += 1) {
+    const item = generateLoad(Math.random, { avoid: seen, hiddenRateShare: HIDDEN_RATE_SHARE })
+    const parsed = LoadItem.parse(item)
+    const checked = validateLoadItem(parsed)
+    if (!checked.ok) throw new Error(`Posting rejected: ${checked.reason}`)
+    items.push(checked.item)
+    seen.add(`${item.originCity}, ${item.originState} -> ${item.destinationCity}, ${item.destinationState}`)
+  }
+  const rng = mulberry32(Date.now())
+  const rows = [...buildPostingRows({ rng, postingItems: items, drivers, trucks: [], fleetEquipment: [], brokerIds }),
+    ...buildNearCoverageRows({ rng, drivers: await withCoveredDestinations(drivers, runner), brokerIds })]
+  const client = await runner.connect()
+  try {
+    await client.query('BEGIN')
+    for (const row of rows) {
+      const values = []
+      const parts = POSTING_COLUMNS.map((column) => row[column]?.__raw ? row[column].value : `$${values.push(row[column])}`)
+      await client.query(`INSERT INTO load_postings (${POSTING_COLUMNS.join(', ')}) VALUES (${parts.join(', ')})`, values)
+    }
+    await client.query('COMMIT')
+  } catch (error) {
+    await client.query('ROLLBACK')
+    throw error
+  } finally { client.release() }
+  return { ok: true, postingsInserted: rows.length, splitPostings: rows.filter((r) => r.rate_basis === 'linehaul-plus-fuel').length }
+}
 
 // The prompt builders that lived here are gone with the model calls they
 // fed. Six of them -- loads, applicants and truck listings, a system and a
@@ -97,10 +175,7 @@ export async function runRefresh() {
   const brokerIds = new Map(brokerRows.rows.map((b) => [b.name, b.id]))
 
   // Step 2: fetch live drivers from DB (not fixture)
-  const driversResult = await pool.query(
-    `SELECT id, current_lat, current_lon, duty_status FROM drivers`,
-  )
-  const drivers = driversResult.rows
+  const drivers = await activeTruckLocations(pool)
 
   // Step 3a: generate posting items via AI
   const seenPairs = new Set()
@@ -255,6 +330,7 @@ export async function runRefresh() {
     trucks: [],
     fleetEquipment: [],
   })
+  postingRows.push(...buildNearCoverageRows({ rng, drivers: await withCoveredDestinations(drivers), brokerIds }))
   // One round trip reserves the whole block, so two runs (or the cron and a
   // manual run) can never hand out the same id. Index-based ids were the
   // reason the second run ever attempted died on driver_applicants_pkey.
@@ -276,16 +352,7 @@ export async function runRefresh() {
   const truckListingRows = buildTruckRows({ truckIds: truckListingIds, rng, truckItems: truckListingAccepted })
 
   // Step 5: parameterized INSERT — all categories in one transaction
-  const postingColumns = [
-    'origin_lat', 'origin_lon', 'destination_lat', 'destination_lon',
-    'origin_city', 'origin_state', 'destination_city', 'destination_state',
-    'broker', 'broker_id', 'commodity', 'rate_usd', 'distance_mi', 'weight_lbs',
-    'equipment_type', 'equipment_length_ft', 'posted_at', 'expires_at', 'pickup_at', 'delivery_at', 'status',
-    // Migration 030. rate_usd is still written for every posting -- the
-    // broker knows what the load is worth; this only decides whether the
-    // board prints it.
-    'rate_hidden',
-  ]
+  const postingColumns = POSTING_COLUMNS
   const truckListingColumns = [
     'id', 'make', 'model', 'year', 'odometer_mi', 'price_usd', 'trailer_type',
     'fuel_capacity_gal', 'tire_front_pct', 'tire_rear_pct', 'service_notes',
@@ -429,8 +496,12 @@ const isMainModule = process.argv[1] &&
    process.argv[1].endsWith('\\refresh-postings.js'))
 
 if (isMainModule) {
-  runRefresh()
+  const postingOnly = process.argv.includes('--postings-only')
+  const countArg = process.argv.find((arg) => arg.startsWith('--count='))
+  const run = postingOnly ? runPostingRefresh({ count: countArg ? Number(countArg.slice(8)) : 12 }) : runRefresh()
+  run
     .then((result) => {
+      if (postingOnly) console.log(JSON.stringify(result))
       if (!result.ok) process.exitCode = 1
       return pool.end()
     })

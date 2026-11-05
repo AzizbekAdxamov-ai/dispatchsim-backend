@@ -25,6 +25,7 @@
 // only if `loads` grows by an order of magnitude.
 
 import { query } from '../../db/pool.js'
+import { placeLabel } from './whereabouts.js'
 
 // Exported for the dispatch board's column queries (loads.service.js):
 // one projection, shared, so the board's cards and the list's rows are
@@ -34,6 +35,7 @@ export const LOAD_COLUMNS = `
   l.destination_city AS "destinationCity", l.destination_state AS "destinationState",
   l.broker, l.commodity,
   l.rate_usd AS "rateUsd", l.distance_mi AS "distanceMi", l.weight_lbs AS "weightLbs",
+  l.rate_basis AS "rateBasis", l.fuel_surcharge_usd AS "fuelSurchargeUsd",
   l.equipment_type AS "equipmentType", l.equipment_length_ft AS "equipmentLengthFt",
   l.status, l.driver_id AS "driverId", l.truck_id AS "truckId",
   l.booked_at AS "bookedAt", l.pickup_at AS "pickupAt", l.delivery_at AS "deliveryAt",
@@ -105,6 +107,9 @@ export async function listLoads({ status, equipmentType, search, limit, offset }
   if (status) {
     params.push(status)
     conditions.push(`l.status = $${params.length}`)
+  } else {
+    // A cancelled load is off the list unless asked for by name.
+    conditions.push(`l.status <> 'cancelled'`)
   }
 
   const finalWhere = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
@@ -140,7 +145,7 @@ export async function countLoadStatuses({ equipmentType, search }) {
   const { whereClause, params } = buildLoadFilter({ equipmentType, search })
   const result = await query(
     `SELECT
-       count(*)::int                                                          AS "all",
+       count(*) FILTER (WHERE l.status <> 'cancelled')::int                   AS "all",
        count(*) FILTER (WHERE l.status IN ('ontime','warn','crit'))::int      AS active,
        count(*) FILTER (WHERE l.status = 'neutral')::int                      AS pending,
        count(*) FILTER (WHERE l.status = 'done')::int                        AS delivered,
@@ -181,10 +186,10 @@ export async function listLoadsByDriverId(driverId, { limit = 10 } = {}) {
 // a broken on-time percentage sit unnoticed for weeks.
 export const DASHBOARD_COUNTS_SQL = `
   SELECT
-    count(*) FILTER (WHERE status <> 'done')::int                  AS "activeLoads",
+    count(*) FILTER (WHERE status NOT IN ('done','cancelled'))::int AS "activeLoads",
     count(*) FILTER (WHERE status IN ('ontime','warn','crit'))::int AS "inTransit",
     count(*) FILTER (WHERE status IN ('warn','crit'))::int          AS "atRisk",
-    count(*) FILTER (WHERE status <> 'neutral')::int                AS "evaluatedLoads",
+    count(*) FILTER (WHERE status NOT IN ('neutral','cancelled'))::int AS "evaluatedLoads",
     -- On time is a FACT about the delivery, not the status.
     -- markDelivered sets status='done' for every load, late or not, so
     -- FILTER (status IN ('ontime','done')) counted a load that ran 40%
@@ -256,7 +261,7 @@ export async function getOnTimeTrend(days = 7) {
 // file that INSERTs INTO loads.
 export async function createLoad(client, {
   id, originCity, originState, destinationCity, destinationState,
-  broker, commodity, rateUsd, distanceMi, weightLbs,
+  broker, commodity, rateUsd, distanceMi, weightLbs, rateBasis = 'all-in', fuelSurchargeUsd = 0,
   equipmentType, equipmentLengthFt, driverId, truckId,
   pickupAt, deliveryAt, bookedAt, paymentTerms,
 }) {
@@ -267,14 +272,14 @@ export async function createLoad(client, {
        equipment_type, equipment_length_ft,
        status, driver_id, truck_id,
        booked_at, pickup_at, delivery_at,
-       payment_terms, accessorials
+       payment_terms, accessorials, rate_basis, fuel_surcharge_usd
      ) VALUES (
        $1, $2, $3, $4, $5,
        $6, $7, $8, $9, $10,
        $11, $12,
        $13, $14, $15,
        $16, $17, $18,
-       $19, '[]'::jsonb
+       $19, '[]'::jsonb, $20, $21
      )
      RETURNING id`,
     [
@@ -286,6 +291,7 @@ export async function createLoad(client, {
       // Derived from the broker's stated days-to-pay (constants/paymentTerms.js).
       // Defaults to net30 when the posting has no broker on file.
       paymentTerms || 'net30',
+      rateBasis, fuelSurchargeUsd,
     ],
   )
   return result.rows[0]
@@ -422,6 +428,12 @@ export async function getDriverForDispatch(client, driverId) {
 // truck's location -- the two are one fact about one place. Until
 // 2026-10-05 nothing wrote these columns at all.
 export async function moveDriverTo(client, { driverId, city, state, lat, lon, label }) {
+  // A place without a name or coordinates is not a place. Skipping leaves
+  // the old location standing; throwing would roll back the delivery.
+  if (!placeLabel(city, state) || !Number.isFinite(lat) || !Number.isFinite(lon)) {
+    console.warn(`moveDriverTo: skipped driver ${driverId}, invalid place`, { city, state, lat, lon })
+    return
+  }
   await client.query(
     `UPDATE drivers
         SET current_city = $2, current_state = $3, current_lat = $4, current_lon = $5,
@@ -450,6 +462,10 @@ export async function claimArrivedLoads(client, limit = 1) {
             -- linked, and the caller checks for that rather than catching.
             l.truck_id AS "truckId", l.dispatched_at AS "dispatchedAt",
             l.pickup_at AS "pickupAt", l.delivery_at AS "deliveryAt",
+            -- Where the run ends. deliveredTo() and the truck's location
+            -- label both read these; without them the label was
+            -- "undefined, undefined" and the driver never moved.
+            l.destination_city AS "destinationCity", l.destination_state AS "destinationState",
             -- Detour miles a resolved event added. They burn fuel, wear
             -- tires and land on the odometer -- but are NOT in
             -- distance_mi, which stays the contracted lane. See
@@ -634,6 +650,20 @@ export async function cancelDispatch(client, loadId) {
         AND status IN ('ontime', 'warn', 'crit')
       RETURNING id, driver_id AS "driverId"`,
     [loadId],
+  )
+  return result.rows[0] ?? null
+}
+
+// Cancel a load that was never dispatched (the agreement behind it was
+// withdrawn). Only a 'neutral', undelivered load: a dispatched one has to
+// be undone first (loadWithdrawal.js), a delivered one has money against it.
+export async function cancelLoad(client, { loadId, reason }) {
+  const result = await client.query(
+    `UPDATE loads
+        SET status = 'cancelled', cancelled_at = now(), cancel_reason = $2
+      WHERE id = $1 AND status = 'neutral' AND delivered_at IS NULL
+      RETURNING id`,
+    [loadId, reason],
   )
   return result.rows[0] ?? null
 }

@@ -254,3 +254,14 @@ test('nothing after the refusal may turn around (structural rule)', () => {
     assert.equal(hosReplyProblem(hosReplyProblem('Copy that.', line).safeReply, line), null, kind)
   }
 })
+
+// Kills: "can't do 14 hrs" not counted as a refusal of the over-limit ask (a
+// correct no flagged unusable), or REFUSES_HOURS leaking into the other kinds,
+// or a turnaround after it going unnoticed.
+test('"can\'t do 14 hrs" refuses an over-limit ask, and only that', () => {
+  assert.equal(hosReplyProblem("No, can't do 14 hrs—only 11 hrs driving left today per DOT rules.", ed15), null)
+  assert.equal(driverReplyProblem("No, can't do 14 hrs—only 11 hrs driving left today per DOT rules.", { text: ed15 }), null)
+  assert.equal(hosReplyProblem("can't do 14 hrs, but rolling now", ed15)?.unusable, true)
+  // A refusal of hours says nothing about a false log or a skipped rest.
+  assert.equal(hosReplyProblem("Can't do 10 hrs. The rest is the rule here, legal and logged.", 'Grace skip your 10 hour rest and drive')?.unusable, true)
+})

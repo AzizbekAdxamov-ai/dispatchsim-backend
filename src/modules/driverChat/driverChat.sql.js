@@ -39,6 +39,8 @@ export const GET_DRIVER_CONTEXT_SQL = `
          d.pay_model AS "payModel", d.pay_percent_bp AS "payPercentBp",
          d.pay_per_mile_cents AS "payPerMileCents",
          t.id AS "truckId",
+         t.trailer_type AS "trailerType",
+         t.trailer_length_ft AS "trailerLengthFt",
          t.fuel_gallons AS "fuelGallons", t.fuel_capacity_gal AS "fuelCapacityGal",
          l.id AS "loadId", l.origin_city AS "originCity", l.origin_state AS "originState",
          l.destination_city AS "destinationCity", l.destination_state AS "destinationState",

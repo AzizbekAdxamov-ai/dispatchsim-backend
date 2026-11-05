@@ -9,11 +9,15 @@
 // HTTP status and attempt number, nothing from the request or response
 // body that could carry it back out.
 
-import { chatMaxTokens, chatReasoningCap, CHAT_REPLY_TOKENS, dailyCapScope, groqReasoningParams, isDailyCap } from '../../src/constants/chatBudget.js'
+import { chatMaxTokens, chatReasoningCap, CHAT_REPLY_TOKENS, CHAT_REQUEST_TIMEOUT_MS, dailyCapScope, groqReasoningParams, isDailyCap, openRouterReasoningParams, providerRouting } from '../../src/constants/chatBudget.js'
 import { sleep } from './config.js'
 import { parseRateLimit } from '../../src/lib/rateLimitReason.js'
 
 const MAX_ATTEMPTS = 4
+// A request that timed out already cost the whole timeout; four of them in a row
+// would keep one dispatcher waiting minutes. One attempt, then the caller
+// decides (fallback model, or a plain failure).
+const MAX_TIMEOUT_ATTEMPTS = 1
 
 // The longest this client will ever wait between attempts. A long wait is
 // not evidence of a daily cap; upstream model throttling can also last.
@@ -127,7 +131,7 @@ export function completionBody({ model, messages, temperature, maxTokens, reason
 // the parsed 429 reason, the tokens -- for the record only. Nothing here
 // decides anything from it. `firstCause` says why the first request was
 // sent; the ones after it are 'backoff'.
-async function requestCompletion({ system, user, messages, config, temperature = 0.8, maxTokens, reasoningMaxTokens = null, onRequest = null, onAttempt = null, beforeRequest = null, firstCause = 'first', stopOnRateLimit = false, maxAttempts = MAX_ATTEMPTS }) {
+async function requestCompletion({ system, user, messages, config, temperature = 0.8, maxTokens, reasoningMaxTokens = null, onRequest = null, onAttempt = null, beforeRequest = null, firstCause = 'first', stopOnRateLimit = false, maxAttempts = MAX_ATTEMPTS, timeoutMs = null }) {
   const url = `${config.baseUrl}/chat/completions`
   // `messages` wins when given (multi-turn conversation); system/user is the
   // single-shot shape the seed generator uses. One retry/backoff
@@ -136,10 +140,19 @@ async function requestCompletion({ system, user, messages, config, temperature =
     { role: 'system', content: system },
     { role: 'user', content: user },
   ]
+  // A family with its own reasoning control (OpenRouter gpt-oss / deepseek)
+  // takes effort OR max_tokens, never both: drop the cap so completionBody
+  // emits no reasoning of its own and the family object below is the only one.
+  const family = openRouterReasoningParams(config.baseUrl, config.model, config.chat)
   const body = JSON.stringify(completionBody({
-    model: config.model, messages: payloadMessages, temperature, maxTokens, reasoningMaxTokens,
+    model: config.model, messages: payloadMessages, temperature, maxTokens,
+    reasoningMaxTokens: family ? null : reasoningMaxTokens,
     // Per model config, so a fallback from another family gets its own params.
-    providerParams: groqReasoningParams(config.baseUrl, config.model),
+    providerParams: {
+      ...groqReasoningParams(config.baseUrl, config.model, config.chat),
+      ...(family ?? {}),
+      ...providerRouting(config.baseUrl, config.providerOrder),
+    },
   }))
 
   let lastNetworkError = null
@@ -147,14 +160,33 @@ async function requestCompletion({ system, user, messages, config, temperature =
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     let response
     const cause = attempt === 1 ? firstCause : 'backoff'
+    let t0 = null
     const report = (status, outcome, extra = {}) => onAttempt?.({
-      n: attempt, model: config.model, cause, status, outcome, rateLimit: null, usage: null, ...extra,
+      n: attempt, model: config.model, cause, status, outcome, rateLimit: null, usage: null,
+      ms: t0 == null ? null : Date.now() - t0, ...extra,
     })
+    // Network-level failure (DNS, connection refused, timeout). Retry like any
+    // other transient failure; only the attempt count is reported, never the
+    // underlying error object (it can echo the request back, including
+    // headers, on some fetch implementations). A timeout with a fallback model
+    // waiting is thrown at once: waiting out backoff before trying the
+    // fallback would double the delay the timeout exists to cap.
+    const networkFailure = async (err) => {
+      const timedOut = err?.name === 'TimeoutError'
+      lastNetworkError = new Error(timedOut
+        ? `AI request failed: timed out after ${timeoutMs} ms (attempt ${attempt}/${maxAttempts})`
+        : `AI request failed: network error (attempt ${attempt}/${maxAttempts})`)
+      if (timedOut) lastNetworkError.timedOut = true
+      report(null, timedOut ? 'timeout' : 'network')
+      if (attempt === maxAttempts || (timedOut && attempt >= MAX_TIMEOUT_ATTEMPTS)) throw lastNetworkError
+      await sleep(backoffDelayMs(attempt))
+    }
     // Script pacing belongs here: one chatText call can send several HTTP
     // requests through retry, fallback or a larger-token second try.
     await beforeRequest?.()
     onRequest?.()
     try {
+      t0 = Date.now()
       response = await fetch(url, {
         method: 'POST',
         headers: {
@@ -162,21 +194,25 @@ async function requestCompletion({ system, user, messages, config, temperature =
           Authorization: `Bearer ${config.apiKey}`,
         },
         body,
+        // Without a signal a stalled provider holds the dispatcher's request
+        // open until the platform gives up; null keeps the old behaviour.
+        ...(timeoutMs ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
       })
-    } catch {
-      // Network-level failure (DNS, connection refused, timeout). Retry
-      // like any other transient failure; only the attempt count is
-      // reported, never the underlying error object (it can echo the
-      // request back, including headers, on some fetch implementations).
-      lastNetworkError = new Error(`AI request failed: network error (attempt ${attempt}/${maxAttempts})`)
-      report(null, 'network')
-      if (attempt === maxAttempts) throw lastNetworkError
-      await sleep(backoffDelayMs(attempt))
+    } catch (err) {
+      await networkFailure(err)
       continue
     }
 
+    let data = null
     if (response.ok) {
-      const data = await response.json()
+      // The body is read under the same signal: a provider that sends headers
+      // and then stalls is a timeout too, not an unhandled rejection.
+      try {
+        data = await response.json()
+      } catch (err) {
+        await networkFailure(err)
+        continue
+      }
       const usage = usageOf(data?.usage)
       const message = data?.choices?.[0]?.message
       let content = message?.content
@@ -216,7 +252,8 @@ async function requestCompletion({ system, user, messages, config, temperature =
         report(response.status ?? 200, 'cut_off', { usage })
         throw err
       }
-      report(response.status ?? 200, 'ok', { usage })
+      // Which upstream host answered (OpenRouter names it): proof a pin took effect.
+      report(response.status ?? 200, 'ok', { usage, servedBy: typeof data?.provider === 'string' ? data.provider : null })
       return content
     }
 
@@ -354,7 +391,7 @@ export async function chatJson({ system, user, config }) {
 // `onAttempt` hears about every request, numbered across the whole call
 // (primary, fallback, second try). `cause` is why the call was made at all:
 // 'first', or 'regenerate' when the caller is asking again for a bad reply.
-export async function chatText({ messages, config, temperature = 0.9, maxTokens = chatMaxTokens(), onRetry = null, onRequest = null, onModel = null, onAttempt = null, beforeRequest = null, cause = 'first' }) {
+export async function chatText({ messages, config, temperature = 0.9, maxTokens = chatMaxTokens(), onRetry = null, onRequest = null, onModel = null, onAttempt = null, beforeRequest = null, cause = 'first', timeoutMs = CHAT_REQUEST_TIMEOUT_MS }) {
   const cap = chatReasoningCap(config.baseUrl)
   // Only a caller that explicitly supplied a different model uses this
   // path. A short throttle is specific to the model, so it switches. A
@@ -369,7 +406,7 @@ export async function chatText({ messages, config, temperature = 0.9, maxTokens 
   const complete = async (modelConfig, tokens, reasoningCap, why, stopOnRateLimit = false, maxAttempts = MAX_ATTEMPTS) => {
     const reply = await requestCompletion({
       messages, config: modelConfig, temperature, maxTokens: tokens,
-      reasoningMaxTokens: reasoningCap, onRequest, onAttempt: track, beforeRequest, firstCause: why, stopOnRateLimit, maxAttempts,
+      reasoningMaxTokens: reasoningCap, onRequest, onAttempt: track, beforeRequest, firstCause: why, stopOnRateLimit, maxAttempts, timeoutMs,
     })
     onModel?.(modelConfig.model)
     return reply
@@ -379,12 +416,12 @@ export async function chatText({ messages, config, temperature = 0.9, maxTokens 
       return await complete(config, tokens, reasoningCap, why, Boolean(fallbackModel))
     } catch (err) {
       const perModelCap = err.quotaExhausted && dailyCapScope(config.baseUrl) === 'model'
-      if (!fallbackModel || !((err.rateLimited && !err.quotaExhausted) || perModelCap)) throw err
+      if (!fallbackModel || !((err.rateLimited && !err.quotaExhausted) || perModelCap || err.timedOut)) throw err
       onRetry?.()
       fallbackUsed = true
       // A busy fallback cannot become another long retry chain. Primary
       // network and 5xx retries still follow the normal client policy.
-      return complete({ ...config, model: fallbackModel }, tokens, reasoningCap, 'fallback', true, 1)
+      return complete({ ...config, model: fallbackModel, providerOrder: null }, tokens, reasoningCap, 'fallback', true, 1)
     }
   }
   try {

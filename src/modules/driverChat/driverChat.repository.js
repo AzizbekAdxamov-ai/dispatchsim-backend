@@ -26,7 +26,7 @@ export async function getDriverContext(driverId) {
       homeBaseCity: r.homeBaseCity, homeBaseState: r.homeBaseState,
       dutyStatus: r.dutyStatus, payModel: r.payModel,
       payPercentBp: r.payPercentBp, payPerMileCents: r.payPerMileCents,
-      truckId: r.truckId,
+      truckId: r.truckId, trailerType: r.trailerType, trailerLengthFt: r.trailerLengthFt,
       currentCity: r.currentCity, currentState: r.currentState,
       hosRemainingMin: r.hosRemainingMin, hoursTodayMin: r.hoursTodayMin,
       fuelGallons: r.fuelGallons, fuelCapacityGal: r.fuelCapacityGal,

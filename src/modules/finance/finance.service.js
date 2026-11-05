@@ -7,6 +7,7 @@ import * as payrollService from '../payroll/payroll.service.js'
 import * as loadsRepo from '../loads/loads.repository.js'
 import { AppError } from '../../lib/errors.js'
 import { money } from '../../lib/money.js'
+import { rateQuote, SPLIT_RATE } from '../brokerChat/rateQuote.js'
 import {
   AVG_MPG,
   FUEL_PRICE_PER_GAL,
@@ -24,10 +25,11 @@ function accessorialsTotalUsd(accessorials) {
 // plan). `id` is derived, never stored: 'INV-' + the year work on it
 // wrapped up (delivered_at), or, for a still-in-transit "draft" invoice
 // that has no delivered_at yet, the year it was booked instead.
-function buildInvoice(row) {
+export function buildInvoice(row) {
   const accessorials = row.accessorials ?? []
   const amountUsd = money(row.rateUsd + accessorialsTotalUsd(accessorials))
   const year = new Date(row.deliveredAt ?? row.bookedAt).getFullYear()
+  const quote = rateQuote(row)
 
   return {
     id: `INV-${year}-${row.loadId}`,
@@ -40,7 +42,10 @@ function buildInvoice(row) {
     dueAt: row.dueAt,
     daysPastDue: row.daysPastDue,
     lineItems: [
-      { label: 'Linehaul', amountUsd: row.rateUsd },
+      ...(quote.rateBasis === SPLIT_RATE ? [
+        { label: 'Linehaul', amountUsd: quote.linehaulUsd },
+        { label: 'Fuel surcharge', amountUsd: quote.fuelSurchargeUsd },
+      ] : [{ label: 'Freight (all-in)', amountUsd: row.rateUsd }]),
       ...accessorials.map((a) => ({ label: a.label, amountUsd: a.amountUsd })),
     ],
     payments: row.invoicePaidAt ? [{ paidAt: row.invoicePaidAt, amountUsd }] : [],

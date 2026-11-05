@@ -10,6 +10,7 @@
 //   npm run chat:eval -- driver --case ED01  # one Grace case
 //   npm run chat:eval -- --case EB04,ED07    # several cases, either side
 //   npm run chat:eval -- --gap 20            # wait 20 s between cases (per-minute token limit)
+//   npm run chat:eval -- --arm B             # run on the CHAT_AB_B_* base URL / key / model / provider pin
 //   npm run chat:eval -- --service           # what the live app would show: the same reply
 //                                            # check and ONE regeneration (up to 2x requests)
 //
@@ -42,9 +43,10 @@ import { chatConfigFor } from '../src/modules/chat/chatProvider.js'
 import { chatText } from './seed/aiClient.js'
 import { sleep } from './seed/config.js'
 import { chatTextRecorded, usedToday, budgetRefusal } from '../src/modules/chat/scriptRequests.js'
-import { dailyBudgetFor, dailyTokenStatus, groqReasoningParams } from '../src/constants/chatBudget.js'
+import { dailyBudgetFor, dailyTokenStatus } from '../src/constants/chatBudget.js'
 import { DAILY_TOKENS_SQL } from '../src/modules/chat/chatBudget.sql.js'
-import { attemptsLine, attemptFields, runTokenSummary, tokenPlanWarning, parseGap, parseIdList, makeRequestPacer, DEFAULT_REPLY_TOKENS } from './evalAttempts.js'
+import { parseArm, applyArm, armConfig, reasoningEffortOf, armRecordFields } from './evalArm.js'
+import { abortReason, attemptsLine, attemptFields, runTokenSummary, tokenPlanWarning, parseGap, parseIdList, makeRequestPacer, DEFAULT_REPLY_TOKENS } from './evalAttempts.js'
 import appConfig from '../src/config.js'
 import { marketFacts } from '../src/constants/marketRates.js'
 import { relativeDay, clockDateTime } from '../src/constants/appClock.js'
@@ -66,6 +68,8 @@ import { driverReplyProblem, driverRetryPrompt } from '../src/modules/driverChat
 import { truckFacts } from '../src/modules/brokerChat/truckTalk.js'
 import { bookingFacts } from '../src/modules/brokerChat/bookingTalk.js'
 import { stripSpeakerLabel } from '../src/lib/speakerLabel.js'
+import { brokerEvalContext } from './brokerEvalContext.js'
+import { cancellationDecision } from '../src/modules/brokerChat/blockPolicy.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const args = process.argv.slice(2)
@@ -104,6 +108,23 @@ if (gap.error) {
   process.exit(1)
 }
 const gapSec = gap.seconds
+// --arm X: run on the CHAT_AB_X_* settings. Applied to process.env before any
+// chatConfigFor call; only missing variable NAMES are ever printed.
+const armFlag = parseArm(args)
+if (armFlag.error) {
+  console.error(armFlag.error)
+  process.exit(1)
+}
+const arm = armFlag.arm
+if (arm) {
+  const applied = applyArm(process.env, arm)
+  if (applied.errors.length) {
+    console.error(`Arm ${arm} is missing: ${applied.errors.join(', ')}`)
+    process.exit(1)
+  }
+}
+// With an arm only the measured model may answer: no fallback to another model.
+const evalConfig = (which) => armConfig(chatConfigFor(which), arm)
 const pauseBeforeRequest = makeRequestPacer({ gapSec, sleep })
 const outDir = join(here, '..', '..', 'reports', 'eval')
 const startedAt = new Date()
@@ -155,7 +176,12 @@ async function ask(config, messages, side, cause) {
 // One case's answer. Raw: the model's first reply, as before. Service: the
 // live service's path (serviceReply.js) with the shared checks; the requests
 // of both tries are merged into one attempts list.
-async function answer({ config, side, messages, systemPrompt, clean, problemOf, retryPrompt, fallback }) {
+// `fixed`: a line the server itself answers with (its cancellation policy), so
+// no request is sent -- as in the live service.
+async function answer({ config, side, messages, systemPrompt, clean, problemOf, retryPrompt, fallback, fixed = null }) {
+  if (fixed) {
+    return { reply: fixed, model: 'server-policy', attempts: [], outcome: { mode: 'server-policy', rawReply: fixed, regeneratedBecause: null, fellBack: false, stillFailing: null } }
+  }
   if (!service) {
     const r = await ask(config, messages(systemPrompt), side)
     return { ...r, outcome: { mode: 'raw', rawReply: r.reply, regeneratedBecause: null, fellBack: false, stillFailing: null } }
@@ -182,12 +208,9 @@ async function answer({ config, side, messages, systemPrompt, clean, problemOf, 
 // Run header: the primary, and the fallback too when one is configured.
 function modelHeader(config) {
   const models = config.fallbackModel ? `primary ${config.model} · fallback ${config.fallbackModel}` : `primary ${config.model}`
-  return `${models} · reasoning_effort ${reasoningEffortOf(config)} · mode ${service ? 'service' : 'raw'}`
-}
-
-// What the request asks for, 'n/a' where the model takes no such field.
-function reasoningEffortOf(config) {
-  return groqReasoningParams(config.baseUrl, config.model).reasoning_effort ?? 'n/a'
+  const armPart = arm ? ` · arm ${arm}` : ''
+  const pin = config.providerOrder ? ` · providers ${config.providerOrder.join(',')}` : ''
+  return `${models}${armPart}${pin} · reasoning_effort ${reasoningEffortOf(config)} · mode ${service ? 'service' : 'raw'}`
 }
 
 function record(fields) {
@@ -218,8 +241,8 @@ function record(fields) {
 // -- Broker ------------------------------------------------------------------
 
 async function brokerRun(carrier) {
-  const config = chatConfigFor('broker')
-  say(`## Broker — ${modelHeader(config)} · prompt ${promptVersion('brokerChat/brokerChat.prompt.js')}`)
+  const config = evalConfig('broker')
+  say(`## Broker — production compact context, isolated single turn (no persistence/delivery) · ${modelHeader(config)} · prompt ${promptVersion('brokerChat/brokerContext.js')}`)
   say('')
   const open = (await query(`
     SELECT p.id, p.origin_state AS "originState", p.destination_state AS "destinationState",
@@ -256,31 +279,26 @@ async function brokerRun(carrier) {
     const line = typeof c.line === 'function' ? c.line(posting, market) : c.line
     // One clock for the prompt and the truck check, as in the live service.
     const now = new Date()
-    const truck = truckFacts({ texts: [line], posting, now })
-    const booking = bookingFacts({ texts: [line], carrier, posting, now })
-    const systemPrompt = bp.buildBrokerSystemPrompt({
-      carrier,
-      broker: { name: posting.name, contactName: posting.contactName, persona: posting.persona },
-      posting,
-      now,
-      talk: talkFacts([line], posting.equipmentType),
-      said: [line],
-      booking,
-    })
+    const { systemPrompt, history, negotiation, checkFacts } = brokerEvalContext({ posting, carrier, text: line, now })
+    // A case that fixes the thread status (EB25/EB26 on an agreed load) meets
+    // the server's cancellation policy first, exactly as in the live service:
+    // the model is never called for those turns.
+    const policy = c.status ? cancellationDecision({ status: c.status, text: line }) : null
     const { reply, model, attempts, outcome } = await answer({
-      config, side: 'broker', systemPrompt,
-      messages: (sys) => bp.buildMessages({ systemPrompt: sys, history: [], newMessage: line }),
+      config, side: 'broker', systemPrompt, fixed: policy?.line ?? null,
+      messages: (sys) => bp.buildMessages({ systemPrompt: sys, history, newMessage: line, negotiation }),
       clean: (t) => stripSpeakerLabel(t, posting.contactName),
-      problemOf: (r) => brokerReplyProblem(r, { truck, booking, posting, now, text: line }),
+      problemOf: (r) => brokerReplyProblem(r, checkFacts),
       retryPrompt: brokerRetryPrompt,
-      fallback: bp.FALLBACK_REPLY,
+      fallback: negotiation.line ?? bp.FALLBACK_REPLY,
     })
     const expected = c.expect({ posting, market, terms, line })
     const rpm = (posting.rateUsd / posting.distanceMi).toFixed(2)
     const side = (s) => (s.source === 'regional' ? `${s.region} $${s.linehaul}` : `${s.region ?? '?'} (no regional figure)`)
     record({
       runId, at: new Date().toISOString(), chat: 'broker', caseId: c.id, style: c.style, terms: c.terms, line, good: c.good,
-      model, promptVersion: promptVersion('brokerChat/brokerChat.prompt.js'), reasoningEffort: reasoningEffortOf(config),
+      model, promptVersion: promptVersion('brokerChat/brokerContext.js'), reasoningEffort: reasoningEffortOf(config),
+      ...armRecordFields(config, arm),
       data: {
         postingId: posting.id, broker: posting.name, contact: posting.contactName,
         lane: `${posting.originCity}, ${posting.originState} -> ${posting.destinationCity}, ${posting.destinationState}`,
@@ -293,7 +311,7 @@ async function brokerRun(carrier) {
       dataSummary: `${posting.originCity}, ${posting.originState} → ${posting.destinationCity}, ${posting.destinationState} · ${posting.equipmentType} · ${posting.distanceMi} mi · $${posting.rateUsd} ($${rpm}/mi)${posting.rateHidden ? ' · call for rate' : ''} · ${posting.contactName} at ${posting.name}`
         + (market ? ` · market: out of ${side(market.origin)}, reload ${side(market.destination)}, national $${market.national}` : '')
         + ` · terms: ${termsLines(terms).slice(0, 3).join(' ')}`,
-      systemPrompt,
+      systemPrompt, history, negotiation, contextPath: 'production-compact-single-turn',
       reply,
       findings: brokerFindings(reply, expected, { line }),
       rawFindings: brokerFindings(outcome.rawReply, expected, { line }),
@@ -307,7 +325,7 @@ async function brokerRun(carrier) {
 // -- Grace -------------------------------------------------------------------
 
 async function driverRun(carrier) {
-  const config = chatConfigFor('driver')
+  const config = evalConfig('driver')
   say(`## Grace — ${modelHeader(config)} · prompt ${promptVersion('driverChat/driverChat.prompt.js')}`)
   say('')
   const name = process.env.TELEGRAM_DRIVER_NAME || 'Grace Lindqvist'
@@ -326,12 +344,12 @@ async function driverRun(carrier) {
     // The load the line mentions, worked out by code exactly as the live
     // chat does (driverChat.service.js).
     const offer = offerFacts({ driver: ctx.driver, load, texts: [c.line] })
-    const systemPrompt = dp.buildDriverSystemPrompt({ driver: ctx.driver, standing, load, carrier, offer })
+    const systemPrompt = dp.buildDriverSystemPrompt({ driver: ctx.driver, standing, load, carrier, offer, text: c.line, history: [] })
     const { reply, model, attempts, outcome } = await answer({
       config, side: 'driver', systemPrompt,
       messages: (sys) => dp.buildMessages({ systemPrompt: sys, history: [], newMessage: c.line }),
       clean: (t) => stripSpeakerLabel(t, ctx.driver.name),
-      problemOf: (r) => driverReplyProblem(r, { offer, text: c.line, load }),
+      problemOf: (r) => driverReplyProblem(r, { offer, text: c.line, load, driver: ctx.driver, standing, history: [] }),
       retryPrompt: driverRetryPrompt,
       fallback: dp.FALLBACK_REPLY,
     })
@@ -340,6 +358,7 @@ async function driverRun(carrier) {
     record({
       runId, at: new Date().toISOString(), chat: 'driver', caseId: c.id, style: c.style, terms: c.terms, line: c.line, good: c.good,
       model, promptVersion: promptVersion('driverChat/driverChat.prompt.js'), reasoningEffort: reasoningEffortOf(config),
+      ...armRecordFields(config, arm),
       data: {
         driver: ctx.driver.name, load: load ? `${load.originCity}, ${load.originState} -> ${load.destinationCity}, ${load.destinationState}${fixture ? ' (not in the database)' : ''}` : null,
         situation, requests: dp.requestLines(ctx.driver, load).map((l) => l.trim()).filter(Boolean),
@@ -407,7 +426,7 @@ try {
   // The request error from ask() is already sanitized. A database error
   // might contain query data, so only state the fact of the failed run.
   aborted = err
-  const reason = err.safeForConsole ? ` ${err.message}` : ''
+  const reason = ` ${abortReason(err)}`
   console.error(`Chat evaluation aborted after ${requests} provider request(s); ${rows.length} case(s) completed.${reason}`)
 } finally {
   if (rows.length > 0) {

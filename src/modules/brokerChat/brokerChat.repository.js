@@ -1,6 +1,11 @@
 // SQL for broker conversations. One table pair: broker_conversations holds
 // the thread and the agreed rate, broker_messages holds the turns.
-import { query } from '../../db/pool.js'
+import { query, withTransaction } from '../../db/pool.js'
+import { withdrawBookedLoad } from '../loads/loadWithdrawal.js'
+import { AppError } from '../../lib/errors.js'
+import { chatIntent } from './negotiation.js'
+import { rateQuote, ALL_IN } from './rateQuote.js'
+import { blockUntil, BROKER_BLOCK_DAYS, BLOCK_REASON_CARRIER_CANCEL, BLOCK_REASON_WAIT_NO_ETA } from './blockPolicy.js'
 
 // rate_con_rate_usd is deliberately ABSENT here.
 //
@@ -17,6 +22,10 @@ import { query } from '../../db/pool.js'
 const CONVERSATION_COLUMNS = `
   c.id, c.posting_id AS "postingId", c.user_id AS "userId",
   c.agreed_rate_usd AS "agreedRateUsd", c.status,
+  c.negotiation_stage AS "negotiationStage", c.broker_offer_usd AS "brokerOfferUsd",
+  c.recipient_email AS "recipientEmail", c.rate_push_count AS "ratePushCount",
+  c.best_counter_used AS "bestCounterUsed", c.negotiation_revision AS "negotiationRevision",
+  c.pending_close_usd AS "pendingCloseUsd",
   c.created_at AS "createdAt", c.updated_at AS "updatedAt"
 `
 
@@ -33,6 +42,7 @@ export async function getPostingWithBroker(postingId) {
             -- it is correct: a "call for rate" load has a rate, and the
             -- whole point is that you have to ask the person who knows it.
             p.rate_hidden AS "rateHidden",
+            p.rate_basis AS "rateBasis", p.fuel_surcharge_usd AS "fuelSurchargeUsd",
             p.weight_lbs AS "weightLbs", p.equipment_type AS "equipmentType",
             p.equipment_length_ft AS "equipmentLengthFt",
             p.pickup_at AS "pickupAt", p.delivery_at AS "deliveryAt",
@@ -177,7 +187,9 @@ export async function listConversations(userId) {
             c.status, c.updated_at AS "updatedAt",
             p.origin_city AS "originCity", p.origin_state AS "originState",
             p.destination_city AS "destinationCity", p.destination_state AS "destinationState",
-            p.rate_usd AS "rateUsd", p.distance_mi AS "distanceMi",
+            CASE WHEN p.rate_hidden THEN NULL ELSE p.rate_usd END AS "rateUsd", p.distance_mi AS "distanceMi",
+            CASE WHEN p.rate_hidden THEN NULL ELSE p.rate_basis END AS "rateBasis",
+            CASE WHEN p.rate_hidden THEN NULL ELSE p.fuel_surcharge_usd END AS "fuelSurchargeUsd",
             p.equipment_type AS "equipmentType",
             p.status AS "postingStatus", p.expires_at AS "expiresAt",
             b.name AS "brokerName", b.contact_name AS "brokerContactName",
@@ -207,13 +219,15 @@ export async function listConversations(userId) {
 export async function getConversationForPDF(conversationId, userId) {
   const result = await query(
     `SELECT c.id, c.agreed_rate_usd AS "agreedRateUsd",
-            c.rate_con_rate_usd AS "rateConRateUsd", c.status,
+            c.rate_con_rate_usd AS "rateConRateUsd", c.status, c.recipient_email AS "recipientEmail",
+            c.rate_con_basis AS "rateConBasis", c.rate_con_fuel_surcharge_usd AS "rateConFuelSurchargeUsd",
             c.updated_at AS "updatedAt",
             p.id AS "postingId", p.origin_city AS "originCity",
             p.origin_state AS "originState",
             p.destination_city AS "destinationCity",
             p.destination_state AS "destinationState",
             p.commodity, p.rate_usd AS "rateUsd",
+            p.rate_basis AS "rateBasis", p.fuel_surcharge_usd AS "fuelSurchargeUsd",
             p.distance_mi AS "distanceMi", p.weight_lbs AS "weightLbs",
             p.equipment_type AS "equipmentType",
             p.equipment_length_ft AS "equipmentLengthFt",
@@ -239,25 +253,33 @@ export async function getConversationForPDF(conversationId, userId) {
 // who accepted a rate con without reading it should see that number on
 // the load. agreed_rate_usd is the fallback for threads booked before
 // migration 018 added the column.
-export async function getAgreedRate(client, postingId, userId) {
+export async function getAgreedRate(client, postingId, userId, agreement = null, { withQuote = false } = {}) {
   const result = await client.query(
-    `SELECT coalesce(rate_con_rate_usd, agreed_rate_usd) AS rate
+    `SELECT coalesce(rate_con_rate_usd, agreed_rate_usd) AS rate,
+            rate_con_basis AS "rateBasis", rate_con_fuel_surcharge_usd AS "fuelSurchargeUsd"
        FROM broker_conversations
-      WHERE posting_id = $1 AND user_id = $2 AND status IN ('agreed', 'booked')`,
-    [postingId, userId],
+      WHERE posting_id = $1 AND user_id = $2 AND status IN ('agreed', 'booked')
+        AND ($3::uuid IS NULL OR (id = $3 AND negotiation_revision = $4
+          AND rate_con_rate_usd IS NOT NULL
+          AND EXISTS (SELECT 1 FROM broker_messages m WHERE m.conversation_id = broker_conversations.id
+            AND m.kind = 'rate_con' AND m.deliver_at <= now())))
+      FOR UPDATE`,
+    [postingId, userId, agreement?.conversationId ?? null, agreement?.revision ?? null],
   )
-  return result.rows[0]?.rate ?? null
+  const row = result.rows[0]
+  return withQuote && row ? rateQuote({ rateBasis: row.rateBasis ?? ALL_IN, fuelSurchargeUsd: row.fuelSurchargeUsd ?? 0 }, row.rate) : row?.rate ?? null
 }
 
 // The broker sends the paper. Stored on the conversation rather than
 // parsed back out of the PDF later.
-export async function setRateCon(conversationId, rateConRateUsd) {
+export async function setRateCon(conversationId, rateConRateUsd, source = {}) {
+  const quote = rateQuote(source, rateConRateUsd)
   const result = await query(
     `UPDATE broker_conversations
-        SET rate_con_rate_usd = $2, updated_at = now()
+        SET rate_con_rate_usd = $2, rate_con_basis = $3, rate_con_fuel_surcharge_usd = $4, updated_at = now()
       WHERE id = $1 AND status = 'agreed'
       RETURNING ${CONVERSATION_COLUMNS.replaceAll('c.', '')}`,
-    [conversationId, rateConRateUsd],
+    [conversationId, rateConRateUsd, quote.rateBasis, quote.fuelSurchargeUsd],
   )
   return result.rows[0] ?? null
 }
@@ -265,9 +287,9 @@ export async function setRateCon(conversationId, rateConRateUsd) {
 // A re-negotiation invalidates the paper that was already on its way.
 // Returns how many rate confirmations were withdrawn.
 export async function clearRateCon(conversationId) {
-  await query('UPDATE broker_conversations SET rate_con_rate_usd = NULL WHERE id = $1', [conversationId])
+  await query('UPDATE broker_conversations SET rate_con_rate_usd = NULL, rate_con_basis = NULL, rate_con_fuel_surcharge_usd = NULL WHERE id = $1', [conversationId])
   const result = await query(
-    `DELETE FROM broker_messages WHERE conversation_id = $1 AND kind = 'rate_con'`,
+    `UPDATE broker_messages SET voided_at = now(), void_reason = 'superseded' WHERE conversation_id = $1 AND kind = 'rate_con' AND voided_at IS NULL`,
     [conversationId],
   )
   return result.rowCount
@@ -278,7 +300,7 @@ export async function clearRateCon(conversationId) {
 export async function markBooked(conversationId, userId) {
   const result = await query(
     `UPDATE broker_conversations
-        SET status = 'booked', updated_at = now()
+        SET status = 'booked', negotiation_stage = 'booked', updated_at = now()
       WHERE id = $1 AND user_id = $2 AND status = 'agreed'
         AND rate_con_rate_usd IS NOT NULL
       RETURNING ${CONVERSATION_COLUMNS.replaceAll('c.', '')}`,
@@ -287,13 +309,84 @@ export async function markBooked(conversationId, userId) {
   return result.rows[0] ?? null
 }
 
+// Lock posting before conversation, the same order booking uses. No AI call runs
+// inside a transaction. Reserving a revision makes an older in-flight answer inert.
+async function lockedConversation(client, conversationId, userId) {
+  const found = await client.query('SELECT posting_id FROM broker_conversations WHERE id = $1 AND user_id = $2', [conversationId, userId])
+  if (!found.rows[0]) throw new AppError('CONVERSATION_NOT_FOUND')
+  const p = await client.query('SELECT status, posted_at, expires_at, rate_basis AS "rateBasis", fuel_surcharge_usd AS "fuelSurchargeUsd" FROM load_postings WHERE id = $1 FOR SHARE', [found.rows[0].posting_id])
+  const posting = p.rows[0]
+  if (!posting || new Date(posting.posted_at) > new Date()) throw new AppError('POSTING_NOT_FOUND')
+  if (posting.status !== 'open') throw new AppError('POSTING_TAKEN')
+  if (new Date(posting.expires_at) <= new Date()) throw new AppError('POSTING_EXPIRED')
+  const c = await client.query(`SELECT ${CONVERSATION_COLUMNS} FROM broker_conversations c WHERE c.id = $1 AND c.user_id = $2 FOR UPDATE`, [conversationId, userId])
+  return { ...c.rows[0], postingRateBasis: posting.rateBasis, postingFuelSurchargeUsd: posting.fuelSurchargeUsd }
+}
+
+export async function beginChatTurn(conversationId, userId, text) {
+  return withTransaction(async (client) => {
+    const conversation = await lockedConversation(client, conversationId, userId)
+    const intent = chatIntent(text, { rateBasis: conversation.postingRateBasis, fuelSurchargeUsd: conversation.postingFuelSurchargeUsd })
+    const invalidate = intent.kind === 'hold' || intent.kind === 'walk' || intent.kind === 'push'
+      || (['offer', 'accept_amount'].includes(intent.kind) && conversation.agreedRateUsd !== null && intent.rateUsd !== conversation.agreedRateUsd)
+    const updated = await client.query(`UPDATE broker_conversations SET negotiation_revision = negotiation_revision + 1,
+      agreed_rate_usd = CASE WHEN $3 THEN NULL ELSE agreed_rate_usd END,
+      rate_con_rate_usd = CASE WHEN $3 THEN NULL ELSE rate_con_rate_usd END,
+      rate_con_basis = CASE WHEN $3 THEN NULL ELSE rate_con_basis END,
+      rate_con_fuel_surcharge_usd = CASE WHEN $3 THEN NULL ELSE rate_con_fuel_surcharge_usd END,
+      recipient_email = CASE WHEN $3 THEN NULL ELSE recipient_email END,
+      pending_close_usd = CASE WHEN $3 THEN NULL ELSE pending_close_usd END,
+      status = CASE WHEN $3 THEN 'open' ELSE status END,
+      negotiation_stage = CASE WHEN $3 THEN $4 ELSE negotiation_stage END, updated_at = now()
+      WHERE id = $1 AND user_id = $2 RETURNING negotiation_revision`,
+    [conversationId, userId, invalidate, intent.kind === 'hold' ? 'held' : 'negotiating'])
+    if (invalidate) await client.query("UPDATE broker_messages SET voided_at = now(), void_reason = 'superseded' WHERE conversation_id = $1 AND kind = 'rate_con' AND voided_at IS NULL", [conversationId])
+    // Superseded pending prose must not say a previous rate was accepted after a hold.
+    await client.query("DELETE FROM broker_messages WHERE conversation_id = $1 AND role = 'broker' AND kind = 'text' AND deliver_at > now()", [conversationId])
+    const message = await client.query(`INSERT INTO broker_messages (conversation_id, role, content)
+      VALUES ($1, 'dispatcher', $2) RETURNING id, role, content, kind, created_at AS "createdAt"`, [conversationId, text])
+    return { conversation: { ...conversation, negotiationRevision: updated.rows[0].negotiation_revision }, dispatcherMessage: message.rows[0] }
+  })
+}
+
+export async function completeChatTurn({ conversationId, userId, revision, decision, reply, delaySec, paperDelaySec, paperRate }) {
+  return withTransaction(async (client) => {
+    const conversation = await lockedConversation(client, conversationId, userId)
+    if (conversation.negotiationRevision !== revision) return false
+    const s = decision.state
+    const paperQuote = decision.issuePaper ? rateQuote(decision.rateQuote ?? {}, paperRate) : null
+    if (decision.invalidatePaper) await client.query("UPDATE broker_messages SET voided_at = now(), void_reason = 'superseded' WHERE conversation_id = $1 AND kind = 'rate_con' AND voided_at IS NULL", [conversationId])
+    await client.query(`UPDATE broker_conversations SET broker_offer_usd = $3,
+      agreed_rate_usd = $4, status = CASE WHEN $4::integer IS NULL THEN 'open' ELSE 'agreed' END,
+      negotiation_stage = $5, recipient_email = $6, rate_push_count = $7, best_counter_used = $8,
+      rate_con_rate_usd = CASE WHEN $9 THEN $10::integer WHEN $11 THEN NULL ELSE rate_con_rate_usd END,
+      rate_con_basis = CASE WHEN $9 THEN $12::text WHEN $11 THEN NULL ELSE rate_con_basis END,
+      rate_con_fuel_surcharge_usd = CASE WHEN $9 THEN $13::integer WHEN $11 THEN NULL ELSE rate_con_fuel_surcharge_usd END,
+      pending_close_usd = $14::integer,
+      updated_at = now() WHERE id = $1 AND user_id = $2`,
+    [conversationId, userId, s.offer, s.agreed, s.stage, s.recipient, s.pushes, s.bestCounterUsed, decision.issuePaper, paperRate, decision.invalidatePaper,
+      paperQuote?.rateBasis ?? null, paperQuote?.fuelSurchargeUsd ?? null, s.pendingClose ?? null])
+    await client.query(`INSERT INTO broker_messages (conversation_id, role, content, deliver_at)
+      VALUES ($1, 'broker', $2, now() + make_interval(secs => $3))`, [conversationId, reply, delaySec])
+    if (decision.issuePaper) {
+      // Conversation lock + existence check make retries and duplicate email sends idempotent.
+      await client.query(`INSERT INTO broker_messages (conversation_id, role, content, kind, deliver_at)
+        SELECT $1, 'broker', 'Rate confirmation attached. Please review the details before signing.', 'rate_con',
+          now() + make_interval(secs => $2)
+        WHERE NOT EXISTS (SELECT 1 FROM broker_messages WHERE conversation_id = $1 AND kind = 'rate_con')`,
+      [conversationId, delaySec + Math.max(1, paperDelaySec)])
+    }
+    return true
+  })
+}
+
 // Has the rate confirmation actually landed in the thread yet? Accepting
 // a document that has not arrived is not a thing a dispatcher can do.
 export async function rateConDelivered(conversationId) {
   const result = await query(
     `SELECT EXISTS (
        SELECT 1 FROM broker_messages
-        WHERE conversation_id = $1 AND kind = 'rate_con' AND deliver_at <= now()
+        WHERE conversation_id = $1 AND kind = 'rate_con' AND voided_at IS NULL AND deliver_at <= now()
      ) AS delivered`,
     [conversationId],
   )
@@ -305,4 +398,101 @@ export async function rateConDelivered(conversationId) {
 // failure -- a failed call that sent three requests still spent three.
 export async function setProviderRequests(messageId, n) {
   await query('UPDATE broker_messages SET provider_requests = $2 WHERE id = $1', [messageId, n])
+}
+
+export async function invalidatePaper(conversationId) {
+  await query(`UPDATE broker_conversations
+    SET agreed_rate_usd = NULL, rate_con_rate_usd = NULL, rate_con_basis = NULL,
+        rate_con_fuel_surcharge_usd = NULL, recipient_email = NULL,
+        negotiation_stage = 'held', status = 'open', updated_at = now()
+    WHERE id = $1`, [conversationId])
+  const result = await query(`DELETE FROM broker_messages
+     WHERE conversation_id = $1 AND kind = 'rate_con' AND voided_at IS NULL`, [conversationId])
+  return result.rowCount
+}
+
+export async function createBrokerBlock({ conversationId, brokerId = null, brokerMc = null, brokerContact = null, reason = BLOCK_REASON_CARRIER_CANCEL } = {}) {
+  const result = await query(`INSERT INTO broker_blocks
+    (broker_id, broker_mc, broker_contact, blocked_until, reason, conversation_id)
+    VALUES ($1, $2, $3, $4, $5, $6)
+    RETURNING id, blocked_until AS "blockedUntil", reason`,
+  [brokerId, brokerMc, brokerContact, blockUntil(new Date(), BROKER_BLOCK_DAYS), reason, conversationId])
+  return result.rows[0]
+}
+
+// Take the agreement back: clear the rate and paper fields, put the thread
+// back to open/held and void (not delete) the rate confirmation so the audit
+// trail keeps it. Runs inside the caller's transaction.
+async function withdrawAgreement(client, conversationId, voidReason) {
+  // A booked thread owns a load (created when the rate confirmation was
+  // accepted). Withdrawing the agreement takes that load back too, in this
+  // transaction -- otherwise it sits 'neutral' and dispatchable for a broker
+  // who has already given it away. Locked FOR UPDATE so a concurrent accept
+  // cannot book between this read and the status change below.
+  const booked = await client.query(`SELECT p.booked_load_id AS "bookedLoadId"
+      FROM broker_conversations c JOIN load_postings p ON p.id = c.posting_id
+     WHERE c.id = $1 AND c.status = 'booked' AND p.booked_by_user_id = c.user_id
+       FOR UPDATE OF c`, [conversationId])
+  const loadId = booked.rows[0]?.bookedLoadId
+  if (loadId) await withdrawBookedLoad(client, { loadId, reason: voidReason })
+  await client.query(`UPDATE broker_conversations SET agreed_rate_usd = NULL, rate_con_rate_usd = NULL,
+    rate_con_basis = NULL, rate_con_fuel_surcharge_usd = NULL, recipient_email = NULL,
+    pending_close_usd = NULL,
+    negotiation_stage = 'held', status = 'open', updated_at = now() WHERE id = $1`, [conversationId])
+  await client.query(`UPDATE broker_messages SET voided_at = now(), void_reason = $2
+    WHERE conversation_id = $1 AND kind = 'rate_con' AND voided_at IS NULL`, [conversationId, voidReason])
+}
+
+// The dispatcher's line and the broker's answer, written together.
+//
+// clock_timestamp(), not the default now(): now() is the TRANSACTION start,
+// so both rows got the same created_at and listMessages (deliver_at,
+// created_at, id) could order the broker's answer above the line it answers
+// -- the id is a random uuid. clock_timestamp() advances between statements.
+export async function insertExchange(client, conversationId, text, line) {
+  const dispatcher = await client.query(`INSERT INTO broker_messages (conversation_id, role, content, created_at, deliver_at)
+    VALUES ($1, 'dispatcher', $2, clock_timestamp(), clock_timestamp())
+    RETURNING id, role, content, kind, created_at AS "createdAt"`, [conversationId, text])
+  await client.query(`INSERT INTO broker_messages (conversation_id, role, content, created_at, deliver_at)
+    VALUES ($1, 'broker', $2, clock_timestamp(), clock_timestamp())`, [conversationId, line])
+  return dispatcher.rows[0]
+}
+
+export async function cancelAndBlock(
+  { conversationId, text, line, brokerId = null, brokerMc = null, brokerContact = null } = {},
+  { run = withTransaction } = {},
+) {
+  return run(async (client) => {
+    await withdrawAgreement(client, conversationId, 'carrier_cancelled')
+    const block = await client.query(`INSERT INTO broker_blocks
+      (broker_id, broker_mc, broker_contact, blocked_until, reason, conversation_id)
+      VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+    [brokerId, brokerMc, brokerContact, blockUntil(new Date(), BROKER_BLOCK_DAYS), BLOCK_REASON_CARRIER_CANCEL, conversationId])
+    const dispatcher = await insertExchange(client, conversationId, text, line)
+    return { ...dispatcher, blockId: block.rows[0].id }
+  })
+}
+
+// "Can you wait?" with no ETA: the broker takes the load back. No block --
+// the carrier did not cancel, they asked for time -- but the agreement and
+// paper are withdrawn (the paper is voided, not deleted).
+export async function releaseForNoEta({ conversationId, text, line } = {}, { run = withTransaction } = {}) {
+  return run(async (client) => {
+    await withdrawAgreement(client, conversationId, BLOCK_REASON_WAIT_NO_ETA)
+    return insertExchange(client, conversationId, text, line)
+  })
+}
+
+// "Can you wait?" the first time: the broker asks for an ETA. Nothing is
+// withdrawn yet.
+export async function addExchange({ conversationId, text, line } = {}, { run = withTransaction } = {}) {
+  return run((client) => insertExchange(client, conversationId, text, line))
+}
+
+export async function isBrokerBlocked({ brokerId = null, brokerMc = null } = {}) {
+  const result = await query(`SELECT EXISTS (
+    SELECT 1 FROM broker_blocks
+    WHERE blocked_until > now() AND (($1::uuid IS NOT NULL AND broker_id = $1) OR ($2::text IS NOT NULL AND broker_mc = $2))
+  ) AS blocked`, [brokerId, brokerMc])
+  return result.rows[0]?.blocked === true
 }

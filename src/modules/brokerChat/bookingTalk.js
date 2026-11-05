@@ -65,7 +65,13 @@ const COMPANY_RE = new RegExp(
 const NOT_A_COMPANY = /^(?:a|an|the|my|our|your|you|it|this|that|them|him|her|no|one|two|three|\d)\b/i
 
 function companyIn(text) {
-  const m = COMPANY_RE.exec(asciiPunct(text))
+  const src = asciiPunct(text)
+  // Direct carrier introductions do not require an extra "with/from".
+  const direct = /\b(?:this is|we are|company(?: name)?(?: is|:)?)\s+([a-z][a-z0-9&.' -]{2,60}?)(?=,|[!?]|\s+(?:mc|calling about|on your|checking on)\b|$)/i.exec(src)
+  if (direct && !/\b(?:with|from)\b/i.test(direct[1]) && /\b(?:haul|transport|trucking|logistics|freight|carrier|express|lines?|services)\b/i.test(direct[1])) return direct[1].trim()
+  // A route after "calling ... from" is not a company introduction.
+  if (/\bcalling\b[^.!?]{0,80}\bfrom\s+[a-z .'-]+,?\s+[A-Z]{2}\s+to\b/.test(src)) return null
+  const m = COMPANY_RE.exec(src)
   const name = (m?.[1] ?? m?.[2] ?? '').trim()
   if (!name || NOT_A_COMPANY.test(name)) return null
   return name
@@ -93,12 +99,13 @@ function companyMatches(said, carrierName) {
 // -- Truck, trailer, driver, email ---------------------------------------
 
 const EMPTY_RE = /\b(?:empty|mt|available|free|ready)\b[^.;!?]{0,20}?\b(?:now|today|tonight|tomorrow|tmrw|tmr|(?:mon|tues|wednes|thurs|fri|satur|sun)day|\d{1,2}(?::\d{2})?\s?(?:am|pm))(?:\s+(?:at\s+)?\d{1,2}(?::\d{2})?\s?(?:am|pm))?/i
-const LENGTH_RE = /\b(48|53)\s*(?:'|ft\b|foot\b|feet\b|(?=\s*(?:dry|van|reefer|refer|flat|step)))/i
+const LENGTH_RE = /\b(48|53)\s*-?\s*(?:'|ft\b|foot\b|feet\b|(?=\s*(?:dry|van|reefer|refer|flat|step)))/i
 
 const NAME_STOPS = new Set([
   'is', 'will', 'has', 'can', 'could', 'would', 'should', 'was', 'were', 'be', 'in', 'at', 'on', 'near', 'out', 'from', 'to',
   'with', 'the', 'a', 'an', 'and', 'for', 'needs', 'need', 'got', 'have', 'name', 'truck', 'trk', 'unit', 'tractor', 'email',
   'send', 'rc', 'ratecon', 'rate', 'then', 'who', 'that', 'it', 'i', 'we',
+  'assist', 'assistance', 'eta', 'before', 'after', 'hours', 'available', 'required', 'confirmed',
 ])
 const DRIVER_RE = /\bdriver(?:'s| is|:)?\s+(?:name\s*:?\s*(?:is\s+)?)?([a-z]+(?:\s+[a-z]+)?)/gi
 const TRUCK_NO_RE = /\b(?:truck|unit|trk|tractor)\s*(?:#|no\.?|number|:)?\s*([A-Z0-9][A-Z0-9-]{1,11})\b/gi
@@ -204,20 +211,57 @@ function missingFor(f, posting, now) {
 
 // The reply tells the carrier it is booked / the paper is coming.
 export const SAYS_BOOKED = /\b(?:booked|you'?re (?:all )?set|it'?s yours|load is yours|sending (?:over )?(?:the )?(?:rate ?con|rc|confirmation)|rate ?con (?:is )?(?:on (?:its|the) way|coming))\b/i
+// A condition before the word ("if you share your MC, we can get it booked")
+// makes it a promise of what happens later, not a statement that it is booked.
+const BOOK_CONDITION = /\b(?:if|once|as soon as|when|after|until|unless|provided)\b/i
+// "send me your MC and we'll get it booked": the MC is asked for, booking follows it.
+const BOOK_AFTER_ASK = /\b(?:will|can|could|would|'ll)\s+(?:get|have)\s+(?:it|you|this|that)\s+(?:all\s+)?$/i
+const SAYS_BOOKED_EACH = new RegExp(SAYS_BOOKED.source, 'gi')
 export function saysBooked(reply) {
-  return SAYS_BOOKED.test(asciiPunct(reply))
+  return asciiPunct(reply).split(SENTENCE_SPLIT).some((sentence) => {
+    const asks = mcQuestion(sentence) || /\b(?:send|give|provide|share)\b[^.!?]{0,30}\bmc\b/i.test(sentence)
+    return [...sentence.matchAll(SAYS_BOOKED_EACH)].some((m) => {
+      const fullBefore = sentence.slice(0, m.index)
+      const before = fullBefore.split(/[,;]|\b(?:but|however|and)\b/i).at(-1)
+      // Availability/passive invitations are not an accomplished booking.
+      // Evaluate each occurrence so a later actual claim is still caught.
+      const invitation = /\b(?:to be|(?:can|could|may) be)\s*$/i.test(before)
+      const denied = /\b(?:(?:not|never|haven't|hasn't|isn't|wasn't|didn't)\s+(?:yet\s+)?|no (?:one|booking)\s+(?:(?:has|is)\s+)?)$/i.test(before)
+      const conditionalFuture = BOOK_AFTER_ASK.test(before) && (asks || BOOK_CONDITION.test(fullBefore))
+      return !invitation && !denied && !BOOK_CONDITION.test(before) && !conditionalFuture
+    })
+  })
 }
 
-// The broker says the MC does not come up.
-export const MC_REJECT = /doesn'?t (?:come up|match|show)|not (?:coming up|showing|matching)|can'?t find|wrong mc/i
+// The broker says the MC does not come up. Tested on asciiPunct text.
+export const MC_REJECT = /(?:doesn'?t|does not|didn'?t|did not) (?:come up|match|show(?: up)?|pull up)|(?:isn'?t|is not|not) (?:coming up|showing(?: up)?|matching|pulling up)|not finding|(?:can'?t|cannot|couldn'?t) find|no record|wrong mc/i
 
 // The reply asks for the MC (it names it AND asks or requests it).
 const MC_WORD = /\bmc\b|motor carrier|docket/i
-const ASKING = /\?|\b(?:need|give me|send me|what'?s|what is|got an?)\b/i
+const ASKING = /\?|\b(?:need|give me|send me|provide|share|(?:may|can|could) I have|what'?s|what is|got an?)\b/i
 export function asksMc(reply) {
   const text = asciiPunct(reply)
   return MC_WORD.test(text) && ASKING.test(text)
 }
+
+const SENTENCE_SPLIT = /(?<=[.!?])\s+/
+// Some sentence of the reply both names the MC and asks for it: "Your MC
+// checks out. Where's the truck?" asks for nothing about the MC, which
+// asksMc (whole reply) would say it does.
+export function mcQuestion(reply) {
+  return asciiPunct(String(reply ?? '')).split(SENTENCE_SPLIT).some((s) => MC_WORD.test(s) && ASKING.test(s))
+}
+
+// A question about the paperwork details (driver, truck number, email) --
+// what the broker asks for only once the MC checks out.
+const PAPER_ASK = /\b(?:driver|truck (?:number|#)|unit (?:number|#)|e-?mail)\b/i
+export function asksPaperDetails(reply) {
+  return asciiPunct(String(reply ?? '')).split(SENTENCE_SPLIT).some((s) => s.includes('?') && PAPER_ASK.test(s))
+}
+
+// The dispatcher is moving to book: "book it", "I'll take it", the driver, the
+// truck number or the email for the rate con. The MC is asked for again only then.
+export const MOVES_TO_BOOK = /\b(?:book (?:it|me|this)|i'?ll take it|we'?ll take it|lock (?:it|this) in|send (?:me )?(?:the )?(?:rc|rate ?con|confirmation)|let'?s do it|deal|works for me)\b|\bdriver(?:'s| is)?\s+[a-z]|\btruck\s*(?:#|number|no)|@/i
 
 // -- The booking gate -------------------------------------------------------
 
@@ -240,4 +284,41 @@ export function carrierNotVerified({ booking, contactName }) {
     }
   }
   return { reason: 'mc-missing', message: `${who}: "I still need your MC before I send the rate con."` }
+}
+
+// -- A booking the broker has no record of ------------------------------------
+
+// A denial word. (Moved here from scripts/evalCases.js, which imports it.)
+export const NEGATION = /\b(no|nope|nah|not|never|didn'?t|don'?t|isn'?t|wasn'?t|haven'?t|nothing)\b/i
+// The reply without its negated sentences: a denial is not a confirmation.
+// A denial before "but" does not cancel a later confirmation in that sentence.
+export const unnegated = (r) => r.split(/(?<=[.!?])\s+|\b(?:but|however|though)\b/i).filter((x) => !NEGATION.test(x)).join(' ')
+
+// The dispatcher says the load is already booked, or that someone on the
+// broker's side gave it to them ("i already booked this with ur guy mike",
+// EB17). The chat has no such booking and no such person.
+// Exported for the compact prompt's CURRENT TASK (brokerContext.js): the
+// dispatcher's claim that the load is already booked steers the reply task.
+export const CLAIMS_EARLIER_BOOKING = /\b(?:already|just)\s+(?:booked\s+(?:it|this|that|with|w|through|thru)|got (?:it|this|that) booked|had (?:it|this) booked|locked (?:it|this) in)\b|\bbooked (?:it|this|that) (?:with|through)\b|\b(?:ur|your) (?:guy|girl|colleague|coworker|partner|buddy|rep|other (?:guy|broker|rep))\b[^.!?]{0,30}\b(?:booked|gave|promised|locked)\b/i
+// The reply takes that as settled.
+// "We'll keep everything set" (EB17, 2026-10-29) rides the claim to a
+// settlement without saying booked: it goes along like "all set" does.
+const CONFIRMS_BOOKING = /\b(?:good|glad|great) to hear\b|\blocked in\b|\byou'?re (?:all )?set\b|\ball set\b|\b(?:keep|keeping) (?:everything|it all|it|this) (?:as )?set\b|\beverything(?:'s| is| as)? set\b|\bconfirmed\b|^\s*(?:yes|yeah|yep|right|correct|perfect)\b/i
+// Other ways to say "I have no record" that NEGATION does not carry.
+const NO_RECORD = /\b(?:can'?t|cannot|couldn'?t|doesn'?t|does not|unaware)\b/i
+// A reply that is one of the other safe lines (holdRateLine, PAYMENT_TERMS_LINE)
+// goes along with nothing. Only their exact wording counts: a bare "stays"
+// is also how a phantom booking is confirmed ("Ok, he stays on it.").
+const HOLDS_POSITION = /\ball-in is where this one stays\b|\baccounting'?s side\b/i
+
+// What the broker says when a booking it has no record of is claimed.
+export const NO_BOOKING_LINE = "I don't have that on my end — no booking here yet."
+
+// True when the dispatcher claims an earlier booking, this conversation has
+// none (`bookedHere`: it is agreed or booked), and the reply goes along with
+// it -- confirms it, or says nothing against it.
+export function confirmsUnknownBooking(reply, { text, bookedHere = false }) {
+  if (bookedHere || !CLAIMS_EARLIER_BOOKING.test(asciiPunct(String(text ?? '')))) return false
+  const r = asciiPunct(String(reply ?? ''))
+  return CONFIRMS_BOOKING.test(unnegated(r)) || !(NEGATION.test(r) || NO_RECORD.test(r) || HOLDS_POSITION.test(r))
 }
