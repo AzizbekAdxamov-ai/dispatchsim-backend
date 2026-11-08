@@ -109,3 +109,32 @@ test('the rate-con insert only looks at rate cons that are not voided', () => {
   assert.match(source, /WHERE NOT EXISTS \(SELECT 1 FROM broker_messages WHERE conversation_id = \$1 AND kind = 'rate_con' AND voided_at IS NULL\)/)
   assert.match(source, /\['hold', 'walk', 'push', 'cancel'\]\.includes\(intent\.kind\)/)
 })
+
+// Kills: lastAuthorizedEmail skipping past a retraction to an older address
+test('a retracted or conditional email does not revive the older one', () => {
+  assert.equal(lastAuthorizedEmail(['send the rate con to a@b.com', "actually don't send it to a@b.com"]), null)
+  assert.equal(lastAuthorizedEmail(['send the rate con to a@b.com', 'If needed, put it on c@d.com.']), null)
+  // A message that names no email does not settle anything.
+  assert.equal(lastAuthorizedEmail(['send the rate con to a@b.com', 'what is the pickup time']), 'a@b.com')
+  // The newest message that names an email wins.
+  assert.equal(lastAuthorizedEmail(["don't send it to a@b.com", 'send the rate con to c@d.com']), 'c@d.com')
+})
+
+// Kills: a hold or cancel leaving the older address reachable (the repository clears the recipient on those)
+test('a hold or cancel after an email clears it', () => {
+  assert.equal(lastAuthorizedEmail(['send the rate con to a@b.com', 'hold off on the rate con']), null)
+  assert.equal(lastAuthorizedEmail(['send the rate con to a@b.com', 'cancel it']), null)
+  assert.equal(lastAuthorizedEmail(['hold off', 'send the rate con to a@b.com']), 'a@b.com')
+})
+
+// Kills: the email tail leaving ", email" behind so AMOUNT_BOOK fails and only a confirm question is asked
+test('a booking phrase followed by an email instruction still agrees', () => {
+  for (const text of ['3500 book it, email a@b.com', '3500 book it, send the rate con to a@b.com', 'ok 3500 deal, my email is a@b.com']) {
+    const decision = turn(text)
+    assert.equal(decision.state.agreed, 3500, text)
+  }
+  // Authorised address on the same line goes straight onto the paper.
+  const decision = turn('3500 book it, send the rate con to a@b.com')
+  assert.equal(decision.issuePaper, true)
+  assert.equal(decision.state.recipient, 'a@b.com')
+})

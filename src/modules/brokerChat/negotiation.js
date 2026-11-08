@@ -22,6 +22,14 @@ const BOOK_WORD_RE = /\b(?:book it|deal|works|let'?s do it)\b/i
 const CANCEL_RE = /\b(?:cancel|call off|scrap)\w*\s+(?:it|this|that|the (?:load|deal|booking|rate\s*con(?:firmation)?|rc))\b(?!\s+(?:for|at)\s+\$?\d)|^\s*cancel[.!]?\s*$/i
 export const NOT_BOOKED_CANCEL_LINE = "No problem, nothing's booked on this one. Want something else?"
 export const AGREEMENT_DROPPED_LINE = "Okay, I'm pulling the rate con. Nothing's booked."
+// Intents that clear a recipient already on the conversation.
+const WITHDRAWING_INTENTS = Object.freeze(['hold', 'cancel'])
+const TRAILING_SEPARATORS = /[,\s]+$/
+// "3500 book it, send the rate con to a@b.com": the instruction leaves with the
+// address, or its verb would stay behind and break the booking phrase.
+const EMAIL_INSTRUCTION = new RegExp(
+  String.raw`(?:[,;]\s*|\s+)(?:and\s+)?(?:please\s+)?(?:(?:send|email|put)(?:\s+(?:it|the\s+(?:rate\s*con(?:firmation)?|rc|paperwork)))?(?:\s+(?:to|on))?|(?:my|our)\s+e-?mail\s*(?:is|:)|e-?mail\s*(?:is|:)?|rc\s+to)\s+${EMAIL.source}`,
+  'gi')
 export const confirmBookLine = (quoted) => `${quoted} - we good to book?`
 const ACCEPT = /^(?:(?:ok(?:ay)?|yes|great|thanks)[,!. ]+)*(?:i(?:'ll| will)|we(?:'ll| will)) take (?:it|this|the load)[.!]?\s*$|^(?:(?:ok(?:ay)?|yes)[,!. ]+)*(?:deal|agreed|book it|lets? do it|it'?s fine|that'?s fine|send (?:the )?(?:rc|rate con)|confirmed|sounds good|(?:that(?: rate)?|the rate|your rate|your offer) works(?: for (?:me|us))?|i accept(?: your (?:rate|offer))?)[.!]?\s*$/i
 const NATURAL_ACCEPT = /^(?:ok(?:ay)?\s+)?(?:let'?s book it|let'?s do it|the rate works(?:\s+we can book it)?|works for me|that works|it'?s fine|that'?s fine|deal|send (?:the )?(?:rc|rate con)|confirmed|sounds good(?:,?\s+book it)?|we(?:'ll| will) take it|i(?:'ll| will) take it)[.!]?$/i
@@ -201,12 +209,20 @@ function authorizedRecipient(src) {
   return emails.length > 1 ? { emails: [], useOwnEmail: false } : { emails, useOwnEmail }
 }
 
-// The newest recipient the dispatcher authorised in an earlier message. An
-// email given before the rate was agreed is still the one for the paper.
+// The recipient the dispatcher last authorised in an earlier message. An email
+// given before the rate was agreed is still the one for the paper. Newest
+// first, and the newest message that names an email settles it: a retraction
+// ("don't send it to a@b.com") or a conditional leaves nobody, it does not
+// revive an older address. A hold or cancel also clears it (the repository
+// clears the recipient on those), so nothing older may come back.
 export function lastAuthorizedEmail(texts) {
   for (const text of [...(texts ?? [])].reverse()) {
-    const { emails } = authorizedRecipient(intentText(text))
-    if (emails.length === 1) return emails[0]
+    const plain = intentText(text)
+    if (new RegExp(EMAIL.source, 'i').test(plain)) {
+      const { emails } = authorizedRecipient(plain)
+      return emails.length === 1 ? emails[0] : null
+    }
+    if (WITHDRAWING_INTENTS.includes(chatIntent(text).kind)) return null
   }
   return null
 }
@@ -244,7 +260,7 @@ export function chatIntent(raw, rateSource = null) {
     ...clause.matchAll(/\b(?:reject|decline) (?:your |the )?(?:rate|offer|load)\b/gi)]) || /^\s*(?:stop|hold|wait)[.!]?\s*$/i.test(clause))) return { kind: 'hold' }
   const { emails, useOwnEmail } = authorizedRecipient(src)
   // Quotes, negated intentions and conditional examples are never a handshake.
-  const clauses = amountSrc.replace(QUOTED, ' ').replace(EMAIL, ' ').split(/[;!?\n]|\.(?!\d)/)
+  const clauses = amountSrc.replace(QUOTED, ' ').replace(EMAIL_INSTRUCTION, ' ').replace(EMAIL, ' ').split(/[;!?\n]|\.(?!\d)/)
   const amounts = []
   const basisHints = []
   const addAmount = (token, clause) => {
@@ -282,7 +298,7 @@ export function chatIntent(raw, rateSource = null) {
     // so a negation anywhere in the clause still voids it.
     const first = NEGATIVE.test(clause) ? null : AMOUNT_FIRST.exec(clause)
     if (first) { addAmount(first[1], clause); acceptsAmount = true }
-    const book = NEGATIVE.test(clause) ? null : AMOUNT_BOOK.exec(clause)
+    const book = NEGATIVE.test(clause) ? null : AMOUNT_BOOK.exec(clause.replace(TRAILING_SEPARATORS, ''))
     if (book) { addAmount(book[1], clause); acceptsAmount = true; confirmsOffer = true }
     const lets = NEGATIVE.test(clause) ? null : LETS_OFFER.exec(clause)
     if (lets) addAmount(lets[1], clause)
