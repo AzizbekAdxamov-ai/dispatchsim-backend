@@ -91,13 +91,14 @@ test('fractionRemaining is clamped and survives a zero-length window', () => {
 test('company events are described in simulated days, marketplace events in real minutes', () => {
   const now = new Date('2026-01-01T12:00:00Z')
 
-  // Three simulated days is six real minutes. Finance says "3 days past
+  // Three simulated days is ninety real minutes. Finance says "3 days past
   // due" for the same invoice, so the alert has to say three days too --
   // otherwise the student sees two numbers for one fact and neither is
   // obviously the liar.
   const threeSimDays = new Date(now.getTime() - 3 * REAL_MS_PER_SIM_DAY)
   assert.equal(simAgo(threeSimDays, now), '3 days')
-  assert.equal(realAgo(threeSimDays, now), '6 minutes')
+  // Kills: realAgo reading the compressed clock (three sim days is 90 real minutes -> '1 hour'; a sim-clock reading would say '3 days')
+  assert.equal(realAgo(threeSimDays, now), '1 hour')
 
   // A broker answering six minutes ago is six minutes ago, because the
   // marketplace runs on the student's own clock.

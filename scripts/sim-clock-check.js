@@ -9,7 +9,10 @@
 //   2. bir sim kun o'tishi kalendar sanasini aynan 1 kunga surishi kerak
 //   3. epoxaning o'zi sim_day() bo'yicha epoxaning sanasiga tushishi kerak
 //
-// 120 (bir sim kun necha soniya) va 1 (kunlar farqi) src/constants/
+// 073 dan keyin kun chegarasi anchor'ga bog'liq (2026-11-08: 120s -> 1800s),
+// shuning uchun kun pozitsiyasi sim_day_start(now()) dan olinadi, epoxadan emas.
+//
+// REAL_SEC_PER_SIM_DAY (bir sim kun necha soniya) va 1 (kunlar farqi) src/constants/
 // simClock.js'dagi REAL_MS_PER_SIM_DAY'dan hisoblanadi, qo'lda yozilmaydi --
 // aks holda bu skript SQL bilan emas, o'z nusxasi bilan kelishib turadi.
 
@@ -34,12 +37,11 @@ try {
   // kun o'rtasida (masalan 98-saniyada) ishga tushsa, +119s ikki kunga
   // tegib o'tadi va to'g'ri funksiya ham farq qaytaradi. Shuning uchun
   // so'rov now()'ning o'z kun pozitsiyasidan hisoblanadi: hozirgi pozitsiya
-  // (0..119) va chegara qolgan qismni topadi, farq shu qolgan qismning
+  // (0..REAL_SEC_PER_SIM_DAY-1) va chegara qolgan qismni topadi, farq shu qolgan qismning
   // yarimchasida tekshiriladi.
   {
     const { rows: [posRow] } = await pool.query(
-      `SELECT EXTRACT(EPOCH FROM (now() - sim_epoch()))::int % $1 AS pos`,
-      [SIM_DAY_SECONDS],
+      `SELECT EXTRACT(EPOCH FROM (now() - sim_day_start(now())))::int AS pos`,
     )
     const pos = posRow.pos
     const within = Math.max(1, Math.floor((SIM_DAY_SECONDS - pos) / 2))
@@ -57,7 +59,7 @@ try {
     }
   }
 
-  // 2. Bitta sim kun (120 soniya) o'tishi sanani aynan 1 kunga suradi.
+  // 2. Bitta sim kun (REAL_SEC_PER_SIM_DAY soniya) o'tishi sanani aynan 1 kunga suradi.
   {
     const { rows: [row] } = await pool.query(
       `SELECT (sim_day(now() + ($1 * interval '1 second')) - sim_day(now())) AS diff`,

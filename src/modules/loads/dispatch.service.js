@@ -20,6 +20,7 @@ import * as maintenanceRepo from '../fleet/maintenance.repository.js'
 const MAX_PER_TICK = 25
 import {
   simDaysToSeconds,
+  financeDaysToSeconds,
   simDaysToMs,
   billableSimDays,
   droppedGapSeconds,
@@ -856,8 +857,9 @@ export async function applyRunToTruck(client, load) {
 }
 
 // The sim clock, from the database. sim_today() (migration 032) is the
-// compressed calendar's today -- a DATE on which one real minute is half a
-// day. Asked through the transaction's client so every read in one delivery
+// compressed calendar's today -- a DATE that advances once per simulated
+// day (thirty real minutes since 2026-11-08). Asked through the
+// transaction's client so every read in one delivery
 // sees the same clock.
 async function simTodayIso(client) {
   const result = await client.query(SIM_TODAY_SQL)
@@ -865,7 +867,7 @@ async function simTodayIso(client) {
 }
 
 // 'YYYY-MM-DD' shifted by whole days, in UTC. Sim days are consecutive
-// calendar dates by construction (sim_day advances 120 seconds per step), so
+// calendar dates by construction (sim_day advances REAL_SEC_PER_SIM_DAY seconds per step), so
 // date arithmetic on the ISO string is sim-day arithmetic.
 function shiftIsoDate(isoDay, days) {
   const d = new Date(`${isoDay}T00:00:00Z`)
@@ -910,7 +912,7 @@ export async function deliverArrivedLoads() {
         const termDays = TERM_DAYS[load.paymentTerms] ?? 30
         const done = await loadsRepo.markDelivered(client, {
           loadId: load.id,
-          dueSeconds: simDaysToSeconds(termDays),
+          dueSeconds: financeDaysToSeconds(termDays),
         })
         if (!done) return
 
@@ -989,7 +991,7 @@ export async function deliverArrivedLoads() {
             grossUsd: pay.gross,
             deductionsUsd: pay.deductions,
             netUsd: pay.net,
-            dueSeconds: simDaysToSeconds(SETTLEMENT_TERM_SIM_DAYS),
+            dueSeconds: financeDaysToSeconds(SETTLEMENT_TERM_SIM_DAYS),
           })
         }
 

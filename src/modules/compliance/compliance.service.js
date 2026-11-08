@@ -229,7 +229,7 @@ export async function driverDayLog({ driverId, dayOffset }) {
 // began is measured from where it really started.
 export async function listViolations({ days }) {
   const since = new Date(Date.now() - simDaysToMs(days + HOS_LOOKBACK_HOURS / 24))
-  const rows = await repo.violationsSource({ since, realSecPerSimDay: REAL_SEC_PER_SIM_DAY })
+  const rows = await repo.violationsSource({ since })
   const drivers = []
   for (const r of rows) {
     const nowMs = new Date(r.now).getTime()

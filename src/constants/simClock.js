@@ -7,14 +7,38 @@
 // because the lessons on that side are measured in days and weeks: a
 // four-day run, a net60 invoice, interest on a credit line.
 //
-// One simulated day is two real minutes. A student sees a load dispatched,
-// eight minutes of transit, delivery, and then the wait for money -- half
-// an hour from an A-rated broker, two hours from a D. That difference is
-// the entire argument for checking a broker before you haul for them, and
-// at real scale nobody would ever live long enough to feel it.
-export const REAL_MS_PER_SIM_DAY = 2 * 60 * 1000
+// One simulated day is THIRTY real minutes (Azizbek qarori 2026-11-08; it
+// was two). At two minutes a four-day run was eight minutes of transit and
+// the student never had a window to work other loads; at thirty an
+// 800-mile run is most of an hour and a driver's hours-of-service clock is
+// something to manage.
+//
+// MONEY WAITS DO NOT MOVE. Everything the company is OWED or OWES ON A
+// DATE -- invoice due/aging for every term, a driver's settlement due, the
+// driver asks/refuses/quits stages that age from that date -- stays on the
+// old two-minute day, FINANCE_REAL_MS_PER_SIM_DAY below (Azizbek qarori
+// 2026-11-08). Two reasons: net30/45/60 at thirty minutes a day would be 15
+// to 30 real HOURS of waiting, and keeping the whole money domain on one
+// unit keeps its ORDER intact -- the driver's settlement falls due before
+// the broker pays, which is the cash-crunch lesson. Time-rated COSTS
+// (credit-line interest, insurance) follow the new operations speed.
+export const REAL_MS_PER_SIM_DAY = 30 * 60 * 1000
 export const REAL_MIN_PER_SIM_DAY = REAL_MS_PER_SIM_DAY / 60000
 export const REAL_SEC_PER_SIM_DAY = REAL_MS_PER_SIM_DAY / 1000
+
+// The money-wait day: the old speed, kept on purpose (see above).
+export const FINANCE_REAL_MS_PER_SIM_DAY = 2 * 60 * 1000
+export const FINANCE_REAL_SEC_PER_SIM_DAY = FINANCE_REAL_MS_PER_SIM_DAY / 1000
+
+// The longest a student should sit waiting for a payment: 12 real hours
+// (Azizbek qarori 2026-11-08). A test pins that every payment term times
+// the finance day fits under it, so a new net90 cannot silently break it.
+export const FINANCE_WAIT_MAX_REAL_MS = 12 * 60 * 60 * 1000
+
+// How many times slower the operations day became (2 min -> 30 min).
+// Migration 073 rescales driver-qualification dates by it so their
+// remaining sim-day counts survive the change.
+export const SIM_CLOCK_RESCALE_RATIO = REAL_MS_PER_SIM_DAY / FINANCE_REAL_MS_PER_SIM_DAY
 
 export function simDaysToMs(days) {
   return Math.round(days * REAL_MS_PER_SIM_DAY)
@@ -27,6 +51,12 @@ export function simDaysToMs(days) {
 // Floored at 1 so a zero-length window still advances time.
 export function simDaysToSeconds(days) {
   return Math.max(1, Math.round(days * REAL_MS_PER_SIM_DAY / 1000))
+}
+
+// The same conversion on the money-wait day: invoice and settlement due
+// dates. Floored at 1 for the same reason.
+export function financeDaysToSeconds(days) {
+  return Math.max(1, Math.round(days * FINANCE_REAL_MS_PER_SIM_DAY / 1000))
 }
 
 // How many simulated days have passed in a real interval.

@@ -69,7 +69,7 @@
 //
 // legalArrivalAt and every stop's arrivedAt/departedAt, by contrast, are
 // on the COMPRESSED calendar dispatched_at/eta_at already live on
-// (src/constants/simClock.js -- one simulated day is two real minutes).
+// (src/constants/simClock.js -- one simulated day is thirty real minutes).
 // The conversion is the same one this codebase already uses for a
 // mandatory rest's duration (REQUIRED_REST_SIM_DAYS -> simDaysToMs,
 // hos.js/dispatch.service.js): a quantity of real HOS hours, divided by

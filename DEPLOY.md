@@ -9,8 +9,8 @@ Ilovada vaqtga bog'liq ikkita ish bor, va ular butunlay boshqa tezlikda ishlaydi
 | `/ops/tick` | har daqiqada | **tashqi rejalashtuvchi** |
 | `/ops/refresh` | kuniga bir | Vercel cron (`vercel.json`) |
 
-Tick har daqiqada kerak, chunki kompaniya soati siqilgan: **1 simulyatsiya kuni = 2 real
-daqiqa** (`src/constants/simClock.js`). Tick yuklarni yetkazadi, hisob-fakturalarni
+Tick har daqiqada kerak, chunki kompaniya soati siqilgan: **1 kompaniya kuni = 30 real
+daqiqa** (`src/constants/simClock.js`; pul kutishlari 2 daqiqa/kun, 2026-11-08). Tick yuklarni yetkazadi, hisob-fakturalarni
 to'laydi, foiz va sug'urtani yozadi, yo'l hodisalarini chiqaradi. Kuniga bir marta
 ishlaydigan tick — to'xtab qolgan o'yin.
 

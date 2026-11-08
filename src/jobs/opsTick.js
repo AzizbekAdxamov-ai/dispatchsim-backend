@@ -3,7 +3,7 @@
 // Every 30 real seconds it does three things: delivers loads whose ETA has
 // passed and pays for their fuel, settles invoices that have come due, and
 // charges interest on a negative balance. On the compressed calendar (one
-// simulated day = two real minutes) that is a check roughly every quarter
+// simulated day = thirty real minutes) that is a check roughly every sixtieth
 // of a simulated day -- often enough that nothing sits visibly overdue,
 // rare enough to be nearly free.
 //

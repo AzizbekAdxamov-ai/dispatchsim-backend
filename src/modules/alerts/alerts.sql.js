@@ -8,7 +8,7 @@
 //
 // The one interpolation below is a constant, never user input.
 
-import { REAL_SEC_PER_SIM_DAY } from '../../constants/simClock.js'
+import { FINANCE_REAL_SEC_PER_SIM_DAY } from '../../constants/simClock.js'
 
 // Past the promise, or heading past it. status is maintained by the
 // tick's markLate, which compares eta_at against promised_eta_at -- the
@@ -38,7 +38,7 @@ export const OVERDUE_INVOICES_SQL = `SELECT id AS "loadId", broker, payment_term
               SELECT sum((a->>'amountUsd')::int) FROM jsonb_array_elements(accessorials) a
             ), 0))::int AS "amountUsd",
             GREATEST(0, floor(
-              EXTRACT(EPOCH FROM (now() - invoice_due_at)) / ${REAL_SEC_PER_SIM_DAY}
+              EXTRACT(EPOCH FROM (now() - invoice_due_at)) / ${FINANCE_REAL_SEC_PER_SIM_DAY}
             ))::int AS "daysPastDue"
        FROM loads
       WHERE delivered_at IS NOT NULL

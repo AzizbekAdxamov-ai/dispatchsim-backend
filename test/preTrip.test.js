@@ -131,8 +131,9 @@ test('the ELD block ends at the dispatch and rides the compressed calendar', () 
   const spanMs = block.endedAt - block.startedAt
   const expected = PRE_TRIP_SIM_DAYS * REAL_MS_PER_SIM_DAY
   assert.ok(Math.abs(spanMs - expected) <= 60, `span ${spanMs}ms, expected about ${expected}ms`)
-  // A 30 sim-minute walk-around is under two real seconds at 2 min/day.
-  assert.ok(spanMs < 5_000)
+  // A 30 sim-minute walk-around is 37.5 real seconds at 30 min/day --
+  // well under one real sim-day, nowhere near a literal half hour of ms.
+  assert.ok(spanMs < 60_000)
 })
 
 test('an unusable dispatch time is no block, never an invented one', () => {

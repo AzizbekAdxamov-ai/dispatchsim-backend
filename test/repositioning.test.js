@@ -48,8 +48,11 @@ test('the block is written on the compressed calendar, like every other duty eve
   // Kills: literal hours written straight into the column. duty_events
   // lives on the sim calendar (037's header); a ten-hour block written
   // literally would sit in the log a week deep in sim time.
-  assert.ok(Math.abs(spanMs - expected) <= 60, `span ${spanMs}ms, expected about ${expected}ms`)
-  assert.ok(spanMs < 60_000, 'ten hours of driving is under a minute of real time at this scale')
+  // Tolerance: block.minutes is rounded to a whole minute, and one sim
+  // minute is REAL_MS_PER_SIM_DAY / 1440 real ms (1.25 s at 30 min/day).
+  const oneSimMinuteMs = REAL_MS_PER_SIM_DAY / (24 * 60)
+  assert.ok(Math.abs(spanMs - expected) <= oneSimMinuteMs, `span ${spanMs}ms, expected about ${expected}ms`)
+  assert.ok(spanMs < REAL_MS_PER_SIM_DAY, 'ten hours of driving is under one real sim-day of time at this scale')
 })
 
 test('a truck already at the shipper has nothing to record', () => {

@@ -59,7 +59,8 @@ export function settlementFor({ rateUsd, distanceMi, payModel, payPercentBp, pay
 // ---------------------------------------------------------------------
 
 // Settlements in US trucking run weekly. Seven simulated days is that norm
-// on this calendar -- fourteen real minutes -- and it is the line a driver
+// on this calendar -- fourteen real minutes (a money-wait day is two real
+// minutes, FINANCE_REAL_MS_PER_SIM_DAY) -- and it is the line a driver
 // measures lateness from. Not a threshold somebody picked: it is the
 // industry's own cycle, which is why a driver treats missing it as a
 // broken promise rather than as an inconvenience.

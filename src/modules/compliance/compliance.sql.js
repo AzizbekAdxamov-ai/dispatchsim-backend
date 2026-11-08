@@ -1,7 +1,10 @@
 // SQL for /compliance (Driver HOS). sql-check PREPAREs every export here.
 //
 // $n "realSecPerSimDay" is simClock.js's REAL_SEC_PER_SIM_DAY, passed in
-// rather than typed as 120 -- the same number sim_day() (033) is built on.
+// rather than typed as a literal -- the same length sim_day() (073) steps
+// by. Day boundaries come from sim_day_start() (073), which knows the
+// 2026-11-08 change from 120 s to 1800 s days; do not rebuild them from
+// sim_epoch() here.
 
 // Every working driver (duty_status <> 'off' -- HR's "not working for the
 // company"), their truck, and their active duty log since $1. One row per
@@ -11,9 +14,7 @@
 export const DRIVERS_HOS_SQL = `
   WITH clock AS (
     SELECT now() AS now,
-           sim_epoch()
-             + (floor(EXTRACT(EPOCH FROM (now() - sim_epoch())) / $2::numeric) + 1)
-               * ($2::numeric * interval '1 second') AS next_day_start
+           sim_day_start(now()) + ($2::numeric * interval '1 second') AS next_day_start
   )
   SELECT d.id AS "driverId", d.name AS "driverName",
          t.id AS "truckId", t.make AS "truckMake", t.model AS "truckModel",
@@ -38,9 +39,7 @@ export const DRIVERS_HOS_SQL = `
 // this screen is the same day every other screen calls today.
 export const DRIVER_DAY_LOG_SQL = `
   WITH day AS (
-    SELECT sim_epoch()
-             + (floor(EXTRACT(EPOCH FROM (now() - sim_epoch())) / $2::numeric) + $3::int)
-               * ($2::numeric * interval '1 second') AS start
+    SELECT sim_day_start(now()) + ($3::int * $2::numeric * interval '1 second') AS start
   ),
   win AS (
     SELECT start, start + ($2::numeric * interval '1 second') AS "end" FROM day
@@ -109,9 +108,7 @@ export const DRIVER_QUALIFICATION_SQL = `
 // for a decision.
 export const UNASSIGNED_HOS_SQL = `
   WITH day AS (
-    SELECT sim_epoch()
-             + (floor(EXTRACT(EPOCH FROM (now() - sim_epoch())) / $1::numeric) - gs)
-               * ($1::numeric * interval '1 second') AS start
+    SELECT sim_day_start(now()) - (gs * $1::numeric * interval '1 second') AS start
       FROM generate_series(0, $2::int) AS gs
   ),
   win AS (
@@ -205,9 +202,7 @@ export const ANNOTATE_UNIDENTIFIED_EVENT_SQL = `
 export const VIOLATIONS_SQL = `
   WITH clock AS (
     SELECT now() AS now,
-           sim_epoch()
-             + floor(EXTRACT(EPOCH FROM (now() - sim_epoch())) / $2::numeric)
-               * ($2::numeric * interval '1 second') AS today_start
+           sim_day_start(now()) AS today_start
   )
   SELECT d.id AS "driverId", d.name AS "driverName",
          clock.now AS "now", clock.today_start AS "todayStart",

@@ -14,7 +14,7 @@ import 'dotenv/config'
 
 import { reviewAnnotationSchema, reviewAssignSchema } from '../src/modules/compliance/compliance.schemas.js'
 import { AppError } from '../src/lib/errors.js'
-import { REAL_SEC_PER_SIM_DAY, REAL_MS_PER_SIM_DAY } from '../src/constants/simClock.js'
+import { REAL_MS_PER_SIM_DAY } from '../src/constants/simClock.js'
 import { REVIEW_THRESHOLD_MIN } from '../src/modules/hos/repositioning.js'
 
 // --- schemas: the annotation is the review, 4..60 is the ELD window -----
@@ -127,9 +127,7 @@ test('assign rewrites the record; annotate explains it; both leave one active ro
     // and carries the DATE text of its own start as the label the
     // screen keys its rows by.
     const clockRow = await client.query(
-      `SELECT sim_epoch() + (floor(EXTRACT(EPOCH FROM (now() - sim_epoch())) / $1::numeric))
-         * ($1::numeric * interval '1 second') AS start`,
-      [REAL_SEC_PER_SIM_DAY],
+      `SELECT sim_day_start(now()) AS start`,
     )
     const todayStart = new Date(clockRow.rows[0].start)
     for (const d of list.days) {
@@ -141,11 +139,9 @@ test('assign rewrites the record; annotate explains it; both leave one active ro
       // (033: every sim day carries a calendar date of its own, which is
       // why it is not the window's real date) -- the pin here is the
       // boundary: windows open exactly on sim-day boundaries.
-      const rem = (await client.query(
-        `SELECT EXTRACT(EPOCH FROM ($1::timestamptz - sim_epoch()))::bigint % 120 AS rem`,
-        [new Date(d.dayStart)],
-      )).rows[0].rem
-      assert.equal(Number(rem), 0, 'windows open on sim-day boundaries')
+      // Kills: window boundaries computed from sim_epoch() instead of sim_day_start() (off after the 2026-11-08 anchor)
+      const offMs = todayStart.getTime() - new Date(d.dayStart).getTime()
+      assert.equal(offMs % REAL_MS_PER_SIM_DAY, 0, 'windows open on sim-day boundaries')
     }
 
     // Assign: the original is kept as 'inactive-changed' and a

@@ -124,17 +124,18 @@ test('a late factor survives the conversion to whole seconds', () => {
   }
 })
 
-test('the two clocks are 720x apart, which is why they must never be compared', () => {
-  // The real bug, stated as arithmetic. A 2-day promise is 4 real minutes
-  // on the compressed clock and 48 real hours on the real one. Any
-  // comparison between the two is 720x wrong, and always in the same
+// Kills: REAL_SEC_PER_SIM_DAY or simDaysToSeconds drifting back to the 2-minute day (ratio 720, 240 s)
+test('the two clocks are 48x apart, which is why they must never be compared', () => {
+  // The real bug, stated as arithmetic. A 2-day promise is 60 real minutes
+  // on the compressed clock (30 min/day since 2026-11-08) and 48 real
+  // hours on the real one. Any comparison between the two is 48x wrong, and always in the same
   // direction, which is why it looked like "no load is ever late" rather
   // than like a bug.
   const simSeconds = simDaysToSeconds(2)
   const realSeconds = 2 * 24 * 60 * 60
-  assert.equal(simSeconds, 240)
-  assert.equal(realSeconds / simSeconds, 720)
-  assert.equal(REAL_SEC_PER_SIM_DAY, 120)
+  assert.equal(simSeconds, 3600)
+  assert.equal(realSeconds / simSeconds, 48)
+  assert.equal(REAL_SEC_PER_SIM_DAY, 1800)
 })
 
 test('simDaysToSeconds returns whole seconds and never zero', () => {

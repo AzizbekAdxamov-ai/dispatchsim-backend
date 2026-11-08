@@ -26,10 +26,10 @@ test('a black balance is never charged interest', () => {
 })
 
 test('rounding every tick silently under-bills, and under -$4,055 bills nothing', () => {
-  // The tick runs every 30 real seconds, which is a quarter of a
-  // simulated day. At -$10,000 the true charge per tick is $1.23 and
-  // Math.round makes it $1 -- a fifth of the interest thrown away on
-  // every tick, forever. Carrying the fraction is what makes the ledger
+  // The tick runs every 30 real seconds, which is a sixtieth of a
+  // simulated day (30 real minutes since 2026-11-08). At -$10,000 the true
+  // charge per tick is $0.077 and Math.round makes it $0 -- ALL of the
+  // interest thrown away on every tick, forever. Carrying the fraction is what makes the ledger
   // match the advertised rate.
   const balance = -10000
   const simDaysPerTick = msToSimDays(30000)
@@ -47,14 +47,16 @@ test('rounding every tick silently under-bills, and under -$4,055 bills nothing'
   assert.ok(rounded < exact * 0.85, `per-tick rounding was off by only ${(rounded / exact).toFixed(3)}x`)
 })
 
+// Kills: interest billed per tick with Math.round instead of carrying the fraction (the credit line becomes free)
 test('a small debt would accrue no interest at all if the tick rounded', () => {
-  // Below about -$4,055 the per-tick charge is under half a dollar, so
+  // On the 30-minute day the per-tick charge is under half a dollar for
+  // any balance inside the whole $50,000 line (below about -$60,800), so
   // Math.round returns 0 every time and the credit line becomes free.
   // This is the failure the carry exists to prevent, stated as a number.
-  const balance = -4000
+  const balance = -CREDIT_LIMIT_USD
   const simDaysPerTick = msToSimDays(30000)
   assert.equal(interestForPeriod(balance, simDaysPerTick), 0)
-  assert.ok(interestForPeriodExact(balance, simDaysPerTick) > 0.45)
+  assert.ok(interestForPeriodExact(balance, simDaysPerTick) > 0.4)
 })
 
 test('interest scales with the rate, not with a magic number', () => {
@@ -63,9 +65,12 @@ test('interest scales with the rate, not with a magic number', () => {
   assert.ok(Math.abs(yearly - 36500 * CREDIT_APR) < 0.01)
 })
 
-test('one simulated day is two real minutes', () => {
-  assert.equal(REAL_MS_PER_SIM_DAY, 120000)
-  assert.equal(msToSimDays(120000), 1)
+// Kills: REAL_MS_PER_SIM_DAY reverted to 2 minutes, or msToSimDays dividing by a different day than REAL_MS_PER_SIM_DAY
+test('one simulated day is thirty real minutes', () => {
+  // Azizbek qarori 2026-11-08: 30 real minutes per operations day.
+  const THIRTY_MINUTES_MS = 30 * 60 * 1000
+  assert.equal(REAL_MS_PER_SIM_DAY, THIRTY_MINUTES_MS)
+  assert.equal(msToSimDays(THIRTY_MINUTES_MS), 1)
 })
 
 // --- driver settlement -------------------------------------------------
@@ -131,8 +136,9 @@ test('a closed laptop does not bankrupt the company', () => {
   const bill = (ms) => interestForPeriodExact(balance, billableSimDays(ms))
 
   // A normal tick is unaffected -- the cap must not change ordinary play.
+  // Kills: the cap changing an ordinary tick's charge (1/60 sim day at 18% APR = $1.39)
   const oneTick = bill(30000)
-  assert.ok(Math.abs(oneTick - 20.8) < 1, `bir tick: ${oneTick}`)
+  assert.ok(Math.abs(oneTick - 1.39) < 0.05, `bir tick: ${oneTick}`)
   // Vercel's 60-second cron floor: still exact, still uncapped.
   assert.ok(Math.abs(bill(60000) - oneTick * 2) < 0.01)
 
@@ -145,7 +151,7 @@ test('a closed laptop does not bankrupt the company', () => {
 
   // And the cap is small enough to matter: an eight-hour gap used to cost
   // nearly a hundred times what it now does.
-  const uncappedEightHours = interestForPeriodExact(balance, (8 * 3600000) / 120000)
+  const uncappedEightHours = interestForPeriodExact(balance, (8 * 3600000) / REAL_MS_PER_SIM_DAY)
   assert.ok(uncappedEightHours / atCap > 90, `nisbat ${uncappedEightHours / atCap}`)
 })
 
