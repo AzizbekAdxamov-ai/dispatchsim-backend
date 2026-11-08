@@ -562,7 +562,7 @@ export async function markInvoicePaid(client, loadId) {
 //
 // This used to set duty_status = 'off' and hos_remaining_min = NULL, and
 // that made the driver INVISIBLE. Every availability and deadhead query
-// on the board requires `duty_status <> 'off'`, so a driver who finished
+// on the board once required `duty_status <> 'off'`, so a driver who finished
 // one load never appeared again -- no deadhead, no nearest-driver, and
 // the HOS warning compared against NULL and stopped firing entirely. A
 // company whose drivers had all completed a run looked, to the board,

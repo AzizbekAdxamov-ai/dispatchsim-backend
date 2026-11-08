@@ -195,10 +195,11 @@ export const DUTY_STATUS_TO_DB_STATUS = Object.freeze({
   [DUTY_STATUS.ON_DUTY_NOT_DRIVING]: 'on-duty',
   [DUTY_STATUS.SLEEPER_BERTH]: 'resting',
   // NOT 'off'. In drivers.duty_status 'off' means "not working for this
-  // company right now" -- every availability and deadhead query on the
-  // load board filters on duty_status <> 'off' (loads.repository.js's
-  // releaseDriver and hr.service.js both explain the invisible-driver bug
-  // that came from writing 'off' between loads). An ELD Off Duty period is
+  // company right now" -- other modules (compliance, HR) read it that way.
+  // The load board no longer filters on it (a resting driver is a deadhead
+  // reference point), but loads.repository.js's releaseDriver and
+  // hr.service.js explain the invisible-driver bug from writing 'off'
+  // between loads. An ELD Off Duty period is
   // a driver resting on the road, which is exactly what 'resting' means.
   [DUTY_STATUS.OFF_DUTY]: 'resting',
 })
