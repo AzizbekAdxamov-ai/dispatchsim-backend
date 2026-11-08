@@ -68,8 +68,6 @@ const ABANDON_RES = [
   /\bleaving\s+the\s+(?:load|trailer)\b/i,
   /\bdropping\s+the\s+load\b/i,
 ]
-// "no accident" / "no wreck": the trouble is denied.
-const NO_TROUBLE_RE = /\bno\s+(?:accident|wreck|crash|collision)\b/i
 const TROUBLE_RES = [
   [TROUBLE_KINDS.ACCIDENT, ACCIDENT_RES],
   [TROUBLE_KINDS.BREAKDOWN, BREAKDOWN_RES],
@@ -81,15 +79,28 @@ const TROUBLE_RES = [
 // down" is still trouble.
 const DENIAL_RE = /\b(?:don'?t|do\s+not|not|never|won'?t|didn'?t|haven'?t|hasn'?t|hadn'?t|isn'?t|wasn'?t|weren'?t|aren'?t|without|nothing)\b/i
 
-// A clause that only imagines the trouble ("if the truck breaks down") or
-// denies it. The negation check runs on what is LEFT after the matched
-// phrase is cut out: "won't start" is itself a trouble phrase, and its own
-// "won't" must not cancel it.
+// A denial only reaches the trouble term it stands right in front of: this many
+// words before it. "hit a deer, driver wasn't hurt" keeps the deer.
+export const DENIAL_WINDOW_WORDS = 3
+// "no accident", "no major wreck": a bare "no" counts only directly in front.
+const NO_BEFORE_RE = /\bno\s+(?:\w+\s+)?$/i
+
+function isDenied(clause, index) {
+  const before = clause.slice(0, index)
+  const nearby = before.split(/\s+/).filter(Boolean).slice(-DENIAL_WINDOW_WORDS).join(' ')
+  return DENIAL_RE.test(nearby) || NO_BEFORE_RE.test(before)
+}
+
+// A clause that only imagines the trouble ("if the truck breaks down") is not
+// trouble. Otherwise each trouble term is judged on its own: it counts unless
+// a denial sits right before it. Words before the match only, so "won't
+// start" (a trouble phrase that contains "won't") is not denied by itself.
 function troubleKindIn(clause) {
-  if (HYPOTHETICAL_RE.test(clause) || NO_TROUBLE_RE.test(clause)) return null
+  if (HYPOTHETICAL_RE.test(clause)) return null
   for (const [kind, res] of TROUBLE_RES) {
-    const hit = res.map((re) => clause.match(re)).find(Boolean)
-    if (hit && !DENIAL_RE.test(clause.replace(hit[0], ' '))) return kind
+    const found = res.some((re) => [...clause.matchAll(new RegExp(re.source, 'gi'))]
+      .some((m) => !isDenied(clause, m.index)))
+    if (found) return kind
   }
   return null
 }

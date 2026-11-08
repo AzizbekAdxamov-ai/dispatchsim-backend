@@ -198,3 +198,13 @@ test('a trouble reply far back in the thread does not make a later cancel an aba
   const recent = decide('cancel it, find someone else', { thread: [broker(first.line), ...filler.slice(1)] })
   assert.equal(recent.action, 'abandon')
 })
+
+// Kills: a clause-wide denial hiding real trouble ("hit a deer, driver wasn't hurt" read as denied)
+test('a denial only reaches the term right after it; real trouble wins', () => {
+  assert.equal(troubleIntent("hit a deer, driver wasn't hurt").kind, 'accident')
+  assert.equal(troubleIntent("we haven't had an accident").kind, null)
+  assert.equal(troubleIntent("truck wasn't damaged").kind, null)
+  assert.equal(troubleIntent("we can't deliver, truck broke down").kind, 'breakdown')
+  assert.equal(troubleIntent('no accident, just a flat tire').kind, 'breakdown')
+  assert.equal(troubleIntent('no problem, truck broke down').kind, 'breakdown')
+})
