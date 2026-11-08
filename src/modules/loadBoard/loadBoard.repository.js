@@ -97,7 +97,7 @@ const BASE_CTE_FLEET = `
       FROM drivers d
       WHERE d.current_lat IS NOT NULL
         AND d.current_lon IS NOT NULL
-          AND NOT EXISTS (
+        AND NOT EXISTS (
           SELECT 1 FROM loads l
           WHERE l.driver_id = d.id AND l.status IN (${ACTIVE_LOAD_STATUS_SQL})
         )
@@ -493,27 +493,16 @@ export async function getFleetEquipmentKeys() {
   return new Set(result.rows.map((r) => r.trailerType))
 }
 
-// Check if at least one driver is available (has coordinates, no active
-// load; resting/off-duty drivers count). Used by the 'no-available-driver' warning.
-export async function hasAvailableDriver() {
-  const result = await query(
-    `SELECT 1 FROM drivers d
+export const HAS_AVAILABLE_DRIVER_SQL = `SELECT 1 FROM drivers d
      WHERE d.current_lat IS NOT NULL
        AND d.current_lon IS NOT NULL
        AND NOT EXISTS (
          SELECT 1 FROM loads l
          WHERE l.driver_id = d.id AND l.status IN (${ACTIVE_LOAD_STATUS_SQL})
        )
-     LIMIT 1`,
-  )
-  return result.rows.length > 0
-}
+     LIMIT 1`
 
-// Find the nearest available driver to a posting's origin, with HOS.
-// Returns { id, name, deadheadMi, hosRemainingMin } or null.
-export async function findNearestAvailableDriver(originLat, originLon) {
-  const result = await query(
-    `SELECT d.id, d.name, d.hos_remaining_min AS "hosRemainingMin",
+export const NEAREST_AVAILABLE_DRIVER_SQL = `SELECT d.id, d.name, d.hos_remaining_min AS "hosRemainingMin",
            road_miles(d.current_lat, d.current_lon, $1, $2)::int AS "deadheadMi"
      FROM drivers d
      WHERE d.current_lat IS NOT NULL
@@ -523,8 +512,18 @@ export async function findNearestAvailableDriver(originLat, originLon) {
          WHERE l.driver_id = d.id AND l.status IN (${ACTIVE_LOAD_STATUS_SQL})
        )
      ORDER BY road_miles(d.current_lat, d.current_lon, $1, $2) ASC
-     LIMIT 1`,
-    [originLat, originLon],
-  )
+     LIMIT 1`
+
+// Check if at least one driver is available (has coordinates, no active
+// load; resting/off-duty drivers count). Used by the 'no-available-driver' warning.
+export async function hasAvailableDriver() {
+  const result = await query(HAS_AVAILABLE_DRIVER_SQL)
+  return result.rows.length > 0
+}
+
+// Find the nearest available driver to a posting's origin, with HOS.
+// Returns { id, name, deadheadMi, hosRemainingMin } or null.
+export async function findNearestAvailableDriver(originLat, originLon) {
+  const result = await query(NEAREST_AVAILABLE_DRIVER_SQL, [originLat, originLon])
   return result.rows[0] ?? null
 }

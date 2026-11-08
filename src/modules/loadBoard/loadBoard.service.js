@@ -45,7 +45,7 @@ export function resolveDeadheadFrom({ fromCity, fromState, firstPosting, hasRefe
   return null
 }
 
-export async function listPostings(input) {
+export async function listPostings(input, { repo = loadBoardRepo } = {}) {
   const { page, limit, fromCity, fromState, toCity, toState } = input
 
   // Both reference points are validated here, before any SQL is built --
@@ -61,8 +61,8 @@ export async function listPostings(input) {
   // size of the answer, and a board that says "25 results" on every
   // search has told the dispatcher nothing about the lane.
   const [postings, counts] = await Promise.all([
-    loadBoardRepo.listPostings(filters),
-    loadBoardRepo.countPostings(filters),
+    repo.listPostings(filters),
+    repo.countPostings(filters),
   ])
 
   // Where the deadhead is measured FROM, so the column can say it. A
@@ -71,7 +71,7 @@ export async function listPostings(input) {
   // different depending on whose truck it is.
   // No origin typed and no driver to measure from: only then ask the fleet.
   const needsFleetCheck = !(fromCity && fromState) && !postings[0]?.nearestDriverId
-  const hasReference = needsFleetCheck ? await loadBoardRepo.hasAvailableDriver() : true
+  const hasReference = needsFleetCheck ? await repo.hasAvailableDriver() : true
   const deadheadFrom = resolveDeadheadFrom({ fromCity, fromState, firstPosting: postings[0], hasReference })
 
   const deadheadTo = toCity && toState ? { city: toCity, state: toState } : null

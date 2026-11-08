@@ -98,8 +98,8 @@ export async function hireApplicant({ applicantId, userId }) {
         currentState: homeCity?.state ?? applicant.homeBaseState,
         currentLat: homeCity?.lat ?? null,
         currentLon: homeCity?.lon ?? null,
-        // NOT 'off'. Every availability and deadhead query on the load
-        // board filters on `duty_status <> 'off'`, so a roster hired
+        // NOT 'off'. 'off' means not working for the company (the load
+        // board once filtered on `duty_status <> 'off'` too), so a roster hired
         // through HR was invisible to dispatch -- the board reported no
         // available driver for a company that had just hired three.
         dutyStatus: 'resting',

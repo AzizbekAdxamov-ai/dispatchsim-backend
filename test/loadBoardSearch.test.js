@@ -22,8 +22,10 @@ import assert from 'node:assert/strict'
 import {
   buildListPostingsSql,
   buildCountPostingsSql,
+  HAS_AVAILABLE_DRIVER_SQL,
+  NEAREST_AVAILABLE_DRIVER_SQL,
 } from '../src/modules/loadBoard/loadBoard.repository.js'
-import { resolveDeadheadFrom } from '../src/modules/loadBoard/loadBoard.service.js'
+import { resolveDeadheadFrom, listPostings } from '../src/modules/loadBoard/loadBoard.service.js'
 import { listPostingsSchema } from '../src/modules/loadBoard/loadBoard.schemas.js'
 import { CITIES } from '../scripts/seed/cities.js'
 
@@ -201,4 +203,55 @@ test('no origin, no driver and no posting driver reports kind none', () => {
     resolveDeadheadFrom({ firstPosting: { nearestDriverId: 'd1', nearestDriverName: 'A' }, hasReference: false }).kind,
     'driver',
   )
+})
+
+// Kills: the off-duty filter or the `<> 'done'` rule surviving in the
+// two warning queries, which would disagree with the board about who is free.
+test('the availability queries use the same rule as the board', () => {
+  for (const sql of [HAS_AVAILABLE_DRIVER_SQL, NEAREST_AVAILABLE_DRIVER_SQL]) {
+    assert.doesNotMatch(sql, /duty_status/)
+    assert.match(sql, /l\.status IN \('ontime','warn','crit'\)/)
+    assert.doesNotMatch(sql, /<> 'done'/)
+  }
+})
+
+function stubRepo({ hasDriver, nearby = 127, first = { id: 'p1' } }) {
+  const calls = { hasAvailableDriver: 0 }
+  return {
+    calls,
+    repo: {
+      listPostings: async () => (first ? [first] : []),
+      countPostings: async () => ({ matching: 0, nearby }),
+      hasAvailableDriver: async () => { calls.hasAvailableDriver += 1; return hasDriver },
+    },
+  }
+}
+const SEARCH = { page: 1, limit: 25 }
+
+// Kills: removing the hasAvailableDriver call, or letting nearby through
+// as "outside the radius" when there is nobody to measure from.
+test('listPostings with no driver and no origin reports none and nearby 0', async () => {
+  const { repo, calls } = stubRepo({ hasDriver: false, first: null })
+  const { meta } = await listPostings(SEARCH, { repo })
+  assert.equal(meta.deadheadFrom.kind, 'none')
+  assert.equal(meta.nearby, 0)
+  assert.equal(calls.hasAvailableDriver, 1)
+})
+
+// Kills: asking the fleet when an origin city is typed, or zeroing nearby there.
+test('listPostings with an origin typed skips the fleet check and keeps nearby', async () => {
+  const { repo, calls } = stubRepo({ hasDriver: false })
+  const { meta } = await listPostings({ ...SEARCH, fromCity: 'Dallas', fromState: 'TX' }, { repo })
+  assert.equal(calls.hasAvailableDriver, 0)
+  assert.equal(meta.deadheadFrom.kind, 'location')
+  assert.equal(meta.nearby, 127)
+})
+
+// Kills: asking the fleet when the first posting already has a nearest driver.
+test('listPostings with a nearest driver on the first posting skips the fleet check', async () => {
+  const { repo, calls } = stubRepo({ hasDriver: false, first: { id: 'p1', nearestDriverId: 'd1', nearestDriverName: 'A' } })
+  const { meta } = await listPostings(SEARCH, { repo })
+  assert.equal(calls.hasAvailableDriver, 0)
+  assert.equal(meta.deadheadFrom.kind, 'driver')
+  assert.equal(meta.nearby, 127)
 })
