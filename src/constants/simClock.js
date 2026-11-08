@@ -26,6 +26,10 @@ export const REAL_MS_PER_SIM_DAY = 30 * 60 * 1000
 export const REAL_MIN_PER_SIM_DAY = REAL_MS_PER_SIM_DAY / 60000
 export const REAL_SEC_PER_SIM_DAY = REAL_MS_PER_SIM_DAY / 1000
 
+// Migration 073 edge: if reset-company writes a new epoch within 120 s of
+// 073 running, the stored anchor is still ahead of that epoch, so sim_day()
+// applies the old 120 s formula for those few seconds. Harmless: the anchor
+// passes and numbering is continuous.
 // The money-wait day: the old speed, kept on purpose (see above).
 export const FINANCE_REAL_MS_PER_SIM_DAY = 2 * 60 * 1000
 export const FINANCE_REAL_SEC_PER_SIM_DAY = FINANCE_REAL_MS_PER_SIM_DAY / 1000

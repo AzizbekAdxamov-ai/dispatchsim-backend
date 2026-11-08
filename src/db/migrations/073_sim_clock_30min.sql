@@ -22,10 +22,6 @@
 -- FINANCE_REAL_SEC_PER_SIM_DAY = 120, SIM_CLOCK_RESCALE_RATIO = 15).
 -- test/simClock30.test.js shu fayldagi sonlarni konstantalarga solishtiradi.
 
--- Eslatma: reset-company migratsiyadan keyingi 120 soniya ichida yangi epoxa
--- yozsa, anchor.at > epoxa bo'lib qoladi va sim_day() bir necha soniya eski
--- formulani qo'llaydi (ts < at). Zararsiz: keyin at o'tadi va hisob uzluksiz.
-
 -- ---------------------------------------------------------------------
 -- 1. Anchor (epoxa bo'lmasa -- yangi baza -- kerak emas)
 -- ---------------------------------------------------------------------
