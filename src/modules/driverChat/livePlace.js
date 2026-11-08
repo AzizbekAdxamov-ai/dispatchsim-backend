@@ -24,16 +24,16 @@ export function livePlace(load, now = new Date()) {
   return c ? { city: c.city, state: c.state, progress: pos.progress } : null
 }
 
-// The context every reader gets (prompt, /status, the bot): the parked
-// place kept as parkedCity/parkedState, and currentCity/currentState
-// moved to where the run has got to. A driver with no run is where they
-// were parked.
 // "Dallas, TX" -> { city, state }; null when the text is not that shape.
 export function parsePlace(place) {
   const m = /^(.+),\s*([A-Z]{2})$/.exec(String(place ?? '').trim())
   return m ? { city: m[1], state: m[2] } : null
 }
 
+// The context every reader gets (prompt, /status, the bot): the parked
+// place kept as parkedCity/parkedState, and currentCity/currentState
+// moved to where the run has got to. A driver with no run is where they
+// were parked.
 export function withLivePlace(context, now = new Date()) {
   if (!context) return context
   const { driver, load } = context

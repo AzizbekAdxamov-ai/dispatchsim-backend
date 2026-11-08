@@ -131,3 +131,17 @@ test('openLoadConversation SQL inserts a booked thread with the signed rate, sco
   assert.doesNotMatch(sqls[1].sql, /credit_rating/)
   assert.match(sqls[1].sql, /booked_by_user_id = c\.user_id/)
 })
+
+// Kills: another load's block cutting off a delivered load's payment talk (or lifting the block on a load still moving)
+test('a block on the broker still lets a delivered load ask about payment, but not an earlier stage', async () => {
+  const delivered = setup({ ...LOAD, status: 'done', deliveredAt: '2026-11-08T16:00:00Z', invoiceDueAt: '2026-12-08T16:00:00Z' })
+  delivered.fake.state.blocks.push({ id: 'b0', brokerId: 'broker-1', brokerMc: 'MC-207863' })
+  const res = await send(delivered, 'when do i get paid')
+  assert.equal(res.action, 'payment')
+  assert.equal((await getThread(ids, { deps: delivered.deps })).blocked, false)
+
+  const moving = setup(LOAD)
+  moving.fake.state.blocks.push({ id: 'b0', brokerId: 'broker-1', brokerMc: 'MC-207863' })
+  await assert.rejects(send(moving, 'eta 2 hrs'), { code: 'BROKER_BLOCKED' })
+  assert.equal((await getThread(ids, { deps: moving.deps })).blocked, true)
+})

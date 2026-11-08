@@ -5,7 +5,7 @@ import assert from 'node:assert/strict'
 
 import {
   loadStage, LOAD_STAGES, postBookingDecision, troubleIntent, paymentIntent,
-  TROUBLE_ACCIDENT_LINES,
+  TROUBLE_ACCIDENT_LINES, ABANDON_WINDOW_MESSAGES,
 } from '../src/modules/brokerChat/postBookingPolicy.js'
 import { WAIT_ETA_LINE } from '../src/modules/brokerChat/blockPolicy.js'
 
@@ -160,5 +160,41 @@ test('the same message twice gets two different lines', () => {
 
 // Kills: payment talk read when no payment word is present
 test('paymentIntent ignores a plain rate message', () => {
-  assert.deepEqual(paymentIntent('can u do 3500 instead'), { asks: false, detention: false, legal: false })
+  assert.deepEqual(paymentIntent('can u do 3500 instead'), { asks: false, detention: false, charge: null, legal: false })
+})
+
+// Kills: blockPolicy's short negation list letting "haven't had an accident" raise a real accident
+test('denied trouble is not trouble, but "can\'t deliver, truck broke down" still is', () => {
+  assert.equal(troubleIntent("we haven't had an accident").kind, null)
+  assert.equal(troubleIntent("truck wasn't damaged").kind, null)
+  assert.equal(troubleIntent("we can't deliver, truck broke down").kind, 'breakdown')
+})
+
+// Kills: missing trouble phrases (a flat tire, a deer, a hurt driver treated as plain chat)
+test('flat tire, deer, towed and a hurt driver are trouble; a hurt driver is an accident', () => {
+  assert.equal(troubleIntent('we have a flat tire').kind, 'breakdown')
+  assert.equal(troubleIntent('we got towed').kind, 'breakdown')
+  assert.equal(troubleIntent('hit a deer on 40').kind, 'accident')
+  assert.equal(troubleIntent('driver is in the hospital').kind, 'accident')
+  assert.equal(troubleIntent('driver got hurt').kind, 'accident')
+})
+
+// Kills: charge type ignored (a lumper question answered with the detention accessorial)
+test('a lumper question is not answered with a detention charge', () => {
+  const load = { ...DELIVERED, accessorials: [{ label: 'Detention 3h', amountUsd: 195 }] }
+  const d = decide('can i get the lumper reimbursed', { load })
+  assert.deepEqual(dollars(d.line), [])
+  assert.match(d.line, /That charge isn't on the rate con or the invoice/)
+  const withLumper = { ...DELIVERED, accessorials: [{ label: 'Lumper', amountUsd: 80 }] }
+  assert.match(decide('lumper fee?', { load: withLumper }).line, /Lumper of \$80 is on the invoice/)
+})
+
+// Kills: an old trouble reply, long ago, turning a later "cancel it" into an abandon
+test('a trouble reply far back in the thread does not make a later cancel an abandon', () => {
+  const first = decide('truck broke down')
+  const filler = Array.from({ length: ABANDON_WINDOW_MESSAGES }, () => ({ role: 'dispatcher', content: 'ok' }))
+  const d = decide('cancel it, find someone else', { thread: [broker(first.line), ...filler] })
+  assert.equal(d.action, 'block')
+  const recent = decide('cancel it, find someone else', { thread: [broker(first.line), ...filler.slice(1)] })
+  assert.equal(recent.action, 'abandon')
 })

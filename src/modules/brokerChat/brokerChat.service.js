@@ -139,13 +139,15 @@ export async function getThread({ conversationId, userId }, { deps = DEFAULT_DEP
     // before-booking points raised (src/constants/freightTerms.js).
     talk: posting ? talkFacts(dispatcherTexts(messages), posting.equipmentType) : null,
     awaitingReply: await repo.hasPendingReply(conversationId),
-    blocked,
+    // The block is the broker's, but a delivered load's own thread stays
+    // writable (payment questions), so the panel must not lock it.
+    blocked: blocked && (!facts || loadStage(facts) !== LOAD_STAGES.DELIVERED),
   }
 }
 
 // The booked-thread path. Fixed lines from recorded facts (postBookingPolicy.js):
 // no model, no budget, and nothing here can write the agreed rate.
-async function sendPostBooking({ conversation, posting, userId, text }, deps) {
+async function sendPostBooking({ conversation, posting, userId, text, brokerBlocked }, deps) {
   const conversationId = conversation.id
   const thread = await deps.repo.listMessages(conversationId)
   if (releasedToAnotherTruck(thread)) {
@@ -154,6 +156,10 @@ async function sendPostBooking({ conversation, posting, userId, text }, deps) {
   }
   const facts = await deps.repo.bookedLoadFacts(conversationId, userId)
   const stage = facts ? loadStage(facts) : LOAD_STAGES.BOOKED
+  // A block from another load does not cut off this one's own paperwork: a
+  // delivered load can still be asked about payment. Any earlier stage
+  // stays refused.
+  if (brokerBlocked && stage !== LOAD_STAGES.DELIVERED) throw new AppError('BROKER_BLOCKED')
   const decision = postBookingDecision({ stage, text, thread, load: facts, openEvent: facts?.openEvent })
   const exchange = { conversationId, text, line: decision.line }
   const sent = { awaitingReply: false, action: decision.action, loadStage: stage }
@@ -187,10 +193,11 @@ export async function sendMessage({ conversationId, userId, text }, { deps = DEF
   if (!conversation) throw new AppError('CONVERSATION_NOT_FOUND')
 
   const posting = await deps.repo.getPostingWithBroker(conversation.postingId)
-  if (await deps.repo.isBrokerBlocked?.({ brokerId: posting?.brokerId, brokerMc: posting?.mcNumber })) throw new AppError('BROKER_BLOCKED')
+  const brokerBlocked = (await deps.repo.isBrokerBlocked?.({ brokerId: posting?.brokerId, brokerMc: posting?.mcNumber })) === true
   // A booked deal stays open for real talk (trouble on the road, payment,
   // cancelling) but is never negotiated again: its own path, no model call.
-  if (conversation.status === 'booked') return sendPostBooking({ conversation, posting, userId, text }, deps)
+  if (conversation.status === 'booked') return sendPostBooking({ conversation, posting, userId, text, brokerBlocked }, deps)
+  if (brokerBlocked) throw new AppError('BROKER_BLOCKED')
   // Server-side cancellation policy, decided before any model call: a
   // cancel blocks the broker, "can you wait" asks for an ETA and, with no
   // ETA, takes the load back. The model never sees these turns.

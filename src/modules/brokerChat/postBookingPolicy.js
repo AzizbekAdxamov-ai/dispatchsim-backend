@@ -16,7 +16,7 @@ import { APP_TIMEZONE } from '../../constants/appClock.js'
 import { DISPATCHED_STATUSES } from '../loads/loadWithdrawal.js'
 import { chatIntent } from './negotiation.js'
 import {
-  cancellationDecision, cancellationIntent, HYPOTHETICAL_RE, NEGATION_RE, CLAUSE_SPLIT_RE,
+  cancellationDecision, cancellationIntent, HYPOTHETICAL_RE, CLAUSE_SPLIT_RE,
 } from './blockPolicy.js'
 
 export const LOAD_STAGES = Object.freeze({
@@ -39,6 +39,10 @@ export const TROUBLE_KINDS = Object.freeze({
   CANT_DELIVER: 'cant_deliver',
 })
 
+// How many of the latest thread messages can hold the broker's trouble reply
+// for an abandon (or the recovery follow-up) to count.
+export const ABANDON_WINDOW_MESSAGES = 8
+
 export const POST_BOOKING_ACTIONS = Object.freeze({
   TROUBLE: 'trouble',
   ABANDON: 'abandon',
@@ -52,10 +56,10 @@ export const POST_BOOKING_ACTIONS = Object.freeze({
 // Reading the dispatcher
 // ---------------------------------------------------------------------
 
-const ACCIDENT_RES = [/\baccident\b/i, /\bwreck(?:ed)?\b/i, /\bcrash(?:ed)?\b/i, /\bcollision\b/i, /\brolled\s+over\b/i, /\bjackknif/i]
+const ACCIDENT_RES = [/\baccident\b/i, /\bhit\s+a\s+deer\b/i, /\bdriver\s+(?:is\s+|was\s+)?in\s+(?:the\s+)?hospital\b/i, /\bdriver\s+(?:got\s+|is\s+|was\s+)?hurt\b/i, /\bwreck(?:ed)?\b/i, /\bcrash(?:ed)?\b/i, /\bcollision\b/i, /\brolled\s+over\b/i, /\bjackknif/i]
 const BREAKDOWN_RES = [
   /\btruck\s+(?:broke\s+down|is\s+down)\b/i, /\bbroke\s+down\b/i, /\bengine\s+(?:died|failure)\b/i,
-  /\btruck\s+died\b/i, /\bwon'?t\s+start\b/i, /\bblew\s+(?:a|an|the)\s+(?:tire|engine)\b/i,
+  /\btruck\s+died\b/i, /\bflat\s+tire\b/i, /\bgot\s+towed\b/i, /\bwon'?t\s+start\b/i, /\bblew\s+(?:a|an|the)\s+(?:tire|engine)\b/i,
 ]
 const CANT_DELIVER_RES = [/\bcan'?t\s+deliver\b/i, /\bcan'?t\s+make\s+it\b/i, /\bwon'?t\s+make\s+(?:the\s+)?deliver/i]
 const ABANDON_RES = [
@@ -72,6 +76,11 @@ const TROUBLE_RES = [
   [TROUBLE_KINDS.CANT_DELIVER, CANT_DELIVER_RES],
 ]
 
+// Negations that deny a trouble. Wider than blockPolicy's NEGATION_RE ("we haven't
+// had an accident"), but with NO generic n't: "we can't deliver, truck broke
+// down" is still trouble.
+const DENIAL_RE = /\b(?:don'?t|do\s+not|not|never|won'?t|didn'?t|haven'?t|hasn'?t|hadn'?t|isn'?t|wasn'?t|weren'?t|aren'?t|without|nothing)\b/i
+
 // A clause that only imagines the trouble ("if the truck breaks down") or
 // denies it. The negation check runs on what is LEFT after the matched
 // phrase is cut out: "won't start" is itself a trouble phrase, and its own
@@ -80,7 +89,7 @@ function troubleKindIn(clause) {
   if (HYPOTHETICAL_RE.test(clause) || NO_TROUBLE_RE.test(clause)) return null
   for (const [kind, res] of TROUBLE_RES) {
     const hit = res.map((re) => clause.match(re)).find(Boolean)
-    if (hit && !NEGATION_RE.test(clause.replace(hit[0], ' '))) return kind
+    if (hit && !DENIAL_RE.test(clause.replace(hit[0], ' '))) return kind
   }
   return null
 }
@@ -90,7 +99,7 @@ export function troubleIntent(text) {
   const kinds = clauses.map(troubleKindIn).filter(Boolean)
   // Most serious first: an accident outranks a breakdown outranks "can't deliver".
   const kind = TROUBLE_RES.map(([k]) => k).find((k) => kinds.includes(k)) ?? null
-  const abandons = clauses.some((c) => ABANDON_RES.some((re) => re.test(c)) && !HYPOTHETICAL_RE.test(c) && !NEGATION_RE.test(c))
+  const abandons = clauses.some((c) => ABANDON_RES.some((re) => re.test(c)) && !HYPOTHETICAL_RE.test(c) && !DENIAL_RE.test(c))
   return { kind, abandons }
 }
 
@@ -98,14 +107,18 @@ const PAYMENT_RES = [
   /\bpayments?\b/i, /\bpaid\b/i, /\bpay\s+me\b/i, /\binvoice/i, /\bremit/i, /\bquick\s*pay\b/i,
   /\bwhere(?:'s|\s+is)?\b[^.?!]*\bmoney\b/i, /\bowe\b/i,
 ]
-const DETENTION_RE = /\b(?:detention|layover|lumper|tonu)\b/i
+// The extra charges a carrier asks about. The name is kept so the reply talks
+// about the charge that was asked for, not always detention.
+const CHARGE_RE = /\b(detention|layover|lumper|tonu)\b/i
+const CHARGE_NAMES = Object.freeze({ detention: 'Detention', layover: 'Layover', lumper: 'Lumper', tonu: 'TONU' })
 const LEGAL_RE = /\b(?:sue|suing|lawyer|attorney|court|small\s+claims|legal\s+action)\b/i
 
 export function paymentIntent(text) {
   const source = asciiPunct(text)
   return {
     asks: PAYMENT_RES.some((re) => re.test(source)),
-    detention: DETENTION_RE.test(source),
+    detention: CHARGE_RE.test(source),
+    charge: source.match(CHARGE_RE)?.[1].toLowerCase() ?? null,
     legal: LEGAL_RE.test(source),
   }
 }
@@ -177,7 +190,7 @@ const PAYMENT_ROUTING = Object.freeze([
   'Accounting handles remittance, so take it up with them.',
   'Remittance runs through accounting, so send your question there.',
 ])
-const PAYMENT_NO_DETENTION = "Detention isn't on the rate con or the invoice, so I can't approve it here. Send in and out times and the signed BOL to accounting for review."
+const PAYMENT_NO_CHARGE = "That charge isn't on the rate con or the invoice, so I can't approve it here. Send what backs it up, like in and out times, receipts and the signed BOL, to accounting for review."
 const PAYMENT_PAST_DUE_FLAG = "That's past due. I'll flag it to accounting."
 
 const money = (n) => `$${Number(n).toLocaleString('en-US')}`
@@ -218,8 +231,9 @@ export function invoiceAmount(facts) {
   return Number(facts.rateUsd) + extras
 }
 
-function detentionAccessorial(facts) {
-  return (facts.accessorials ?? []).find((a) => /detention/i.test(a?.label ?? ''))
+// The recorded accessorial of the asked charge type, and only that type.
+function chargeAccessorial(facts, charge) {
+  return (facts.accessorials ?? []).find((a) => new RegExp(String.raw`\b${charge}\b`, 'i').test(a?.label ?? ''))
 }
 
 function invoiceStatus(facts, now) {
@@ -238,9 +252,9 @@ export function paymentLine({ facts, intent, thread = [], now = new Date() }) {
   const routing = pick(PAYMENT_ROUTING, thread)
   const parts = [opener]
   if (intent.detention) {
-    const detention = detentionAccessorial(facts)
-    parts.push(detention ? `Detention of ${money(detention.amountUsd)} is on the invoice.` : PAYMENT_NO_DETENTION)
-    if (detention || intent.asks) parts.push(invoiceStatus(facts, now))
+    const recorded = chargeAccessorial(facts, intent.charge)
+    parts.push(recorded ? `${CHARGE_NAMES[intent.charge]} of ${money(recorded.amountUsd)} is on the invoice.` : PAYMENT_NO_CHARGE)
+    if (recorded || intent.asks) parts.push(invoiceStatus(facts, now))
   } else {
     parts.push(invoiceStatus(facts, now))
   }
@@ -258,7 +272,9 @@ export function paymentLine({ facts, intent, thread = [], now = new Date() }) {
 export function postBookingDecision({ stage, text, thread = [], load = null, openEvent = null, now = new Date() } = {}) {
   const trouble = troubleIntent(text)
   const payment = paymentIntent(text)
-  const troubleSaid = thread.some((m) => m.role === 'broker' && isTroubleLine(m.content))
+  // Only a recent trouble reply counts: an old one, many messages back, does
+  // not make today's "cancel it" an abandon.
+  const troubleSaid = thread.slice(-ABANDON_WINDOW_MESSAGES).some((m) => m.role === 'broker' && isTroubleLine(m.content))
 
   if (stage === LOAD_STAGES.CANCELLED) {
     return { action: POST_BOOKING_ACTIONS.ACK, line: pick(POST_BOOKING_ACK_LINES[stage], thread) }
