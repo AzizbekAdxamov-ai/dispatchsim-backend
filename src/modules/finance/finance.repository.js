@@ -43,7 +43,7 @@ export const INVOICE_CTE = `
       l.payment_terms AS "paymentTerms", l.booked_at AS "bookedAt",
       l.delivered_at AS "deliveredAt", l.invoice_paid_at AS "invoicePaidAt",
       -- invoice_due_at is what the TICK will actually pay against, on the
-      -- compressed calendar (a money-wait day = two real minutes, FINANCE_REAL_SEC_PER_SIM_DAY). This
+      -- finance calendar (2 real minutes per day). This
       -- used to recompute the date here as delivered_at + interval '30
       -- days', the real calendar -- so Finance and the collector
       -- disagreed by weeks and nothing was ever shown as overdue.
@@ -71,7 +71,7 @@ export const INVOICE_CTE = `
       -- the answer was 0 for every invoice ever written -- the aging
       -- buckets, avgDaysToPay and the past-due badge were all reading a
       -- number that could not be anything else. One simulated day is
-      -- FINANCE_REAL_SEC_PER_SIM_DAY real seconds (the money-wait day); that is the only unit in which
+      -- FINANCE_REAL_SEC_PER_SIM_DAY real seconds; that is the only unit in which
       -- "45 days late" means what a student thinks it means.
       GREATEST(0, floor(
         EXTRACT(EPOCH FROM (now() - ib."dueAt")) / ${FINANCE_REAL_SEC_PER_SIM_DAY}

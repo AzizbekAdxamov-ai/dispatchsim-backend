@@ -6,7 +6,7 @@
 //
 // Minutes in the response are HOS minutes (literal hours of service),
 // not real minutes: "Drive remaining 480" means eight hours of driving
-// left, which on the compressed calendar passes in 2 minutes 40 seconds.
+// left, which on the compressed calendar passes in 10 real minutes (HOS_TIME_SCALE = 48).
 
 import { AppError } from '../../lib/errors.js'
 import { withTransaction } from '../../db/pool.js'

@@ -16,10 +16,11 @@ import {
 import { TERM_DAYS } from '../src/constants/paymentTerms.js'
 import { HOS_TIME_SCALE, DRIVING_LIMIT_HOURS } from '../src/constants/hosClock.js'
 import { MVR_MAX_AGE_DAYS, daysUntil } from '../src/constants/driverQualification.js'
-import { SETTLEMENT_TERM_SIM_DAYS, DRIVER_STAGES, stageFor } from '../src/constants/driverPay.js'
+import { DRIVER_STAGES, stageFor } from '../src/constants/driverPay.js'
 import { transitDaysFor } from '../src/modules/loads/dispatch.service.js'
 import * as PAYROLL_SQL from '../src/modules/payroll/payroll.sql.js'
 import * as ALERT_SQL from '../src/modules/alerts/alerts.sql.js'
+import { INVOICE_CTE } from '../src/modules/finance/finance.repository.js'
 import { inRollback } from './helpers/rollback.js'
 
 const MIN_MS = 60 * 1000
@@ -62,13 +63,33 @@ test('the MVR and CDL windows keep their sim-day counts on the 30-minute day', (
   assert.equal(daysUntil(new Date(now + 10 * REAL_MS_PER_SIM_DAY).toISOString(), now), 10)
 })
 
-// Kills: settlement due or stage ageing moved onto the operations day.
-test('driver settlement stages age on the finance day', () => {
-  assert.equal(financeDaysToSeconds(SETTLEMENT_TERM_SIM_DAYS), 7 * FINANCE_REAL_SEC_PER_SIM_DAY)
-  const daysOverdue = (ms) => Math.floor(ms / FINANCE_REAL_MS_PER_SIM_DAY)
-  assert.equal(stageFor(daysOverdue(DRIVER_STAGES.refuses * FINANCE_REAL_MS_PER_SIM_DAY)), 'refuses')
-  assert.equal(stageFor(daysOverdue(DRIVER_STAGES.quits * FINANCE_REAL_MS_PER_SIM_DAY)), 'quits')
-  assert.equal(stageFor(daysOverdue(DRIVER_STAGES.quits * FINANCE_REAL_MS_PER_SIM_DAY - 1)), 'refuses')
+// Kills: the payroll SQL that feeds stageFor() dividing by the operations
+// day -- a driver overdue by the 'quits' stage in finance days would read
+// as a fraction of a day and never leave.
+test('driver stages are read from the payroll SQL divisor, on the finance day', () => {
+  // The divisor is taken out of the real statement, not restated here.
+  const divisor = Number(/EXTRACT\(EPOCH[\s\S]*?\/ (\d+)\s*\)\)::int/.exec(PAYROLL_SQL.DRIVER_OWED_SQL)?.[1])
+  assert.equal(divisor, FINANCE_REAL_SEC_PER_SIM_DAY)
+  const overdueDays = (realSeconds) => Math.floor(realSeconds / divisor)
+  assert.equal(stageFor(overdueDays(DRIVER_STAGES.refuses * FINANCE_REAL_SEC_PER_SIM_DAY)), 'refuses')
+  assert.equal(stageFor(overdueDays(DRIVER_STAGES.quits * FINANCE_REAL_SEC_PER_SIM_DAY)), 'quits')
+  assert.equal(stageFor(overdueDays(DRIVER_STAGES.quits * FINANCE_REAL_SEC_PER_SIM_DAY - 1)), 'refuses')
+})
+
+// Kills: reverting either dueSeconds call site in dispatch.service.js to
+// simDaysToSeconds (net60 invoices and weekly settlements would wait 15x longer).
+test('invoice and settlement due dates are written on the finance day', () => {
+  const src = readFileSync(new URL('../src/modules/loads/dispatch.service.js', import.meta.url), 'utf8')
+  assert.ok(src.includes('dueSeconds: financeDaysToSeconds(termDays)'), 'invoice due')
+  assert.ok(src.includes('dueSeconds: financeDaysToSeconds(SETTLEMENT_TERM_SIM_DAYS)'), 'settlement due')
+  assert.ok(!/dueSeconds: simDaysToSeconds\(/.test(src), 'no due date on the operations day')
+})
+
+// Kills: INVOICE_CTE daysPastDue dividing by REAL_SEC_PER_SIM_DAY (invoices
+// would never age past due in the time a student waits).
+test('invoice aging in the finance CTE divides by the finance day', () => {
+  assert.match(INVOICE_CTE, new RegExp(`/ ${FINANCE_REAL_SEC_PER_SIM_DAY}\\b`))
+  assert.doesNotMatch(INVOICE_CTE, new RegExp(`/ ${REAL_SEC_PER_SIM_DAY}\\b`))
 })
 
 // Kills: money SQL interpolating REAL_SEC_PER_SIM_DAY (1800) instead of
@@ -169,5 +190,64 @@ test('sim_day() and sim_day_start() honour the anchor boundaries', { skip: !hasD
     // No anchor at all (a database that never needed one): same.
     await client.query(`DELETE FROM sim_state WHERE key = 'sim_clock_rescale'`)
     assert.equal(await dayOffset(2 * NEW), 2)
+  })
+})
+
+// Kills: 073's anchor day not matching the old sim_day(at); the DQ rescale
+// missing an in-window row, or touching a real-calendar row far outside it.
+test('migration 073 data steps: anchor day and qualification rescale', { skip: !hasDb }, async () => {
+  const { pool } = await import('../src/db/pool.js')
+  const migrationSql = readFileSync(new URL('../src/db/migrations/073_sim_clock_30min.sql', import.meta.url), 'utf8')
+  const IN_WINDOW_S = 1000 // seconds from now(); well inside every 073 window
+  const FAR_S = 10 * 365 * 24 * 3600 // ten real years out: a real-calendar date
+
+  await inRollback(pool, async (client) => {
+    const rows = async (sql, params = []) => (await client.query(sql, params)).rows
+    const [epochRow] = await rows('SELECT sim_epoch() AS e')
+    const drivers = await rows('SELECT id FROM drivers ORDER BY id LIMIT 2')
+    if (!epochRow.e || drivers.length < 2) return // nothing to run against
+    const [a, b] = drivers.map((d) => d.id)
+
+    for (const id of [a, b]) {
+      await client.query('INSERT INTO driver_qualification (driver_id) VALUES ($1) ON CONFLICT DO NOTHING', [id])
+    }
+    // a: inside every window. b: far out of every window.
+    await client.query(
+      `UPDATE driver_qualification SET medical_expires_on = now() + $2 * interval '1 second',
+              mvr_checked_on = now() - $2 * interval '1 second' WHERE driver_id = $1`, [a, IN_WINDOW_S])
+    await client.query(
+      `UPDATE driver_qualification SET medical_expires_on = now() + $2 * interval '1 second',
+              mvr_checked_on = now() - $2 * interval '1 second' WHERE driver_id = $1`, [b, FAR_S])
+    await client.query(`UPDATE drivers SET license_expires_on = now() + $2 * interval '1 second' WHERE id = $1`, [a, IN_WINDOW_S])
+    await client.query(`UPDATE drivers SET license_expires_on = now() + $2 * interval '1 second' WHERE id = $1`, [b, FAR_S])
+    await client.query("DELETE FROM sim_state WHERE key = 'sim_clock_rescale'")
+
+    await client.query(migrationSql) // the migration itself, unmodified
+
+    const off = async (sql, id) => Number((await rows(sql, [id]))[0].s)
+    const med = (id) => off('SELECT EXTRACT(EPOCH FROM (medical_expires_on - now())) AS s FROM driver_qualification WHERE driver_id = $1', id)
+    const mvr = (id) => off('SELECT EXTRACT(EPOCH FROM (now() - mvr_checked_on)) AS s FROM driver_qualification WHERE driver_id = $1', id)
+    const lic = (id) => off('SELECT EXTRACT(EPOCH FROM (license_expires_on - now())) AS s FROM drivers WHERE id = $1', id)
+
+    assert.equal(await med(a), IN_WINDOW_S * SIM_CLOCK_RESCALE_RATIO)
+    assert.equal(await mvr(a), IN_WINDOW_S * SIM_CLOCK_RESCALE_RATIO)
+    assert.equal(await lic(a), IN_WINDOW_S * SIM_CLOCK_RESCALE_RATIO)
+    assert.equal(await med(b), FAR_S, 'far medical untouched')
+    assert.equal(await mvr(b), FAR_S, 'far mvr untouched')
+    assert.equal(await lic(b), FAR_S, 'far license untouched')
+
+    // The anchor: a 120 s boundary after the epoch, within one old day of
+    // now(), and its day is what the OLD formula gave at that moment.
+    const [anchor] = await rows(`
+      SELECT (value->>'day')::date AS day,
+             EXTRACT(EPOCH FROM ((value->>'at')::timestamptz - sim_epoch())) AS at_s,
+             EXTRACT(EPOCH FROM ((value->>'at')::timestamptz - now())) AS ahead_s,
+             (sim_epoch() AT TIME ZONE 'UTC')::date AS epoch_day
+        FROM sim_state WHERE key = 'sim_clock_rescale'`)
+    const OLD = FINANCE_REAL_SEC_PER_SIM_DAY
+    assert.ok(Math.abs(Number(anchor.at_s) % OLD) < 0.001 || OLD - (Number(anchor.at_s) % OLD) < 0.001, 'at sits on an old-day boundary')
+    assert.ok(Number(anchor.ahead_s) > 0 && Number(anchor.ahead_s) <= OLD, 'at is the NEXT old boundary')
+    const oldDayOfAt = Math.round(Number(anchor.at_s) / OLD)
+    assert.equal(Math.round((new Date(anchor.day) - new Date(anchor.epoch_day)) / 86400000), oldDayOfAt)
   })
 })

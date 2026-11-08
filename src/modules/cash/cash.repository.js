@@ -98,7 +98,7 @@ export async function lastInterestAt() {
 // while the balance is healthy (a zero-dollar row is forbidden by
 // ledger_amount_nonzero), so reading the watermark from the ledger meant
 // the first dip into the credit line was charged for every simulated day
-// since the LAST charge -- thirty days of interest on a two-minute debt.
+// since the LAST charge -- thirty days of interest on a debt a moment old.
 export async function readInterestState(client) {
   const result = await client.query(
     `SELECT value FROM sim_state WHERE key = 'interest' FOR UPDATE`,

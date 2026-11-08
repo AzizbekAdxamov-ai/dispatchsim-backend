@@ -30,8 +30,9 @@ export const REAL_SEC_PER_SIM_DAY = REAL_MS_PER_SIM_DAY / 1000
 export const FINANCE_REAL_MS_PER_SIM_DAY = 2 * 60 * 1000
 export const FINANCE_REAL_SEC_PER_SIM_DAY = FINANCE_REAL_MS_PER_SIM_DAY / 1000
 
-// The longest a student should sit waiting for a payment: 12 real hours
-// (Azizbek qarori 2026-11-08). A test pins that every payment term times
+// The longest a student should sit waiting for a payment: 12 real hours.
+// This is the policy bound Azizbek set on 2026-11-08 (qaror), not a derived
+// figure; it is why money waits stay on the 2-minute day. A test pins that every payment term times
 // the finance day fits under it, so a new net90 cannot silently break it.
 export const FINANCE_WAIT_MAX_REAL_MS = 12 * 60 * 60 * 1000
 

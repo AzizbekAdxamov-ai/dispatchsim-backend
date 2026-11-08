@@ -595,8 +595,7 @@ function buildDqRow({ rng, driver }) {
   // day), and a DATE column collapses its value to midnight UTC -- the
   // collapse alone reads as half a sim day of noise, and a real-calendar
   // date reads as thousands of sim days stale. Written as full moments:
-  // the offset count is the sim-day count, scaled by REAL_MS_PER_SIM_DAY (30 real
-  // minutes per sim day since 2026-11-08; simClock's own arithmetic).
+  // the offset count is the sim-day count (simClock's own arithmetic).
   // The medical card: most drivers hold one for two years (391.43); a
   // few are inside their renewal window -- enough for the screen to show
   // what 'expiring' looks like, not enough to be a fleet of expiries.

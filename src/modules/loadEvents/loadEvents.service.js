@@ -6,7 +6,7 @@ import * as repo from './loadEvents.repository.js'
 import * as cashRepo from '../cash/cash.repository.js'
 import * as chatRepo from '../driverChat/driverChat.repository.js'
 // How long before the driver's own report lands. Seconds, not minutes: on
-// the compressed calendar a two-day run is four real minutes, so anything
+// the compressed calendar a two-day run is sixty real minutes, so anything
 // longer would put the call after the delivery. Long enough to read as a
 // person pulling over, short enough to be the first thing the dispatcher
 // hears.

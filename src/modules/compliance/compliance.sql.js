@@ -5,6 +5,13 @@
 // by. Day boundaries come from sim_day_start() (073), which knows the
 // 2026-11-08 change from 120 s to 1800 s days; do not rebuild them from
 // sim_epoch() here.
+//
+// KNOWN TRANSIENT (migration 073): "start +/- k * $2" assumes neighbouring
+// days are $2 seconds long. Days before the 073 anchor were 120 s, so the
+// windows for k reaching back across the anchor are approximate (they stay
+// contiguous and sim_day() still labels them correctly). It only shows in
+// the first few operations days after 073 runs and then ages out of the
+// range screens look at.
 
 // Every working driver (duty_status <> 'off' -- HR's "not working for the
 // company"), their truck, and their active duty log since $1. One row per
