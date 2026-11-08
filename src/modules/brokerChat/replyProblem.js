@@ -113,9 +113,16 @@ function discussionReply(text, posting, negotiation) {
 // `said` is all the dispatcher has typed (default: `text`), `brokerSaid` what the
 // broker already said (a figure it gave before is not a new raise), and
 // `bookedHere` is true when this conversation really has an agreed or booked load.
+// Why a blank reply is rejected; named once, used by both chats' checks.
+export const EMPTY_REPLY_REASON = 'returned an empty reply'
+
 export function brokerReplyProblem(reply, {
   truck, booking = null, posting = null, now = new Date(), text = null, said = null, brokerSaid = [], bookedHere = false, paper = null, negotiation = null,
 } = {}) {
+  // An empty reply (nothing, or only a speaker label that was stripped) is
+  // a blank bubble on the screen (X10). Regenerated once, then the
+  // fallback line goes out -- never saved as ''.
+  if (String(reply ?? '').trim() === '') return { why: EMPTY_REPLY_REASON, hint: 'Write the reply itself, in a sentence or two.', unusable: true }
   if (MARKDOWN.test(String(reply ?? ''))) return {
     why: 'used markdown formatting', hint: 'Use plain desk text with no markdown markers.', unusable: true,
     safeReply: String(reply).replace(/\*\*|__|`/g, ''),

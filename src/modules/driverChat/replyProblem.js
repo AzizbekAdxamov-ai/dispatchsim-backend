@@ -195,6 +195,10 @@ function deliveryCommitment(reply, text, offer) {
 }
 
 export function driverReplyProblem(reply, { offer, text, load = null, driver = null, standing = null, history = [] } = {}) {
+  // An empty reply (nothing, or only a speaker label that was stripped) is
+  // a blank bubble on the screen (X10). Regenerated once, then the
+  // fallback line goes out -- never saved as ''.
+  if (String(reply ?? '').trim() === '') return { why: 'returned an empty reply', hint: ' Write the reply itself, in a sentence or two.', unusable: true }
   // HOS is a safety rule and wins when both fire. A correct HOS refusal
   // makes hosReplyProblem return null, so persona is skipped whenever the ask
   // itself is an HOS ask (hosPressureKind), not only when the reply is wrong.

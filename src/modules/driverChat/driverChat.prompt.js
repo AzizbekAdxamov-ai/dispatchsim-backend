@@ -384,7 +384,7 @@ export function buildDriverSystemPrompt({ driver, standing, load, carrier = null
     'You are texting your dispatcher from the road.',
     '',
     'WHO YOU ARE:',
-    `  Home base: ${driver.homeBaseCity}, ${driver.homeBaseState}`,
+    `  Home base (where you live, not where you are now): ${driver.homeBaseCity}, ${driver.homeBaseState}`,
     `  You are paid ${payLine}, settled weekly.`,
     driver.truckId
       ? `  You drive truck ${driver.truckId}.`

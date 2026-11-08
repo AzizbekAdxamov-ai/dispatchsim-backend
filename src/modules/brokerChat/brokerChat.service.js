@@ -422,7 +422,7 @@ export async function sendMessage({ conversationId, userId, text, cancelBooking 
   // replacePendingReply. Only when nothing is pending does the broker draw
   // a fresh delay.
   await deps.repo.completeChatTurn({
-    conversationId, userId, revision: turnConversation.negotiationRevision, decision, reply: reply.trim(),
+    conversationId, userId, revision: turnConversation.negotiationRevision, decision, reply: reply.trim() || FALLBACK_REPLY,
     delaySec: replyDelaySec(posting.creditRating), paperDelaySec: replyDelaySec(posting.creditRating),
     paperRate: decision.issuePaper ? rateConAmount(decision.state.agreed, posting.creditRating, { minRate: posting.distanceMi }) : null,
   })
