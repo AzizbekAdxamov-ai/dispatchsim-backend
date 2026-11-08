@@ -511,6 +511,32 @@ export async function openLoadConversation({ loadId, userId }, { deps = DEFAULT_
   return { conversation }
 }
 
+// The dispatcher's own words when the load page cancels the booking. They go
+// through the same booked-thread path as typed text (sendPostBooking), so the
+// block, the voided rate con and the cancelled load all come from the one
+// policy. "this load" is the object blockPolicy's weak-cancel pattern needs,
+// and the text has no price word, so it is never read as a haggle.
+// Azizbek qarori 2026-11-08
+export const CANCEL_BOOKING_TEXT = 'We have to cancel this load.'
+
+// Cancel the booking with the broker from the load page. Irreversible: the
+// broker is told, the rate con is voided, the load is cancelled and the broker
+// is blocked. A delivered or already-cancelled load is refused BEFORE any
+// message is written.
+export async function cancelBookingForLoad({ loadId, userId }, { deps = DEFAULT_DEPS } = {}) {
+  const conversation = await deps.repo.openLoadConversation(loadId, userId)
+  if (!conversation) throw new AppError('LOAD_HAS_NO_BROKER_THREAD')
+  if (conversation.status !== 'booked') throw new AppError('LOAD_NOT_CANCELLABLE')
+  const facts = await deps.repo.bookedLoadFacts(conversation.id, userId)
+  const stage = facts ? loadStage(facts) : LOAD_STAGES.BOOKED
+  if (stage === LOAD_STAGES.DELIVERED || stage === LOAD_STAGES.CANCELLED) throw new AppError('LOAD_NOT_CANCELLABLE')
+  const sent = await sendMessage({ conversationId: conversation.id, userId, text: CANCEL_BOOKING_TEXT }, { deps })
+  // Anything but a block means the broker did not take it (for example a
+  // trouble reply); the thread keeps what was said, the load stays booked.
+  if (!sent.blocked) throw new AppError('BOOKING_NOT_CANCELLED')
+  return { cancelled: true, conversationId: conversation.id, loadStage: stage }
+}
+
 export async function listConversations({ userId }) {
   return { conversations: await repo.listConversations(userId) }
 }

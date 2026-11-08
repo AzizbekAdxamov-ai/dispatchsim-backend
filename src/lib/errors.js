@@ -57,6 +57,10 @@ export const ERROR_CODES = {
   DRIVER_UNREACHABLE:     { status: 503, message: 'Cannot reach the driver right now' },
   RATE_OUT_OF_BAND:       { status: 400, message: 'That rate is outside the allowed range for this distance' },
   LOAD_HAS_NO_BROKER_THREAD: { status: 404, message: 'No broker conversation for this load' },
+  // Cancel booking from the load page: delivered or already-cancelled loads cannot be cancelled,
+  // and a cancel the broker did not take (policy said anything but block) is reported, not hidden.
+  LOAD_NOT_CANCELLABLE: { status: 409, message: 'This load can no longer be cancelled' },
+  BOOKING_NOT_CANCELLED: { status: 409, message: 'The broker did not take the cancellation. Message them from the chat.' },
   POSTING_TAKEN:     { status: 409, message: 'This posting has already been booked' },
   POSTING_EXPIRED:   { status: 410, message: 'This posting has expired' },
   DRIVER_HAS_ACTIVE_LOAD: { status: 409, message: 'Driver already has an active load' },

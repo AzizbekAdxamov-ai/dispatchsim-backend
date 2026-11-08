@@ -24,6 +24,13 @@ export async function openLoadConversation(req, res) {
   res.status(200).json(result)
 }
 
+// POST /broker-chat/loads/:loadId/cancel -- cancel the booking with the broker.
+export async function cancelBookingForLoad(req, res) {
+  const loadId = loadIdSchema.parse(req.params.loadId)
+  const result = await service.cancelBookingForLoad({ loadId, userId: req.auth.userId })
+  res.status(200).json(result)
+}
+
 export async function getThread(req, res) {
   const conversationId = conversationIdSchema.parse(req.params.id)
   const result = await service.getThread({ conversationId, userId: req.auth.userId })
