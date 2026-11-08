@@ -97,7 +97,7 @@ export function makeFakeBrokerRepo({
       conversation.negotiationRevision += 1
       const before = publicRow()
       const intent = chatIntent(text, posting)
-      if (['hold', 'walk', 'push'].includes(intent.kind) || (['offer', 'accept_amount'].includes(intent.kind) && conversation.agreedRateUsd !== null && intent.rateUsd !== conversation.agreedRateUsd)) {
+      if (['hold', 'walk', 'push', 'cancel'].includes(intent.kind) || (['offer', 'accept_amount'].includes(intent.kind) && conversation.agreedRateUsd !== null && intent.rateUsd !== conversation.agreedRateUsd)) {
         await repo.clearRateCon()
         conversation.agreedRateUsd = null
         conversation.recipientEmail = null

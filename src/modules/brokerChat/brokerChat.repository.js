@@ -327,7 +327,7 @@ export async function beginChatTurn(conversationId, userId, text) {
   return withTransaction(async (client) => {
     const conversation = await lockedConversation(client, conversationId, userId)
     const intent = chatIntent(text, { rateBasis: conversation.postingRateBasis, fuelSurchargeUsd: conversation.postingFuelSurchargeUsd })
-    const invalidate = intent.kind === 'hold' || intent.kind === 'walk' || intent.kind === 'push'
+    const invalidate = ['hold', 'walk', 'push', 'cancel'].includes(intent.kind)
       || (['offer', 'accept_amount'].includes(intent.kind) && conversation.agreedRateUsd !== null && intent.rateUsd !== conversation.agreedRateUsd)
     const updated = await client.query(`UPDATE broker_conversations SET negotiation_revision = negotiation_revision + 1,
       agreed_rate_usd = CASE WHEN $3 THEN NULL ELSE agreed_rate_usd END,
@@ -373,7 +373,7 @@ export async function completeChatTurn({ conversationId, userId, revision, decis
       await client.query(`INSERT INTO broker_messages (conversation_id, role, content, kind, deliver_at)
         SELECT $1, 'broker', 'Rate confirmation attached. Please review the details before signing.', 'rate_con',
           now() + make_interval(secs => $2)
-        WHERE NOT EXISTS (SELECT 1 FROM broker_messages WHERE conversation_id = $1 AND kind = 'rate_con')`,
+        WHERE NOT EXISTS (SELECT 1 FROM broker_messages WHERE conversation_id = $1 AND kind = 'rate_con' AND voided_at IS NULL)`,
       [conversationId, delaySec + Math.max(1, paperDelaySec)])
     }
     return true

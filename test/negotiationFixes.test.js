@@ -89,23 +89,25 @@ test('a carrier reason the load does not support is flagged for the reply guard'
 
 // Kills: live T3 #218-#219 "if you can do 3500" before the MC, then the MC, never agreed
 test('a close made before the MC checked out is agreed once the MC does', () => {
-  const close = turn('if you can do 3500 I will book it', open(), { booking: unmatched })
+  // The close must sit inside the ceiling: above it the figure is only an ask (band 4).
+  const closeAt = ceilingFor(posting)
+  const close = turn(`if you can do ${closeAt} I will book it`, open(), { booking: unmatched })
   assert.equal(close.state.agreed, null)
-  assert.equal(close.state.pendingClose, 3500)
-  assert.match(negotiationLines(close).join('\n'), /conditional close at \$3,500 is accepted on price/)
+  assert.equal(close.state.pendingClose, closeAt)
+  assert.ok(negotiationLines(close).join('\n').includes(`conditional close at $${closeAt.toLocaleString('en-US')} is accepted on price`))
 
-  const kept = turn('which dock?', open({ pendingCloseUsd: 3500, brokerOfferUsd: 3500 }), { booking: unmatched })
-  assert.equal(kept.state.pendingClose, 3500)
+  const kept = turn('which dock?', open({ pendingCloseUsd: closeAt, brokerOfferUsd: closeAt }), { booking: unmatched })
+  assert.equal(kept.state.pendingClose, closeAt)
   assert.equal(kept.state.agreed, null)
 
-  const resumed = turn('MC 741309', open({ pendingCloseUsd: 3500, brokerOfferUsd: 3500 }))
-  assert.equal(resumed.state.agreed, 3500)
+  const resumed = turn('MC 741309', open({ pendingCloseUsd: closeAt, brokerOfferUsd: closeAt }))
+  assert.equal(resumed.state.agreed, closeAt)
   assert.equal(resumed.state.stage, 'awaiting_email')
   assert.equal(resumed.state.pendingClose, null)
 
   // A different price replaces it; a fresh push clears it.
-  const replaced = turn('Need $3300.', open({ pendingCloseUsd: 3500, brokerOfferUsd: 3500 }))
-  assert.notEqual(replaced.state.agreed, 3500)
+  const replaced = turn('Need $3300.', open({ pendingCloseUsd: closeAt, brokerOfferUsd: closeAt }))
+  assert.notEqual(replaced.state.agreed, closeAt)
   assert.equal(replaced.state.pendingClose, null)
 })
 
