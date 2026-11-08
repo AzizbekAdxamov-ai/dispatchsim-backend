@@ -28,17 +28,26 @@ export function livePlace(load, now = new Date()) {
 // place kept as parkedCity/parkedState, and currentCity/currentState
 // moved to where the run has got to. A driver with no run is where they
 // were parked.
+// "Dallas, TX" -> { city, state }; null when the text is not that shape.
+export function parsePlace(place) {
+  const m = /^(.+),\s*([A-Z]{2})$/.exec(String(place ?? '').trim())
+  return m ? { city: m[1], state: m[2] } : null
+}
+
 export function withLivePlace(context, now = new Date()) {
   if (!context) return context
   const { driver, load } = context
-  const live = livePlace(load, now)
+  // A truck stopped for a road event is where the event happened, not
+  // where the lane arc says it would be by now.
+  const stopped = parsePlace(load?.openEvent?.place)
+  const live = stopped ? { city: stopped.city, state: stopped.state } : livePlace(load, now)
   return {
     ...context,
     driver: {
       ...driver,
       parkedCity: driver.currentCity ?? null,
       parkedState: driver.currentState ?? null,
-      ...(live ? { currentCity: live.city, currentState: live.state, onTheRoad: true } : { onTheRoad: false }),
+      ...(live ? { currentCity: live.city, currentState: live.state, onTheRoad: true, ...(stopped ? { stopped: true } : {}) } : { onTheRoad: false }),
     },
   }
 }

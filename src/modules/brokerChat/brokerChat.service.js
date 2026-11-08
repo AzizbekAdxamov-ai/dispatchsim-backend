@@ -6,7 +6,9 @@
 // separate budgets, keys and models.
 import { chatText } from '../../../scripts/seed/aiClient.js'
 import { brokerReplyProblem, brokerRetryPrompt } from './replyProblem.js'
-import { cancellationDecision, releasedToAnotherTruck, RELEASED_LINE } from './blockPolicy.js'
+import { cancellationDecision, releasedToAnotherTruck, RELEASED_LINE, BLOCK_REASON_ABANDONED_IN_TRANSIT } from './blockPolicy.js'
+import { loadStage, LOAD_STAGES, postBookingDecision, POST_BOOKING_ACTIONS } from './postBookingPolicy.js'
+import { reportEventFromDispatcher } from '../loadEvents/loadEvents.service.js'
 import { truckFacts } from './truckTalk.js'
 import { bookingFacts, carrierNotVerified } from './bookingTalk.js'
 import { stopsForRow } from './stops.js'
@@ -53,7 +55,7 @@ function assertPostingOpen(posting) {
 // What the booking flow reaches outside this file for. The default is the
 // real database; the booking-flow test hands in an in-memory stand-in, so
 // the whole agree -> paper -> accept path runs without a DB or a token.
-const DEFAULT_DEPS = Object.freeze({ repo, getCarrier, bookPosting, findById, chatText, assertCanSend, chatConfigFor, logTurn })
+const DEFAULT_DEPS = Object.freeze({ repo, getCarrier, bookPosting, findById, chatText, assertCanSend, chatConfigFor, logTurn, reportRoadEvent: reportEventFromDispatcher })
 
 // No agreement and no signed paper until the MC the dispatcher gave checks
 // out (decision 2, 2026-10-17). The broker's own sentence goes to the screen
@@ -120,9 +122,13 @@ export async function getThread({ conversationId, userId }, { deps = DEFAULT_DEP
   const blocked = (await repo.isBrokerBlocked?.({ brokerId: posting?.brokerId, brokerMc: posting?.mcNumber })) === true
 
   const messages = await repo.listMessages(conversationId)
+  // A booked thread says where its load is (booked, in transit, delivered)
+  // so the panel can word the bar above the input.
+  const facts = conversation.status === 'booked' ? await repo.bookedLoadFacts?.(conversationId, userId) : null
   return {
     conversation: { ...conversation, negotiationStage: conversation.status === 'booked' ? 'booked'
       : await repo.rateConDelivered(conversation.id) ? 'paper_delivered' : conversation.negotiationStage },
+    ...(facts ? { loadStage: loadStage(facts), loadId: facts.id } : {}),
     messages,
     broker: posting && {
       name: posting.name,
@@ -137,12 +143,54 @@ export async function getThread({ conversationId, userId }, { deps = DEFAULT_DEP
   }
 }
 
+// The booked-thread path. Fixed lines from recorded facts (postBookingPolicy.js):
+// no model, no budget, and nothing here can write the agreed rate.
+async function sendPostBooking({ conversation, posting, userId, text }, deps) {
+  const conversationId = conversation.id
+  const thread = await deps.repo.listMessages(conversationId)
+  if (releasedToAnotherTruck(thread)) {
+    const dispatcherMessage = await deps.repo.addExchange({ conversationId, text, line: RELEASED_LINE })
+    return { dispatcherMessage, awaitingReply: false, released: true }
+  }
+  const facts = await deps.repo.bookedLoadFacts(conversationId, userId)
+  const stage = facts ? loadStage(facts) : LOAD_STAGES.BOOKED
+  const decision = postBookingDecision({ stage, text, thread, load: facts, openEvent: facts?.openEvent })
+  const exchange = { conversationId, text, line: decision.line }
+  const sent = { awaitingReply: false, action: decision.action, loadStage: stage }
+
+  if (decision.action === 'block' || decision.action === POST_BOOKING_ACTIONS.ABANDON) {
+    const dispatcherMessage = await deps.repo.cancelAndBlock({
+      ...exchange, brokerId: posting?.brokerId, brokerMc: posting?.mcNumber, brokerContact: posting?.contactName,
+      ...(decision.action === POST_BOOKING_ACTIONS.ABANDON ? { reason: BLOCK_REASON_ABANDONED_IN_TRANSIT } : {}),
+    })
+    return { ...sent, dispatcherMessage, blocked: true }
+  }
+  if (decision.action === 'reclaim') {
+    const dispatcherMessage = await deps.repo.releaseForNoEta(exchange)
+    return { ...sent, dispatcherMessage, blocked: false, recovered: true }
+  }
+  if (decision.action === POST_BOOKING_ACTIONS.TROUBLE && decision.eventType && !facts.openEvent) {
+    // The road event stops the load the same way a rolled one does. A failure
+    // to record it must not lose the exchange the dispatcher just had.
+    try {
+      await deps.reportRoadEvent({ loadId: facts.id, eventType: decision.eventType, load: facts })
+    } catch (e) {
+      console.error(`[brokerChat] could not raise ${decision.eventType} on ${facts.id}: ${e.message}`)
+    }
+  }
+  const dispatcherMessage = await deps.repo.addExchange(exchange)
+  return { ...sent, dispatcherMessage, blocked: false, ...(decision.action === 'ask_eta' ? { waitingForEta: true } : {}) }
+}
+
 export async function sendMessage({ conversationId, userId, text }, { deps = DEFAULT_DEPS } = {}) {
   const conversation = await deps.repo.getConversation(conversationId, userId)
   if (!conversation) throw new AppError('CONVERSATION_NOT_FOUND')
 
   const posting = await deps.repo.getPostingWithBroker(conversation.postingId)
   if (await deps.repo.isBrokerBlocked?.({ brokerId: posting?.brokerId, brokerMc: posting?.mcNumber })) throw new AppError('BROKER_BLOCKED')
+  // A booked deal stays open for real talk (trouble on the road, payment,
+  // cancelling) but is never negotiated again: its own path, no model call.
+  if (conversation.status === 'booked') return sendPostBooking({ conversation, posting, userId, text }, deps)
   // Server-side cancellation policy, decided before any model call: a
   // cancel blocks the broker, "can you wait" asks for an ETA and, with no
   // ETA, takes the load back. The model never sees these turns.
@@ -446,6 +494,14 @@ export async function acceptRateCon({ conversationId, userId }, { deps = DEFAULT
     warnings: booked.warnings,
     alreadyAccepted: false,
   }
+}
+
+// The thread behind a booked load, from the load page. Opens it if the
+// booking never made one; a load this user did not book has none.
+export async function openLoadConversation({ loadId, userId }, { deps = DEFAULT_DEPS } = {}) {
+  const conversation = await deps.repo.openLoadConversation(loadId, userId)
+  if (!conversation) throw new AppError('LOAD_HAS_NO_BROKER_THREAD')
+  return { conversation }
 }
 
 export async function listConversations({ userId }) {

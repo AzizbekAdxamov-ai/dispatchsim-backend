@@ -56,6 +56,7 @@ export const ERROR_CODES = {
   // the dispatcher is not talking to.
   DRIVER_UNREACHABLE:     { status: 503, message: 'Cannot reach the driver right now' },
   RATE_OUT_OF_BAND:       { status: 400, message: 'That rate is outside the allowed range for this distance' },
+  LOAD_HAS_NO_BROKER_THREAD: { status: 404, message: 'No broker conversation for this load' },
   POSTING_TAKEN:     { status: 409, message: 'This posting has already been booked' },
   POSTING_EXPIRED:   { status: 410, message: 'This posting has expired' },
   DRIVER_HAS_ACTIVE_LOAD: { status: 409, message: 'Driver already has an active load' },

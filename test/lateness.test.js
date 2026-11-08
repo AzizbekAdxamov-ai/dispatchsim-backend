@@ -15,7 +15,7 @@ import {
 } from '../src/constants/simClock.js'
 import {
   EVENT_CHANCE_PER_LOAD, chanceForFraction, pickEventType,
-  EVENT_KEYS, optionsFor, resolveOption,
+  EVENT_KEYS, EVENT_TYPES, optionsFor, resolveOption,
 } from '../src/constants/loadEvents.js'
 import { seeded } from './helpers/rng.js'
 
@@ -66,8 +66,11 @@ test('every event type can be drawn, and every option is priced', () => {
   const rng = seeded(4)
   const seen = new Set()
   for (let i = 0; i < 20000; i += 1) seen.add(pickEventType(rng))
-  // A type nobody can draw is dead weight that reads as content.
-  assert.equal(seen.size, EVENT_KEYS.length)
+  // A type nobody can draw is dead weight that reads as content. The one
+  // exception is a weight-0 type: raised on purpose by a report, never by dice.
+  const drawable = EVENT_KEYS.filter((k) => EVENT_TYPES[k].weight > 0)
+  assert.equal(seen.size, drawable.length)
+  assert.ok(!seen.has('accident'))
 
   for (const type of EVENT_KEYS) {
     const options = optionsFor(type)

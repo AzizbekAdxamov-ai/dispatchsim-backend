@@ -7,7 +7,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import 'dotenv/config'
 
-import { EVENT_KEYS } from '../src/constants/loadEvents.js'
+import { EVENT_KEYS, EVENT_TYPES } from '../src/constants/loadEvents.js'
 import { seeded } from './helpers/rng.js'
 
 const { hasDb } = await import('./helpers/db.js')
@@ -32,7 +32,7 @@ test('a clean load keeps the weighted mix the board teaches', () => {
   const rng = seeded(7)
   const seen = new Set()
   for (let i = 0; i < 5000; i += 1) seen.add(eventTypeFor({}, rng))
-  assert.equal(seen.size, EVENT_KEYS.length, 'every type still reachable for a clean load')
+  assert.equal(seen.size, EVENT_KEYS.filter((k) => EVENT_TYPES[k].weight > 0).length, 'every drawable type still reachable for a clean load')
 })
 
 test('the flag rides the row the tick reads, and only the certify write clears it', { skip: !hasDb }, async () => {

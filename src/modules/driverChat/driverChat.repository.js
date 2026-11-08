@@ -37,6 +37,7 @@ export async function getDriverContext(driverId) {
         destinationCity: r.destinationCity, destinationState: r.destinationState,
         distanceMi: r.distanceMi, etaAt: r.etaAt, deliveryAt: r.deliveryAt,
         dispatchedAt: r.dispatchedAt,
+        openEvent: r.openEventType ? { eventType: r.openEventType, place: r.openEventPlace } : null,
       }
       : null,
   })

@@ -45,7 +45,8 @@ export const GET_DRIVER_CONTEXT_SQL = `
          l.id AS "loadId", l.origin_city AS "originCity", l.origin_state AS "originState",
          l.destination_city AS "destinationCity", l.destination_state AS "destinationState",
          l.distance_mi AS "distanceMi", l.eta_at AS "etaAt", l.delivery_at AS "deliveryAt",
-         l.dispatched_at AS "dispatchedAt"
+         l.dispatched_at AS "dispatchedAt",
+         ev.event_type AS "openEventType", ev.place AS "openEventPlace"
     FROM drivers d
     LEFT JOIN trucks t ON t.driver_id = d.id
     LEFT JOIN LATERAL (
@@ -57,6 +58,14 @@ export const GET_DRIVER_CONTEXT_SQL = `
             ORDER BY x.dispatched_at DESC NULLS LAST
             LIMIT 1
          ) l ON true
+    -- The road event still open on that load: the truck is stopped, and the
+    -- driver knows it even when nobody has resolved it yet.
+    LEFT JOIN LATERAL (
+           SELECT e.event_type, e.place
+             FROM load_events e
+            WHERE e.load_id = l.id AND e.resolved_at IS NULL
+            LIMIT 1
+         ) ev ON true
    WHERE d.id = $1`
 
 // Delivered messages only. A reply scheduled for the future has not been

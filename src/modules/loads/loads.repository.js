@@ -129,6 +129,19 @@ export async function listLoads({ status, equipmentType, search, limit, offset }
   return result.rows
 }
 
+// The posting this user booked the load from, and the conversation on it if
+// one exists. Null when the user did not book the load.
+export async function brokerThreadForLoad(loadId, userId) {
+  const result = await query(
+    `SELECT p.id AS "postingId", c.id AS "conversationId"
+       FROM load_postings p
+       LEFT JOIN broker_conversations c ON c.posting_id = p.id AND c.user_id = p.booked_by_user_id
+      WHERE p.booked_load_id = $1 AND p.booked_by_user_id = $2`,
+    [loadId, userId],
+  )
+  return result.rows[0] ?? null
+}
+
 export async function getLoadById(id, client = null) {
   const runner = client ?? { query }
   const result = await runner.query(`${ROW_SELECT} WHERE l.id = $1`, [id])

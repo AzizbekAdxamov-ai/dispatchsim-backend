@@ -18,6 +18,10 @@ import { replanAfterEvent, logOpenEventWait } from '../hos/replan.service.js'
 import * as loadsRepo from '../loads/loads.repository.js'
 import { pool } from '../../db/pool.js'
 import { simDaysToSeconds } from '../../constants/simClock.js'
+import { livePlace } from '../driverChat/livePlace.js'
+
+// No lane progress known: placeFor reads it as near the origin.
+const ELAPSED_FRACTION_UNKNOWN = 0
 
 // Where the driver is when they call.
 //
@@ -101,6 +105,21 @@ export async function rollEvents({ rng = Math.random, limit = 50 } = {}) {
   }
 
   return raised
+}
+
+// The dispatcher reports something the driver has not called in (an accident
+// told to the broker). Same event row, same load pause as a rolled one, so
+// the board, the alert list and the resolve flow need nothing new. Nothing is
+// written into the driver chat: the report is the dispatcher's, not the
+// driver's. Returns the open event (new, or the one already open).
+export async function reportEventFromDispatcher({ loadId, eventType, load }) {
+  const live = livePlace(load)
+  const place = live ? `${live.city}, ${live.state}` : placeFor(load, ELAPSED_FRACTION_UNKNOWN)
+  const event = await withTransaction((client) => repo.raiseEvent(client, { loadId, eventType, place }))
+  if (!event) return repo.openEvent(loadId)
+  await logOpenEventWait({ loadId, eventType, eventAt: event.occurredAt })
+    .catch((e) => console.error(`[loadEvents] could not log the open wait on ${loadId}:`, e.message))
+  return event
 }
 
 // Which road event this load meets. The overdue-service flag keeps the

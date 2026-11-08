@@ -5,6 +5,7 @@ import { asciiPunct } from '../../lib/plainText.js'
 export const BROKER_BLOCK_DAYS = 7 // Azizbek qarori 2026-11-04 — kutilmoqda
 export const BLOCK_REASON_CARRIER_CANCEL = 'carrier_cancelled_agreed_load'
 export const BLOCK_REASON_WAIT_NO_ETA = 'wait_no_eta' // no block; retained for audit vocabulary
+export const BLOCK_REASON_ABANDONED_IN_TRANSIT = 'carrier_abandoned_in_transit' // carrier walked away from a load already on the road
 
 // 'agreed' covers every paper stage (awaiting_email, paper_pending,
 // paper_delivered): the status stays 'agreed' until the load is booked.
@@ -60,11 +61,11 @@ const BIG_NUMBER_RE = new RegExp(String.raw`(?<!(?:\b(?:load|id|order|ref)|#)\s*
 const PRICE_SIGNAL_RES = [PRICE_WORD_RE, PRICE_SYMBOL_RE, PRICE_NUMBER_AFTER_WORD_RE, BIG_NUMBER_RE]
 
 // A clause that only imagines a cancellation, or denies one.
-const HYPOTHETICAL_RE = /\b(?:if|unless|what\s+if|should\s+i|do\s+i\s+(?:need|have)\s+to|would\s+(?:you|u|i)|in\s+case)\b/i
-const NEGATION_RE = /\b(?:don'?t|do\s+not|not|never|won'?t|didn'?t)\b/i
+export const HYPOTHETICAL_RE = /\b(?:if|unless|what\s+if|should\s+i|do\s+i\s+(?:need|have)\s+to|would\s+(?:you|u|i)|in\s+case)\b/i
+export const NEGATION_RE = /\b(?:don'?t|do\s+not|not|never|won'?t|didn'?t)\b/i
 // Clauses split on sentence punctuation or "but". A "?" does not cancel the
 // intent: "can u cancel it?" is a real request.
-const CLAUSE_SPLIT_RE = /[.;!?]|\bbut\b/i
+export const CLAUSE_SPLIT_RE = /[.;!?]|\bbut\b/i
 
 const WAIT_RES = [
   /\bcan\s+(?:you|u)\s+wait\b/i,
