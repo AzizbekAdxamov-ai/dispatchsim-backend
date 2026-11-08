@@ -65,6 +65,14 @@ function fuelFor(extraMiles) {
 // invoice instead of spending -- detention is real money a carrier is
 // owed, and a student who never learns to bill it is being taught to work
 // for free.
+//
+// The accident option numbers are placeholders until Azizbek decides them.
+// Hours are simulated hours; cost is what leaves the account.
+export const ACCIDENT_RECOVERY_HOURS = 14 // Azizbek qarori 2026-11-08 — kutilmoqda
+export const ACCIDENT_RECOVERY_COST_USD = 2200 // Azizbek qarori 2026-11-08 — kutilmoqda
+export const ACCIDENT_ONSCENE_HOURS = 24 // Azizbek qarori 2026-11-08 — kutilmoqda
+export const ACCIDENT_ONSCENE_COST_USD = 900 // Azizbek qarori 2026-11-08 — kutilmoqda
+
 export const EVENT_TYPES = Object.freeze({
   weather: {
     weight: 3,
@@ -132,6 +140,29 @@ export const EVENT_TYPES = Object.freeze({
     ],
   },
 
+  // Never rolled at random (weight 0): an accident is something the
+  // dispatcher is TOLD about, and the broker thread raises it when they
+  // report one (loadEvents.service.js reportEventFromDispatcher).
+  accident: {
+    weight: 0,
+    report: (e) => `There has been an accident near ${e.place}. The truck is not moving.`,
+    summary: 'Accident',
+    options: [
+      {
+        key: 'recovery',
+        label: 'Recovery truck and transload',
+        detail: 'A recovery truck clears the scene and the freight moves to another trailer.',
+        hours: ACCIDENT_RECOVERY_HOURS, costUsd: ACCIDENT_RECOVERY_COST_USD,
+      },
+      {
+        key: 'repair_on_scene',
+        label: 'Repair on scene',
+        detail: 'Cheaper, but the truck sits at the scene until it is fixed.',
+        hours: ACCIDENT_ONSCENE_HOURS, costUsd: ACCIDENT_ONSCENE_COST_USD,
+      },
+    ],
+  },
+
   roadClosure: {
     weight: 2,
     report: (e) => `${e.place} is closed. Wreck ahead of me, they are turning everyone around.`,
@@ -154,16 +185,18 @@ export const EVENT_TYPES = Object.freeze({
 })
 
 export const EVENT_KEYS = Object.freeze(Object.keys(EVENT_TYPES))
+// What the dice can land on: a weight-0 type is raised on purpose only.
+const RANDOM_EVENT_KEYS = Object.freeze(EVENT_KEYS.filter((k) => EVENT_TYPES[k].weight > 0))
 
 // Weighted pick. rng is injectable so tests can pin it.
 export function pickEventType(rng = Math.random) {
-  const total = EVENT_KEYS.reduce((sum, k) => sum + EVENT_TYPES[k].weight, 0)
+  const total = RANDOM_EVENT_KEYS.reduce((sum, k) => sum + EVENT_TYPES[k].weight, 0)
   let roll = rng() * total
-  for (const key of EVENT_KEYS) {
+  for (const key of RANDOM_EVENT_KEYS) {
     roll -= EVENT_TYPES[key].weight
     if (roll < 0) return key
   }
-  return EVENT_KEYS[EVENT_KEYS.length - 1]
+  return RANDOM_EVENT_KEYS.at(-1)
 }
 
 // What an option actually does, with fuel worked out from the miles so
@@ -222,6 +255,7 @@ export function optionsFor(eventType) {
 const DUTY_DURING = Object.freeze({
   weather: { wait: DUTY_STATUS.OFF_DUTY, reroute: DUTY_STATUS.DRIVING },
   breakdown: { roadside: DUTY_STATUS.ON_DUTY_NOT_DRIVING, tow: DUTY_STATUS.ON_DUTY_NOT_DRIVING },
+  accident: { recovery: DUTY_STATUS.ON_DUTY_NOT_DRIVING, repair_on_scene: DUTY_STATUS.ON_DUTY_NOT_DRIVING },
   detention: { wait: DUTY_STATUS.ON_DUTY_NOT_DRIVING, bill: DUTY_STATUS.ON_DUTY_NOT_DRIVING },
   roadClosure: { wait: DUTY_STATUS.OFF_DUTY, detour: DUTY_STATUS.DRIVING },
 })
@@ -241,6 +275,7 @@ export function dutyStatusDuring(eventType, optionKey) {
 const DUTY_WHILE_OPEN = Object.freeze({
   weather: DUTY_STATUS.OFF_DUTY,
   breakdown: DUTY_STATUS.ON_DUTY_NOT_DRIVING,
+  accident: DUTY_STATUS.ON_DUTY_NOT_DRIVING,
   detention: DUTY_STATUS.ON_DUTY_NOT_DRIVING,
   roadClosure: DUTY_STATUS.OFF_DUTY,
 })

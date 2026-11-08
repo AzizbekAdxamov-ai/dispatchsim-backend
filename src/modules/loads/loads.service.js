@@ -20,7 +20,7 @@ export async function listLoads({ status, equipmentType, search, page, limit }) 
   return { loads, meta: { total: counts.all, page, limit, counts } }
 }
 
-export async function getLoadById(id) {
+export async function getLoadById(id, { userId = null } = {}) {
   const load = await loadsRepo.getLoadById(id)
   if (!load) {
     throw new AppError('LOAD_NOT_FOUND')
@@ -36,7 +36,15 @@ export async function getLoadById(id) {
     progress: tracking ? Math.round(tracking.fraction * 100) : computeProgress(load),
     tracking,
     timeline: computeTimeline(load),
+    // Whether this user has a broker thread to open from the load page
+    // (only the one who booked it does), and which one.
+    ...(await brokerThreadFor(id, userId)),
   }
+}
+
+async function brokerThreadFor(loadId, userId) {
+  const thread = userId ? await loadsRepo.brokerThreadForLoad(loadId, userId) : null
+  return { brokerThreadAvailable: Boolean(thread), brokerConversationId: thread?.conversationId ?? null }
 }
 
 // ---------------------------------------------------------------------

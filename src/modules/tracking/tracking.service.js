@@ -8,6 +8,7 @@
 import * as repo from './tracking.repository.js'
 import * as loadsRepo from '../loads/loads.repository.js'
 import { positionFor, laneEndpoints } from './position.js'
+import { whereNow } from '../driverChat/livePlace.js'
 import { AppError } from '../../lib/errors.js'
 import { CITIES, roadMiles } from '../../../scripts/seed/cities.js'
 import { resolveCity, cityCompletions, rankPostings, hotLanes } from './laneSearch.js'
@@ -224,8 +225,9 @@ export function idleTrucksToBoard(trucks) {
             hosRemainingMin: t.driver.hosRemainingMin,
           }
           : null,
-        city: t.driver?.currentCity ?? t.locationCity ?? null,
-        state: t.driver?.currentState ?? t.locationState ?? null,
+        // The same place the Drivers page and the chat name (whereNow).
+        city: whereNow(t.driver)?.city ?? t.locationCity ?? null,
+        state: whereNow(t.driver)?.state ?? t.locationState ?? null,
         lat: Number(lat),
         lon: Number(lon),
       }

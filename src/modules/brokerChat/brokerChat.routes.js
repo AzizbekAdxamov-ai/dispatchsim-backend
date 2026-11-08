@@ -15,6 +15,8 @@ router.use(requireAuth, requireRole('dispatcher'))
 
 router.get('/', controller.listConversations)
 router.post('/postings/:postingId', controller.openConversation)
+router.post('/loads/:loadId', controller.openLoadConversation)
+router.post('/loads/:loadId/cancel', controller.cancelBookingForLoad)
 router.get('/:id', controller.getThread)
 router.post('/:id/messages', chatLimiter, controller.sendMessage)
 router.post('/:id/agree', controller.agreeRate)

@@ -11,7 +11,7 @@ import * as loadEventsRepo from '../loadEvents/loadEvents.repository.js'
 import * as dutyEventsRepo from '../hos/dutyEvents.repository.js'
 
 // Statuses of a load that is out on a run.
-const DISPATCHED_STATUSES = Object.freeze(['ontime', 'warn', 'crit'])
+export const DISPATCHED_STATUSES = Object.freeze(['ontime', 'warn', 'crit'])
 
 // Undo a dispatch inside the caller's transaction. The driver is released in
 // the same transaction, or a cancel would leave them marked as running

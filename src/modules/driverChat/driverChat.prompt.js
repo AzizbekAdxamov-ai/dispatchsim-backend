@@ -22,6 +22,7 @@
 
 import { DRIVER_STAGES, SETTLEMENT_TERM_SIM_DAYS, describeWait, willAcceptWork } from '../../constants/driverPay.js'
 import { clockDateTime, clockWhen } from '../../constants/appClock.js'
+import { EVENT_TYPES } from '../../constants/loadEvents.js'
 import { readPreferences, hasRequests, preferenceConflicts, avoidedPlaces } from '../../constants/driverPreferences.js'
 import { emptyRunToPickup } from '../loads/whereabouts.js'
 import { DRIVING_LIMIT_HOURS, REQUIRED_REST_HOURS } from '../../constants/hosClock.js'
@@ -198,6 +199,13 @@ export function situationLines({ driver, load, now = new Date() }) {
       + ` ${load.originCity}, ${load.originState} was about ${empty.miles.toLocaleString('en-US')} road miles from there, all of it empty.`)
   }
 
+  // A road event still open: the truck is stopped and the driver is waiting
+  // on dispatch. This replaces the duty line, which would say behind the wheel.
+  const stoppedFor = load?.openEvent
+  if (stoppedFor) {
+    const what = EVENT_TYPES[stoppedFor.eventType]?.summary ?? 'a road event'
+    lines.push(`  Your truck is stopped near ${stoppedFor.place}: ${what}. You called it in and are waiting on dispatch's call. You are not driving.`)
+  }
   const DUTY = {
     driving: '  You are behind the wheel.',
     'on-duty': '  You are on duty but not driving -- fuelling, loading, a walkaround.',
@@ -207,7 +215,7 @@ export function situationLines({ driver, load, now = new Date() }) {
   // On a run, "on duty, not driving" is a stop on the road. The general
   // line lists loading, and on 2026-10-06 (fourth run) Grace, on the road
   // near New York, said "waiting on the dock, box is loaded".
-  lines.push(driver.onTheRoad && driver.dutyStatus === 'on-duty'
+  if (!stoppedFor) lines.push(driver.onTheRoad && driver.dutyStatus === 'on-duty'
     ? '  You are on duty but not driving -- stopped on the road for fuel or a walkaround. You are not at a dock.'
     : DUTY[driver.dutyStatus] ?? '  You are off the clock.')
 
@@ -376,7 +384,7 @@ export function buildDriverSystemPrompt({ driver, standing, load, carrier = null
     'You are texting your dispatcher from the road.',
     '',
     'WHO YOU ARE:',
-    `  Home base: ${driver.homeBaseCity}, ${driver.homeBaseState}`,
+    `  Home base (where you live, not where you are now): ${driver.homeBaseCity}, ${driver.homeBaseState}`,
     `  You are paid ${payLine}, settled weekly.`,
     driver.truckId
       ? `  You drive truck ${driver.truckId}.`

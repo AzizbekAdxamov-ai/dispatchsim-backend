@@ -15,7 +15,7 @@ export async function listLoads(req, res) {
 
 export async function getLoad(req, res) {
   const id = loadIdSchema.parse(req.params.id)
-  const load = await loadsService.getLoadById(id)
+  const load = await loadsService.getLoadById(id, { userId: req.auth?.userId })
   res.status(200).json(load)
 }
 

@@ -34,7 +34,7 @@ export function paperClaimProblem(reply, paper) {
   for (const clause of clauses) {
     if (/\?/.test(clause)) continue
     const document = /\b(?:rate\s*(?:confirmation|con)|ratecon|rc|documents?|paper|paperwork)\b/i.test(clause)
-    const claim = /\b(?:(?:i|we)(?:'ll| will| can)?\s+email|send|sent|attach|attached|issued|emailed|e-mailed|delivered|generated|sending|emailing|heading|on (?:its|the) way|available|ready|here in (?:this|the) thread)\b/i.exec(clause)
+    const claim = /\b(?:(?:i|we)(?:'ll| will| can)?\s+email|send|sent|attach|attached|issued|emailed|e-mailed|delivered|generated|sending|emailing|heading|on (?:its|the) way|available|ready|here in (?:this|the) thread|re-?send(?:ing)?|re-?sent|went out|gone out)\b/i.exec(clause)
     if (!claim) continue
     // Only words BEFORE the assertion qualify it. "Sent ... you can review"
     // is already a completed claim, not a conditional one.
@@ -42,7 +42,7 @@ export function paperClaimProblem(reply, paper) {
     if (/\b(?:not|never|no|haven't|hasn't|didn't|can't|cannot|don't|won't|isn't)\b/i.test(before)) continue
     // Future promises are just as false as completed delivery: this app only
     // records a contact address and delivers the document in the thread.
-    const outgoing = /\b(?:send|sent|sending|heading|on (?:its|the) way|delivered)\b/i.test(clause)
+    const outgoing = /\b(?:send|sent|sending|re-?send(?:ing)?|re-?sent|went out|gone out|heading|on (?:its|the) way|delivered)\b/i.test(clause)
     // An email address listed as the contact is not a delivery destination.
     const emailDestination = /\b(?:to|into|via|by)\s+(?:(?:your|their|the|an?)\s+)?(?:e-?mail\b|inbox\b|gmail\b|[\w.+-]+@[\w.-]+\.[a-z]{2,})/i.test(clause)
     const emailVerb = /\b(?:emailed|e-mailed|emailing)\b|\b(?:i|we)(?:'ll| will| can| would)?\s+email\b/i.test(clause)

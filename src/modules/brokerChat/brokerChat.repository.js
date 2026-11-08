@@ -18,7 +18,8 @@ import { blockUntil, BROKER_BLOCK_DAYS, BLOCK_REASON_CARRIER_CANCEL, BLOCK_REASO
 // was one who did not open dev tools.
 //
 // Booking reads it server-side through getAgreedRate, and the PDF prints
-// it once rateConDelivered() says the broker has sent it.
+// it once rateConDelivered() says the broker has sent it. listMessages
+// returns it on a delivered, unvoided rate con row, for the card.
 const CONVERSATION_COLUMNS = `
   c.id, c.posting_id AS "postingId", c.user_id AS "userId",
   c.agreed_rate_usd AS "agreedRateUsd", c.status,
@@ -87,10 +88,16 @@ export async function getConversation(conversationId, userId) {
 // second window cannot skip it.
 export async function listMessages(conversationId) {
   const result = await query(
-    `SELECT id, role, content, kind, created_at AS "createdAt"
-       FROM broker_messages
-      WHERE conversation_id = $1 AND deliver_at <= now()
-      ORDER BY deliver_at ASC, created_at ASC, id ASC`,
+    `SELECT m.id, m.role, m.content, m.kind, m.created_at AS "createdAt", m.voided_at AS "voidedAt",
+            -- The paper's own figures, only on a rate con that has arrived (deliver_at
+            -- below) and was not voided: the dispatcher reads them on the card.
+            CASE WHEN m.kind = 'rate_con' AND m.voided_at IS NULL THEN c.rate_con_rate_usd END AS "rateConRateUsd",
+            CASE WHEN m.kind = 'rate_con' AND m.voided_at IS NULL THEN c.rate_con_basis END AS "rateConBasis",
+            CASE WHEN m.kind = 'rate_con' AND m.voided_at IS NULL THEN c.rate_con_fuel_surcharge_usd END AS "rateConFuelSurchargeUsd"
+       FROM broker_messages m
+       JOIN broker_conversations c ON c.id = m.conversation_id
+      WHERE m.conversation_id = $1 AND m.deliver_at <= now()
+      ORDER BY m.deliver_at ASC, m.created_at ASC, m.id ASC`,
     [conversationId],
   )
   return result.rows
@@ -327,7 +334,7 @@ export async function beginChatTurn(conversationId, userId, text) {
   return withTransaction(async (client) => {
     const conversation = await lockedConversation(client, conversationId, userId)
     const intent = chatIntent(text, { rateBasis: conversation.postingRateBasis, fuelSurchargeUsd: conversation.postingFuelSurchargeUsd })
-    const invalidate = intent.kind === 'hold' || intent.kind === 'walk' || intent.kind === 'push'
+    const invalidate = ['hold', 'walk', 'push', 'cancel'].includes(intent.kind)
       || (['offer', 'accept_amount'].includes(intent.kind) && conversation.agreedRateUsd !== null && intent.rateUsd !== conversation.agreedRateUsd)
     const updated = await client.query(`UPDATE broker_conversations SET negotiation_revision = negotiation_revision + 1,
       agreed_rate_usd = CASE WHEN $3 THEN NULL ELSE agreed_rate_usd END,
@@ -373,7 +380,7 @@ export async function completeChatTurn({ conversationId, userId, revision, decis
       await client.query(`INSERT INTO broker_messages (conversation_id, role, content, kind, deliver_at)
         SELECT $1, 'broker', 'Rate confirmation attached. Please review the details before signing.', 'rate_con',
           now() + make_interval(secs => $2)
-        WHERE NOT EXISTS (SELECT 1 FROM broker_messages WHERE conversation_id = $1 AND kind = 'rate_con')`,
+        WHERE NOT EXISTS (SELECT 1 FROM broker_messages WHERE conversation_id = $1 AND kind = 'rate_con' AND voided_at IS NULL)`,
       [conversationId, delaySec + Math.max(1, paperDelaySec)])
     }
     return true
@@ -459,17 +466,23 @@ export async function insertExchange(client, conversationId, text, line) {
 }
 
 export async function cancelAndBlock(
-  { conversationId, text, line, brokerId = null, brokerMc = null, brokerContact = null } = {},
+  { conversationId, text, line, brokerId = null, brokerMc = null, brokerContact = null, reason = BLOCK_REASON_CARRIER_CANCEL, alreadyBlocked = false } = {},
   { run = withTransaction } = {},
 ) {
   return run(async (client) => {
     await withdrawAgreement(client, conversationId, 'carrier_cancelled')
-    const block = await client.query(`INSERT INTO broker_blocks
-      (broker_id, broker_mc, broker_contact, blocked_until, reason, conversation_id)
-      VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-    [brokerId, brokerMc, brokerContact, blockUntil(new Date(), BROKER_BLOCK_DAYS), BLOCK_REASON_CARRIER_CANCEL, conversationId])
+    // alreadyBlocked: the broker blocked this carrier over another load; the
+    // booking is still cancelled and told, but no second block row is added.
+    let blockId = null
+    if (!alreadyBlocked) {
+      const block = await client.query(`INSERT INTO broker_blocks
+        (broker_id, broker_mc, broker_contact, blocked_until, reason, conversation_id)
+        VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+      [brokerId, brokerMc, brokerContact, blockUntil(new Date(), BROKER_BLOCK_DAYS), reason, conversationId])
+      blockId = block.rows[0].id
+    }
     const dispatcher = await insertExchange(client, conversationId, text, line)
-    return { ...dispatcher, blockId: block.rows[0].id }
+    return { ...dispatcher, blockId }
   })
 }
 
@@ -495,4 +508,50 @@ export async function isBrokerBlocked({ brokerId = null, brokerMc = null } = {})
     WHERE blocked_until > now() AND (($1::uuid IS NOT NULL AND broker_id = $1) OR ($2::text IS NOT NULL AND broker_mc = $2))
   ) AS blocked`, [brokerId, brokerMc])
   return result.rows[0]?.blocked === true
+}
+
+// The load behind a booked thread, with what the post-booking talk reads:
+// stage inputs, the signed rate, invoice facts and any open road event. The
+// broker's credit rating is not selected -- only days_to_pay.
+export async function bookedLoadFacts(conversationId, userId) {
+  const result = await query(
+    `SELECT l.id, l.status, l.dispatched_at AS "dispatchedAt", l.eta_at AS "etaAt",
+            l.delivered_at AS "deliveredAt", l.rate_usd AS "rateUsd", l.accessorials,
+            l.invoice_due_at AS "invoiceDueAt", l.invoice_paid_at AS "invoicePaidAt",
+            l.payment_terms AS "paymentTerms", b.days_to_pay AS "daysToPay",
+            l.origin_city AS "originCity", l.origin_state AS "originState",
+            l.destination_city AS "destinationCity", l.destination_state AS "destinationState",
+            CASE WHEN ev.id IS NULL THEN NULL
+                 ELSE jsonb_build_object('eventType', ev.event_type, 'place', ev.place, 'occurredAt', ev.occurred_at)
+            END AS "openEvent"
+       FROM broker_conversations c
+       JOIN load_postings p ON p.id = c.posting_id
+       JOIN loads l ON l.id = p.booked_load_id AND p.booked_by_user_id = c.user_id
+       LEFT JOIN brokers b ON b.id = p.broker_id
+       LEFT JOIN LATERAL (
+              SELECT e.id, e.event_type, e.place, e.occurred_at
+                FROM load_events e WHERE e.load_id = l.id AND e.resolved_at IS NULL LIMIT 1
+            ) ev ON true
+      WHERE c.id = $1 AND c.user_id = $2`,
+    [conversationId, userId],
+  )
+  return result.rows[0] ?? null
+}
+
+// Find or create the thread behind a booked load, for the "message the
+// broker" link on the load page. Only the user who booked it gets one. The
+// row is made 'booked' with the signed rate so it is the same thread the
+// accept step would have left; ON CONFLICT leaves an existing thread alone.
+export async function openLoadConversation(loadId, userId) {
+  const result = await query(
+    `INSERT INTO broker_conversations
+        (posting_id, user_id, status, negotiation_stage, agreed_rate_usd, rate_con_rate_usd)
+     SELECT p.id, $2::uuid, 'booked', 'booked', l.rate_usd, l.rate_usd
+       FROM load_postings p JOIN loads l ON l.id = p.booked_load_id
+      WHERE p.booked_load_id = $1 AND p.booked_by_user_id = $2
+     ON CONFLICT (posting_id, user_id) DO UPDATE SET updated_at = now()
+     RETURNING ${CONVERSATION_COLUMNS.replaceAll('c.', '')}`,
+    [loadId, userId],
+  )
+  return result.rows[0] ?? null
 }

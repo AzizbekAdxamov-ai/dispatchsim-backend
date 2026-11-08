@@ -5,7 +5,7 @@
 // added to this file is parsed against the real schema without anyone
 // remembering to register it. Interpolations are constants, never input.
 
-import { REAL_SEC_PER_SIM_DAY } from '../../constants/simClock.js'
+import { FINANCE_REAL_SEC_PER_SIM_DAY } from '../../constants/simClock.js'
 
 // Earn a settlement at delivery.
 //
@@ -68,7 +68,7 @@ export const LIST_SETTLEMENTS_SQL = `
          END AS status,
          CASE WHEN s.paid_at IS NOT NULL THEN 0
               ELSE GREATEST(0, floor(
-                EXTRACT(EPOCH FROM (now() - s.due_at)) / ${REAL_SEC_PER_SIM_DAY}
+                EXTRACT(EPOCH FROM (now() - s.due_at)) / ${FINANCE_REAL_SEC_PER_SIM_DAY}
               ))::int
          END AS "daysOverdue"
     FROM driver_settlements s
@@ -97,7 +97,7 @@ export const DRIVER_OWED_SQL = `
               ELSE GREATEST(0, floor(
                 EXTRACT(EPOCH FROM (
                   now() - min(s.due_at) FILTER (WHERE s.paid_at IS NULL)
-                )) / ${REAL_SEC_PER_SIM_DAY}
+                )) / ${FINANCE_REAL_SEC_PER_SIM_DAY}
               ))::int
          END AS "daysOverdue"
     FROM drivers d
@@ -121,7 +121,7 @@ export const DRIVER_OWED_ONE_SQL = `
               ELSE GREATEST(0, floor(
                 EXTRACT(EPOCH FROM (
                   now() - min(s.due_at) FILTER (WHERE s.paid_at IS NULL)
-                )) / ${REAL_SEC_PER_SIM_DAY}
+                )) / ${FINANCE_REAL_SEC_PER_SIM_DAY}
               ))::int
          END AS "daysOverdue"
     FROM drivers d

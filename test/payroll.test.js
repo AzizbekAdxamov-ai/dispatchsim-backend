@@ -12,7 +12,7 @@ import {
   settlementFor, stageFor, willAcceptWork,
   SETTLEMENT_TERM_SIM_DAYS, DRIVER_STAGES, MILES_PER_SETTLEMENT_WEEK,
 } from '../src/constants/driverPay.js'
-import { simDaysToSeconds } from '../src/constants/simClock.js'
+import { financeDaysToSeconds } from '../src/constants/simClock.js'
 
 test('a driver who is owed nothing is not a driver with a grievance', () => {
   // The trap this guards. In PostgreSQL, GREATEST ignores NULLs, so
@@ -53,10 +53,12 @@ test('the stages are ordered, and none of them collapses into another', () => {
 })
 
 test('a settlement is due one weekly cycle after the wheels stop', () => {
-  // Seven simulated days is fourteen real minutes on this calendar. The
-  // number matters because it is what the driver measures lateness from.
+  // Seven simulated days is fourteen real minutes on the money-wait day
+  // (2 min/day, kept on purpose 2026-11-08). The number matters because it
+  // is what the driver measures lateness from.
+  // Kills: settlement due moved onto the 30-minute operations day (would be 12600 s)
   assert.equal(SETTLEMENT_TERM_SIM_DAYS, 7)
-  assert.equal(simDaysToSeconds(SETTLEMENT_TERM_SIM_DAYS), 840)
+  assert.equal(financeDaysToSeconds(SETTLEMENT_TERM_SIM_DAYS), 840)
 })
 
 test('earning still works exactly as it did before payment moved', () => {

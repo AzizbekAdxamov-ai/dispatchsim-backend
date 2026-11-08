@@ -25,8 +25,8 @@ export async function findDriver(driverId, client = null) {
   return result.rows[0] ?? null
 }
 
-export async function violationsSource({ since, realSecPerSimDay }) {
-  const result = await pool.query(SQL.VIOLATIONS_SQL, [since, realSecPerSimDay])
+export async function violationsSource({ since }) {
+  const result = await pool.query(SQL.VIOLATIONS_SQL, [since])
   return result.rows
 }
 

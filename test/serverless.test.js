@@ -107,8 +107,9 @@ test('neither endpoint runs without a secret', () => {
 
 test('every scheduler endpoint has a scheduler somewhere, and it is written down', () => {
   // Not "vercel.json schedules both". Vercel's Hobby plan refuses any cron
-  // more frequent than daily -- the tick needs one a minute, because one
-  // simulated day is two real minutes -- so the tick is driven from
+  // more frequent than daily -- the tick needs one a minute, because the
+  // company calendar is compressed (a simulated day is thirty real minutes
+  // since 2026-11-08, and payments wait on two-minute days) -- so the tick is driven from
   // outside and only the daily refresh is in vercel.json.
   //
   // What must hold is that NOTHING is left with no scheduler at all. An

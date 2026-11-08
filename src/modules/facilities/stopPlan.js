@@ -69,7 +69,7 @@
 //
 // legalArrivalAt and every stop's arrivedAt/departedAt, by contrast, are
 // on the COMPRESSED calendar dispatched_at/eta_at already live on
-// (src/constants/simClock.js -- one simulated day is two real minutes).
+// (src/constants/simClock.js -- one simulated day is thirty real minutes).
 // The conversion is the same one this codebase already uses for a
 // mandatory rest's duration (REQUIRED_REST_SIM_DAYS -> simDaysToMs,
 // hos.js/dispatch.service.js): a quantity of real HOS hours, divided by
@@ -116,7 +116,7 @@ export const ROUTE_CORRIDOR_MI = MERGE_RADIUS_MI
 // fixed rate, in REAL ELD minutes (this is on-duty-not-driving time on
 // the SAME literal-hours clock dutyTimeline itself runs on -- see the
 // file header on the two clocks). At a 250-gal fill (a big rig's full
-// tank) that is 25 real minutes, comfortably short of the 30-minute
+// tank) that is 25 literal ELD minutes (not scaled by the day length; about 31 real seconds at HOS_TIME_SCALE 48), comfortably short of the 30-minute
 // break threshold on its own -- which is the property that actually
 // matters: an ordinary fuel stop does not, by itself, look like a
 // driver's mandatory break. When one legitimately falls due at the same

@@ -80,7 +80,16 @@ const CURRENT_LOAD_LATERAL = `
       'originCity', l.origin_city, 'originState', l.origin_state,
       'destinationCity', l.destination_city, 'destinationState', l.destination_state,
       'rateUsd', l.rate_usd, 'distanceMi', l.distance_mi,
-      'pickupAt', l.pickup_at, 'deliveryAt', l.delivery_at, 'etaAt', l.eta_at
+      'pickupAt', l.pickup_at, 'deliveryAt', l.delivery_at, 'etaAt', l.eta_at,
+      'dispatchedAt', l.dispatched_at,
+      -- Where the truck is stopped, when a road event is open: whereNow()
+      -- (driverChat/livePlace.js) names the driver's place from it.
+      'openEvent', (
+        SELECT jsonb_build_object('eventType', e.event_type, 'place', e.place)
+          FROM load_events e
+         WHERE e.load_id = l.id AND e.resolved_at IS NULL
+         LIMIT 1
+      )
     ) AS "currentLoad"
     FROM loads l
     WHERE l.driver_id = d.id AND l.status <> 'done'

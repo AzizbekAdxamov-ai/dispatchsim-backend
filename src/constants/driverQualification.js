@@ -15,8 +15,8 @@
 //
 // The compressed calendar runs underneath: one simulated day is
 // REAL_MS_PER_SIM_DAY real ms (simClock.js), so a certificate expiring
-// in 30 simulated days expires in under a real minutes' worth of
-// sessions. The 30/90-day windows below are the FMCSA practice of
+// in 30 simulated days expires in 15 real hours (30 min per day since
+// 2026-11-08). The 30/90-day windows below are the FMCSA practice of
 // warning BEFORE a document lapses -- expressed in simulated days, which
 // is the only time this program's company actually has.
 

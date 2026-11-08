@@ -72,7 +72,9 @@ test('natural recipient directions issue one paper only after agreement and neve
       findById: async () => null, assertCanSend: async () => {}, chatConfigFor: () => ({ model: 'fake' }),
       logTurn: async () => {}, chatText: async () => 'Please confirm the rate first.' }
     const send = (text) => sendMessage({ conversationId: FAKE_IDS.conversation, userId: FAKE_IDS.user, text }, { deps })
-    await send('Put it on dispatch@example.com please.')
+    // Band 4 (X5): an email given BEFORE the rate is agreed now issues the paper at agreement
+    // (negotiationReleaseNov08.test.js), so this loop starts from a message with no recipient.
+    await send('Hey, checking on this load.')
     assert.equal(fake.state.conversation.agreedRateUsd, null)
     assert.equal(fake.state.messages.filter((m) => m.kind === 'rate_con').length, 0)
     await send('$8153 all-in works for me.')

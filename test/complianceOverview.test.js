@@ -96,5 +96,6 @@ test('a fixture span of one sim day reads as a 24-hour HOS day', () => {
   // Kills: an overview that divided expiries by real 86400000 -- the
   // same unit mistake the HOS screens already fixed once.
   const spanMs = 1 * REAL_MS_PER_SIM_DAY
-  assert.equal(Math.round(spanMs / (24 * 60 * 60 * 1000) * 1000), 1, 'one sim day is 1/720 of a literal day')
+  const LITERAL_DAY_MS = 24 * 60 * 60 * 1000
+  assert.equal(LITERAL_DAY_MS / spanMs, 48, 'one sim day is 1/48 of a literal day')
 })

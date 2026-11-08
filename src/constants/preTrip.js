@@ -61,7 +61,7 @@ export const PRE_TRIP_ITEM_KEYS = PRE_TRIP_ITEMS.map((i) => i.key)
 // face. Change the estimate here or nowhere.
 //
 // Simulated days, like every other duration on the company calendar:
-// 30 sim-minutes of walk-around on a day that is 2 real minutes long.
+// 30 sim-minutes of walk-around on a day that is 30 real minutes long.
 //
 // Sources checked 2026-09-26:
 //   rule (no duration): https://csa.fmcsa.dot.gov/safetyplanner/MyFiles/SubSections.aspx?ch=23&sec=68&sub=166

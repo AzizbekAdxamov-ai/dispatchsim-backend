@@ -11,9 +11,29 @@ const MONEY = '(?:\\$\\s*)?(\\d+(?:\\.\\d+)?[kK]|(?:\\d{1,3}(?:,\\d{3})+|\\d{3,5
 const OFFER = new RegExp(`\\b(?:need|want|asking for|seeing (?:this )?lane around|(?:can|could) (?:you|u)(?: meet (?:me|us) at| do)?|how about|what about|offer|pay|take (?:it|this|the load) for|run (?:it|this) for|do (?:it|this) for)\\s+${MONEY}(?![\\d.,])`, 'gi')
 const ACCEPT_AT = new RegExp(`\\b(?:accept|agree (?:on|to)|take (?:it|this|the load) (?:at|for)|book (?:it|this|the load) (?:at|for)|works? (?:at|for)|if (?:you|u) can do|i can (?:cover|take) (?:it|this|the load)?\\s*at)\\s+${MONEY}(?![\\d.,])`, 'gi')
 const AMOUNT_FIRST = new RegExp(`^\\s*(?:(?:aight|alright|all right|okay|ok|yeah|yes)[, ]+)?${MONEY}\\s*(?:(?:all[- ]?in|total(?: including fuel)?|linehaul(?: plus fuel)?)\\s*)?(?:works(?: for (?:me|us))?|is (?:fine|good)|(?:is )?accepted|(?:is )?agreed)(?:[, ]+(?:bro(?:ther)?|man))?(?:[, ]+let'?s run it)?[.!]?\\s*$`, 'i')
+// "yes $3500 all in, book it" / "3500 works book it" / "ok 3500 deal": an amount
+// plus a booking word, with no "at" to carry it. It confirms the broker's own
+// quote; a higher figure is only an ask. At least one accept word is required.
+const AMOUNT_BOOK = new RegExp(`^\\s*(?:(?:ok(?:ay)?|yes|yeah|alright)[, ]+)?${MONEY}\\s*(?:all[- ]?in|total)?[, ]*(?:works|is fine|deal|agreed)?[, ]*(?:(?:let'?s )?book it|deal|let'?s do it|send (?:the )?(?:rc|rate con))[.!]?\\s*$`, 'i')
+// An amount and a booking word that no rule above could place.
+const BOOK_WORD_RE = /\b(?:book it|deal|works|let'?s do it)\b/i
+// Cancelling the thing under discussion. Not a hold: nothing is paused, it is
+// dropped. "cancel it for 3400" names a price, not the load, and stays a haggle.
+const CANCEL_RE = /\b(?:cancel|call off|scrap)\w*\s+(?:it|this|that|the (?:load|deal|booking|rate\s*con(?:firmation)?|rc))\b(?!\s+(?:for|at)\s+\$?\d)|^\s*cancel[.!]?\s*$/i
+export const NOT_BOOKED_CANCEL_LINE = "No problem, nothing's booked on this one. Want something else?"
+export const AGREEMENT_DROPPED_LINE = "Okay, I'm pulling the rate con. Nothing's booked."
+// Intents that clear a recipient already on the conversation.
+const WITHDRAWING_INTENTS = Object.freeze(['hold', 'cancel'])
+const TRAILING_SEPARATORS = /[,\s]+$/
+// "3500 book it, send the rate con to a@b.com": the instruction leaves with the
+// address, or its verb would stay behind and break the booking phrase.
+const EMAIL_INSTRUCTION = new RegExp(
+  String.raw`(?:[,;]\s*|\s+)(?:and\s+)?(?:please\s+)?(?:(?:send|email|put)(?:\s+(?:it|the\s+(?:rate\s*con(?:firmation)?|rc|paperwork)))?(?:\s+(?:to|on))?|(?:my|our)\s+e-?mail\s*(?:is|:)|e-?mail\s*(?:is|:)?|rc\s+to)\s+${EMAIL.source}`,
+  'gi')
+export const confirmBookLine = (quoted) => `${quoted} - we good to book?`
 const ACCEPT = /^(?:(?:ok(?:ay)?|yes|great|thanks)[,!. ]+)*(?:i(?:'ll| will)|we(?:'ll| will)) take (?:it|this|the load)[.!]?\s*$|^(?:(?:ok(?:ay)?|yes)[,!. ]+)*(?:deal|agreed|book it|lets? do it|it'?s fine|that'?s fine|send (?:the )?(?:rc|rate con)|confirmed|sounds good|(?:that(?: rate)?|the rate|your rate|your offer) works(?: for (?:me|us))?|i accept(?: your (?:rate|offer))?)[.!]?\s*$/i
 const NATURAL_ACCEPT = /^(?:ok(?:ay)?\s+)?(?:let'?s book it|let'?s do it|the rate works(?:\s+we can book it)?|works for me|that works|it'?s fine|that'?s fine|deal|send (?:the )?(?:rc|rate con)|confirmed|sounds good(?:,?\s+book it)?|we(?:'ll| will) take it|i(?:'ll| will) take it)[.!]?$/i
-const HOLD = /\b(?:hold (?:off|up)|on hold|not ready|don't (?:book|send|issue|confirm)|do not (?:book|send|issue|confirm)|not (?:book|confirm|accept)(?:ing|ed)? yet|before (?:we|i) (?:book|confirm)|let me (?:check|confirm|verify)|gotta check (?:with )?(?:my|our|the) driver|wait for (?:my|our) confirmation|cancel (?:it|this|the load)|release (?:it|this|the load))\b/i
+const HOLD = /\b(?:hold (?:off|up)|on hold|not ready|don't (?:book|send|issue|confirm)|do not (?:book|send|issue|confirm)|not (?:book|confirm|accept)(?:ing|ed)? yet|before (?:we|i) (?:book|confirm)|let me (?:check|confirm|verify)|gotta check (?:with )?(?:my|our|the) driver|wait for (?:my|our) confirmation|release (?:it|this|the load))\b/i
 const WALK = /\b(?:i(?:'ll| will) pass|we(?:'ll| will) pass|pass on (?:it|this)|walk away|find another (?:truck|carrier))\b/i
 const MORE = /\b(?:do better|too light|need more|pay more|(?:to{1,2}|kinda) low|too cheap|more money|bump (?:it|the rate)|add (?:a )?(?:little|litle)(?: bit)?|what(?:'s| is) your best|work (?:on|with me on) (?:the |ur |your )?rate|(?:come on,?\s+)?(?:a\s+)?(?:little|lil|litle)(?:\s+bit)?\s+more(?=\s*(?:[?.!,]|$|pls\b|please\b|on (?:the |ur |your )?rate\b|money\b)))\b/i
 // A negation only governs the words after the last of these: in "I can't cover
@@ -189,6 +209,24 @@ function authorizedRecipient(src) {
   return emails.length > 1 ? { emails: [], useOwnEmail: false } : { emails, useOwnEmail }
 }
 
+// The recipient the dispatcher last authorised in an earlier message. An email
+// given before the rate was agreed is still the one for the paper. Newest
+// first, and the newest message that names an email settles it: a retraction
+// ("don't send it to a@b.com") or a conditional leaves nobody, it does not
+// revive an older address. A hold or cancel also clears it (the repository
+// clears the recipient on those), so nothing older may come back.
+export function lastAuthorizedEmail(texts) {
+  for (const text of [...(texts ?? [])].reverse()) {
+    const plain = intentText(text)
+    if (new RegExp(EMAIL.source, 'i').test(plain)) {
+      const { emails } = authorizedRecipient(plain)
+      return emails.length === 1 ? emails[0] : null
+    }
+    if (WITHDRAWING_INTENTS.includes(chatIntent(text).kind)) return null
+  }
+  return null
+}
+
 export function chatIntent(raw, rateSource = null) {
   const src = intentText(raw).replace(/(\b(?:can|could)(?:\s+(?:you|u|we|sir))?)\s*(add (?:more|some money))\.\s*(?=[^;!?]*\bfor (?:example|exaple|exapmle|exmaple|exampel)\b)/gi, '$1 $2, ')
   // A mixed price acceptance/email cannot authorize a prohibited handoff.
@@ -211,17 +249,18 @@ export function chatIntent(raw, rateSource = null) {
   if (keyed && keyed.kind !== 'push' && !new RegExp(MONEY, 'i').test(src)) return keyed
   // Quoted or hypothetical hold examples do not withdraw a real agreement.
   const activeClauses = src.replace(QUOTED, ' ').replace(EMAIL, ' ').split(/[;!?\n]|\.(?!\d)/).filter((clause) => !HYPOTHETICAL.test(clause))
-  if (activeClauses.some((clause) => {
-    const matches = [...clause.matchAll(new RegExp(HOLD.source, 'gi')),
-      ...clause.matchAll(/\b(?:reject|decline) (?:your |the )?(?:rate|offer|load)\b/gi)]
-    // Only a negation governing this instruction cancels it. An earlier
-    // "didn't say book it" or "not sure" cannot erase a later active hold.
-    const denied = /\b(?:don't|do not|didn't|did not|won't|will not|can't|cannot|not|never)\s+(?:(?:want|intend|plan|mean|need)\s+to\s+|(?:say|ask|tell)\s+(?:(?:you|them)\s+)?(?:to\s+)?)?$/i
-    return matches.some((match) => !denied.test(clause.slice(0, match.index))) || /^\s*(?:cancel|stop|hold|wait)[.!]?\s*$/i.test(clause)
-  })) return { kind: 'hold' }
+  // Only a negation governing this instruction cancels it. An earlier
+  // "didn't say book it" or "not sure" cannot erase a later active hold.
+  const denied = /\b(?:don't|do not|didn't|did not|won't|will not|can't|cannot|not|never)\s+(?:(?:want|intend|plan|mean|need)\s+to\s+|(?:say|ask|tell)\s+(?:(?:you|them)\s+)?(?:to\s+)?)?$/i
+  const active = (clause, matches) => matches.some((match) => !denied.test(clause.slice(0, match.index)))
+  // Cancel is read before hold: "cancel it" used to be a hold, and the broker
+  // answered that the load was "cancelled and on hold".
+  if (activeClauses.some((clause) => active(clause, [...clause.matchAll(new RegExp(CANCEL_RE.source, 'gi'))]))) return { kind: 'cancel' }
+  if (activeClauses.some((clause) => active(clause, [...clause.matchAll(new RegExp(HOLD.source, 'gi')),
+    ...clause.matchAll(/\b(?:reject|decline) (?:your |the )?(?:rate|offer|load)\b/gi)]) || /^\s*(?:stop|hold|wait)[.!]?\s*$/i.test(clause))) return { kind: 'hold' }
   const { emails, useOwnEmail } = authorizedRecipient(src)
   // Quotes, negated intentions and conditional examples are never a handshake.
-  const clauses = amountSrc.replace(QUOTED, ' ').replace(EMAIL, ' ').split(/[;!?\n]|\.(?!\d)/)
+  const clauses = amountSrc.replace(QUOTED, ' ').replace(EMAIL_INSTRUCTION, ' ').replace(EMAIL, ' ').split(/[;!?\n]|\.(?!\d)/)
   const amounts = []
   const basisHints = []
   const addAmount = (token, clause) => {
@@ -230,6 +269,7 @@ export function chatIntent(raw, rateSource = null) {
       linehaul: /\blinehaul\b|\bplus (?:the )?fuel\b|\+\s*fuel\b/i.test(clause) })
   }
   let acceptsAmount = false
+  let confirmsOffer = false
   for (const clause of clauses) {
     // A concrete counter introduced with "for example" is a request, not a
     // hypothetical story. Preserve every other conditional/quotation veto.
@@ -258,6 +298,8 @@ export function chatIntent(raw, rateSource = null) {
     // so a negation anywhere in the clause still voids it.
     const first = NEGATIVE.test(clause) ? null : AMOUNT_FIRST.exec(clause)
     if (first) { addAmount(first[1], clause); acceptsAmount = true }
+    const book = NEGATIVE.test(clause) ? null : AMOUNT_BOOK.exec(clause.replace(TRAILING_SEPARATORS, ''))
+    if (book) { addAmount(book[1], clause); acceptsAmount = true; confirmsOffer = true }
     const lets = NEGATIVE.test(clause) ? null : LETS_OFFER.exec(clause)
     if (lets) addAmount(lets[1], clause)
   }
@@ -271,7 +313,7 @@ export function chatIntent(raw, rateSource = null) {
     const totalSpecified = basisHints.some((hint) => hint.total)
     const linehaulSpecified = basisHints.some((hint) => hint.linehaul)
     if (split && totalSpecified === linehaulSpecified) return { kind: 'ambiguous_rate', requestedAmountUsd: unique[0], emails, useOwnEmail }
-    return { kind: acceptsAmount ? 'accept_amount' : 'offer', rateUsd: unique[0] + (split && linehaulSpecified ? rateSource.fuelSurchargeUsd : 0), ...(keyed?.reason ? { reason: keyed.reason } : {}), emails, useOwnEmail }
+    return { kind: acceptsAmount ? 'accept_amount' : 'offer', rateUsd: unique[0] + (split && linehaulSpecified ? rateSource.fuelSurchargeUsd : 0), ...(confirmsOffer ? { confirmsOffer: true } : {}), ...(keyed?.reason ? { reason: keyed.reason } : {}), emails, useOwnEmail }
   }
   if (unique.length > 1) return { kind: 'ambiguous' }
   // Permit an explicit acceptance followed by an email instruction, but no conditional price.
@@ -331,7 +373,7 @@ export function negotiationState(conversation, posting) {
   }
 }
 
-export function negotiate({ conversation, posting, text, booking, truck, effectiveEmail = null, now = new Date(), offerVisible = false }) {
+export function negotiate({ conversation, posting, text, booking, truck, effectiveEmail = null, knownEmail = null, now = new Date(), offerVisible = false }) {
   const previous = negotiationState(conversation, posting)
   const state = { ...previous }
   const pending = previous.pendingClose
@@ -364,6 +406,12 @@ export function negotiate({ conversation, posting, text, booking, truck, effecti
     line = 'Do you mean the total including fuel, or linehaul plus the listed fuel amount?'
   } else if (intent.kind === 'hold') {
     clear(); state.stage = 'held'; line = 'Understood. I will hold off on the rate confirmation until you confirm.'
+  } else if (intent.kind === 'cancel') {
+    // Nothing is booked yet, so there is nothing to block; an agreed rate that
+    // was not signed is dropped. (A load named outright on an agreed or booked
+    // thread is handled before this, by cancellationDecision.)
+    if (state.agreed === null) line = NOT_BOOKED_CANCEL_LINE
+    else { clear(); line = AGREEMENT_DROPPED_LINE }
   } else if (intent.kind === 'ask_room') {
     // Room questions receive the next authorized counter without exposing
     // the ceiling; this is the broker's normal first bargaining step.
@@ -377,11 +425,15 @@ export function negotiate({ conversation, posting, text, booking, truck, effecti
     if (state.agreed !== null && (amount !== state.agreed || intent.kind === 'push')) clear()
     if (amount < min || amount > max) {
       line = `I cannot do that figure. My offer is ${quote(state.offer)}.`
-    } else if (intent.kind === 'accept_amount' && amount <= ceilingFor(posting)) {
+    } else if (intent.kind === 'accept_amount' && !intent.confirmsOffer && amount <= ceilingFor(posting)) {
       // A conditional close settles anywhere inside the broker's authorized
-      // ceiling, even when it is above the current quote.
+      // ceiling, even when it is above the current quote. Above the ceiling it
+      // is only an ask and goes to the ladder below ("book it at 9000" used to
+      // be booked at 9000).
       agree(amount)
-    } else if ((intent.kind === 'accept_amount' || (intent.kind === 'offer' && amount <= state.offer))) {
+    } else if ((intent.kind === 'offer' || intent.confirmsOffer) && amount <= state.offer) {
+      // "yes 3500 book it" confirms a quote at or below ours; above ours it is
+      // an ask like any other offer.
       // Record the validated settlement attempt even when MC verification
       // prevents agreement. Prompt and guard must allow that required question.
       bookingRequested = true
@@ -424,6 +476,10 @@ export function negotiate({ conversation, posting, text, booking, truck, effecti
     clear(); state.bestCounterUsed = true
     state.offer = Math.max(state.offer, ceilingFor(posting))
     line = `Before you go, I can do ${quote(state.offer)}. Would that work?`
+  } else if (['talk', 'ambiguous'].includes(intent.kind) && state.agreed === null && pending === null
+    && new RegExp(MONEY, 'i').test(intentText(text)) && BOOK_WORD_RE.test(intentText(text)) && !NEGATIVE.test(text)) {
+    // A figure and a booking word that no rule could place: ask, never "Noted."
+    line = confirmBookLine(quote(state.offer))
   }
   // A conditional close waits for the MC, not for the price: once the MC
   // checks out on a non-financial turn, the earlier price is agreed. Any
@@ -434,7 +490,7 @@ export function negotiate({ conversation, posting, text, booking, truck, effecti
   }
   // Sharing an email is authorization only after a handshake; never from profile alone.
   if (state.stage === 'awaiting_email' && ['email', 'accept', 'accept_amount', 'offer'].includes(intent.kind)) {
-    const email = intent.emails?.length === 1 ? intent.emails[0] : intent.useOwnEmail ? effectiveEmail : null
+    const email = intent.emails?.length === 1 ? intent.emails[0] : intent.useOwnEmail ? effectiveEmail : knownEmail
     if (email && !verified) {
       line = ['mismatch', 'unverifiable'].includes(booking?.mc?.verdict) ? 'What is your correct MC?' : "What's your MC?"
     } else if (email && (truck?.makesIt === false || booking?.trailer?.fits === false)) {
@@ -446,7 +502,7 @@ export function negotiate({ conversation, posting, text, booking, truck, effecti
   } else if (intent.kind === 'email' && state.agreed === null) {
     line = `Before I prepare the rate confirmation, can you confirm ${quote(state.offer)}?`
   }
-  return { state, intent, changed, issuePaper, invalidatePaper, bookingRequested, line,
+  return { state, intent, changed, issuePaper, invalidatePaper, bookingRequested, line, knownEmail,
     previousOfferUsd: previous.offer,
     // The carrier gave a reason the load's facts do not support: the reply
     // must not repeat it as fact (live #209 "Reloads are weak").

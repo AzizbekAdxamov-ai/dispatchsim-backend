@@ -6,6 +6,7 @@ import {
   sendMessageSchema,
   agreeRateSchema,
 } from './brokerChat.schemas.js'
+import { loadIdSchema } from '../loads/loads.schemas.js'
 import * as service from './brokerChat.service.js'
 import { rateConInput } from './rateConInput.js'
 import { getCarrier } from '../carrier/carrier.repository.js'
@@ -13,6 +14,20 @@ import { getCarrier } from '../carrier/carrier.repository.js'
 export async function openConversation(req, res) {
   const postingId = postingIdSchema.parse(req.params.postingId)
   const result = await service.openConversation({ postingId, userId: req.auth.userId })
+  res.status(200).json(result)
+}
+
+// POST /broker-chat/loads/:loadId — the thread behind a booked load.
+export async function openLoadConversation(req, res) {
+  const loadId = loadIdSchema.parse(req.params.loadId)
+  const result = await service.openLoadConversation({ loadId, userId: req.auth.userId })
+  res.status(200).json(result)
+}
+
+// POST /broker-chat/loads/:loadId/cancel -- cancel the booking with the broker.
+export async function cancelBookingForLoad(req, res) {
+  const loadId = loadIdSchema.parse(req.params.loadId)
+  const result = await service.cancelBookingForLoad({ loadId, userId: req.auth.userId })
   res.status(200).json(result)
 }
 

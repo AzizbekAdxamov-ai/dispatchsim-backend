@@ -190,6 +190,8 @@ export const IDLE_TRUCKS_SQL = `
                    'hosRemainingMin', d.hos_remaining_min,
                    'currentCity', d.current_city,
                    'currentState', d.current_state,
+                   'homeBaseCity', d.home_base_city,
+                   'homeBaseState', d.home_base_state,
                    'lat', d.current_lat, 'lon', d.current_lon)
             FROM drivers d WHERE d.id = t.driver_id) AS driver
     FROM trucks t

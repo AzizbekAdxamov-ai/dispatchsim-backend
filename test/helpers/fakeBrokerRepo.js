@@ -49,6 +49,8 @@ export function makeFakeBrokerRepo({
     createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
   }
   const blocks = []
+  // The load behind a booked thread; null until a test sets one.
+  const state = { load: null }
   const cancelledLoads = []
   const messages = lines.map((content) => ({ id: `m${++seq}`, role: 'dispatcher', content, kind: 'text' }))
   // What a caller sees, like the real CONVERSATION_COLUMNS: no rate con rate.
@@ -95,7 +97,7 @@ export function makeFakeBrokerRepo({
       conversation.negotiationRevision += 1
       const before = publicRow()
       const intent = chatIntent(text, posting)
-      if (['hold', 'walk', 'push'].includes(intent.kind) || (['offer', 'accept_amount'].includes(intent.kind) && conversation.agreedRateUsd !== null && intent.rateUsd !== conversation.agreedRateUsd)) {
+      if (['hold', 'walk', 'push', 'cancel'].includes(intent.kind) || (['offer', 'accept_amount'].includes(intent.kind) && conversation.agreedRateUsd !== null && intent.rateUsd !== conversation.agreedRateUsd)) {
         await repo.clearRateCon()
         conversation.agreedRateUsd = null
         conversation.recipientEmail = null
@@ -157,10 +159,18 @@ export function makeFakeBrokerRepo({
     async isBrokerBlocked({ brokerId = null, brokerMc = null } = {}) {
       return blocks.some((b) => (brokerId && b.brokerId === brokerId) || (brokerMc && b.brokerMc === brokerMc))
     },
-    async cancelAndBlock({ conversationId, text, line, brokerId = null, brokerMc = null, brokerContact = null }) {
+    async cancelAndBlock({ conversationId, text, line, brokerId = null, brokerMc = null, brokerContact = null, reason = 'carrier_cancelled_agreed_load', alreadyBlocked = false }) {
       const dispatcher = withdrawAndExchange(conversationId, text, line, 'carrier_cancelled')
-      blocks.push({ id: `b${blocks.length + 1}`, brokerId, brokerMc, brokerContact, conversationId })
+      if (alreadyBlocked) return { ...dispatcher, blockId: null }
+      blocks.push({ id: `b${blocks.length + 1}`, brokerId, brokerMc, brokerContact, conversationId, reason })
       return { ...dispatcher, blockId: blocks[blocks.length - 1].id }
+    },
+    async bookedLoadFacts() {
+      return state.load ? { ...state.load } : null
+    },
+    async openLoadConversation(loadId, uid) {
+      if (!state.load || state.load.id !== loadId || uid !== conversation.userId) return null
+      return publicRow()
     },
     async releaseForNoEta({ conversationId, text, line }) {
       return withdrawAndExchange(conversationId, text, line, 'wait_no_eta')
@@ -200,7 +210,7 @@ export function makeFakeBrokerRepo({
   return {
     repo,
     // Test-only handles on the stored state.
-    state: { conversation, messages, blocks, cancelledLoads },
+    state: Object.assign(state, { conversation, messages, blocks, cancelledLoads }),
     deliverAll() { for (const message of messages) message.deliverAt = new Date(0).toISOString() },
     // Put the thread where a booking left it, without going through the gate
     // (for testing the second gate at accept time).

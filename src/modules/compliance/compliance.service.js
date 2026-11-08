@@ -6,7 +6,7 @@
 //
 // Minutes in the response are HOS minutes (literal hours of service),
 // not real minutes: "Drive remaining 480" means eight hours of driving
-// left, which on the compressed calendar passes in 2 minutes 40 seconds.
+// left, which on the compressed calendar passes in 10 real minutes (HOS_TIME_SCALE = 48).
 
 import { AppError } from '../../lib/errors.js'
 import { withTransaction } from '../../db/pool.js'
@@ -229,7 +229,7 @@ export async function driverDayLog({ driverId, dayOffset }) {
 // began is measured from where it really started.
 export async function listViolations({ days }) {
   const since = new Date(Date.now() - simDaysToMs(days + HOS_LOOKBACK_HOURS / 24))
-  const rows = await repo.violationsSource({ since, realSecPerSimDay: REAL_SEC_PER_SIM_DAY })
+  const rows = await repo.violationsSource({ since })
   const drivers = []
   for (const r of rows) {
     const nowMs = new Date(r.now).getTime()

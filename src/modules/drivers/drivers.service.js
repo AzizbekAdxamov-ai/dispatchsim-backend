@@ -11,6 +11,7 @@ import { AppError } from '../../lib/errors.js'
 import { computeProgress } from '../../lib/loadTimeline.js'
 import { fuelPercent } from '../driverChat/driverChat.prompt.js'
 import config from '../../config.js'
+import { whereNow } from '../driverChat/livePlace.js'
 // The assignment itself belongs to fleet and stays there: the idle check,
 // the row lock, the UNIQUE-violation translation. The dispatcher's button
 // calls that same function -- a second copy of "who may drive what" would
@@ -47,13 +48,19 @@ function withTruckFuelPercent(driver) {
   return { ...driver, truck: { ...driver.truck, fuelPercent: fuelPercent(driver.truck) } }
 }
 
+// The one place name every screen shows for the driver (X11): where they
+// are now, not where they live. See livePlace.js's whereNow.
+function withWhereNow(driver, now = new Date()) {
+  return { ...driver, whereNow: whereNow(driver, driver.currentLoad, now) }
+}
+
 export async function listDrivers({ limit }) {
   const [rows, counts] = await Promise.all([
     driversRepo.listDrivers({ limit }),
     driversRepo.countDriverStatuses(),
   ])
 
-  return { drivers: rows.map((d) => withTelegramFlag(withCurrentLoadProgress(d))), meta: { counts } }
+  return { drivers: rows.map((d) => withWhereNow(withTelegramFlag(withCurrentLoadProgress(d)))), meta: { counts } }
 }
 
 export async function getDriverById(id) {
@@ -65,7 +72,7 @@ export async function getDriverById(id) {
   const recentLoads = await loadsRepo.listLoadsByDriverId(id, { limit: 10 })
 
   return {
-    ...withTelegramFlag(withTruckFuelPercent(withCurrentLoadProgress(driver))),
+    ...withWhereNow(withTelegramFlag(withTruckFuelPercent(withCurrentLoadProgress(driver)))),
     recentLoads,
   }
 }

@@ -255,12 +255,14 @@ export async function sendMessage({ conversationId, userId, text, images }) {
   // pending reply and both fell through to a plain insert -- two answers
   // stacked, the exact thing replacePendingReply exists to prevent. The
   // lock makes the second send see the first one's pending reply.
+  // Never '': a blank bubble is worse than a short line (X10).
+  const saved = reply.trim() || FALLBACK_REPLY
   await withTransaction(async (client) => {
     await repo.lockConversation(client, conversationId)
-    const replaced = await repo.replacePendingReply(conversationId, reply.trim(), client)
+    const replaced = await repo.replacePendingReply(conversationId, saved, client)
     if (!replaced) {
       const delaySec = driverReplyDelaySec(context.driver.dutyStatus)
-      await repo.addMessage(conversationId, 'driver', reply.trim(), { delaySec, client })
+      await repo.addMessage(conversationId, 'driver', saved, { delaySec, client })
     }
   })
 
