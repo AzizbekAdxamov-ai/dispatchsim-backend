@@ -35,6 +35,16 @@ export function withMarket(posting) {
   }
 }
 
+// Where deadhead is measured from. kind 'none' = nobody to measure from.
+export function resolveDeadheadFrom({ fromCity, fromState, firstPosting, hasReference }) {
+  if (fromCity && fromState) return { kind: 'location', city: fromCity, state: fromState }
+  if (firstPosting?.nearestDriverId) {
+    return { kind: 'driver', driverId: firstPosting.nearestDriverId, driverName: firstPosting.nearestDriverName }
+  }
+  if (!hasReference) return { kind: 'none' }
+  return null
+}
+
 export async function listPostings(input) {
   const { page, limit, fromCity, fromState, toCity, toState } = input
 
@@ -59,12 +69,10 @@ export async function listPostings(input) {
   // location if one was searched, otherwise the nearest available driver
   // -- and naming the driver is the point: "48 miles" means something
   // different depending on whose truck it is.
-  let deadheadFrom = null
-  if (fromCity && fromState) {
-    deadheadFrom = { kind: 'location', city: fromCity, state: fromState }
-  } else if (postings.length > 0 && postings[0].nearestDriverId) {
-    deadheadFrom = { kind: 'driver', driverId: postings[0].nearestDriverId, driverName: postings[0].nearestDriverName }
-  }
+  // No origin typed and no driver to measure from: only then ask the fleet.
+  const needsFleetCheck = !(fromCity && fromState) && !postings[0]?.nearestDriverId
+  const hasReference = needsFleetCheck ? await loadBoardRepo.hasAvailableDriver() : true
+  const deadheadFrom = resolveDeadheadFrom({ fromCity, fromState, firstPosting: postings[0], hasReference })
 
   const deadheadTo = toCity && toState ? { city: toCity, state: toState } : null
 
@@ -79,7 +87,8 @@ export async function listPostings(input) {
       // the radius widened. Stated, not acted on: the board does not
       // widen anything by itself.
       total: counts.matching,
-      nearby: counts.nearby,
+      // With no reference point nothing can be "outside the radius".
+      nearby: deadheadFrom?.kind === 'none' ? 0 : counts.nearby,
     },
   }
 }

@@ -23,6 +23,7 @@ import {
   buildListPostingsSql,
   buildCountPostingsSql,
 } from '../src/modules/loadBoard/loadBoard.repository.js'
+import { resolveDeadheadFrom } from '../src/modules/loadBoard/loadBoard.service.js'
 import { listPostingsSchema } from '../src/modules/loadBoard/loadBoard.schemas.js'
 import { CITIES } from '../scripts/seed/cities.js'
 
@@ -174,4 +175,30 @@ test('half a destination, and a backwards window, are refused', () => {
   assert.throws(() => listPostingsSchema.parse({
     pickupFrom: '2026-09-28T00:00:00Z', pickupBefore: '2026-09-27T00:00:00Z',
   }))
+})
+
+// Kills: the `duty_status <> 'off'` filter coming back (a freshly seeded
+// fleet is all 'off', so every posting would lose its DH-O and fall outside
+// the radius), and an active-load rule of `<> 'done'` that counts cancelled
+// and booked-not-dispatched loads as pinning a driver.
+test('the fleet reference point accepts resting drivers and excludes only dispatched loads', () => {
+  for (const build of [buildListPostingsSql, buildCountPostingsSql]) {
+    const { text } = build({ ...BASE, maxDeadheadMi: 150 })
+    assert.doesNotMatch(text, /duty_status/)
+    assert.match(text, /l\.status IN \('ontime','warn','crit'\)/)
+    assert.doesNotMatch(text, /l\.status <> 'done'/)
+  }
+})
+
+// Kills: "outside the radius" being reported when there is nobody to
+// measure deadhead from.
+test('no origin, no driver and no posting driver reports kind none', () => {
+  const none = resolveDeadheadFrom({ firstPosting: undefined, hasReference: false })
+  assert.deepEqual(none, { kind: 'none' })
+  assert.equal(resolveDeadheadFrom({ firstPosting: undefined, hasReference: true }), null)
+  assert.equal(resolveDeadheadFrom({ fromCity: 'Dallas', fromState: 'TX', hasReference: false }).kind, 'location')
+  assert.equal(
+    resolveDeadheadFrom({ firstPosting: { nearestDriverId: 'd1', nearestDriverName: 'A' }, hasReference: false }).kind,
+    'driver',
+  )
 })

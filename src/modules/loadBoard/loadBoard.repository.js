@@ -13,6 +13,12 @@
 import { query } from '../../db/pool.js'
 import { CITIES } from '../../../scripts/seed/cities.js'
 import { statesInZone } from '../../constants/zones.js'
+import { DISPATCHED_STATUSES } from '../loads/loadWithdrawal.js'
+
+// One definition of "on an active load": dispatched and out on a run. A
+// booked-not-dispatched ('neutral') or cancelled load does not pin a driver.
+// Fixed literals from the constant, so inlining them into SQL is safe.
+const ACTIVE_LOAD_STATUS_SQL = DISPATCHED_STATUSES.map((s) => `'${s}'`).join(',')
 
 const POSTING_COLUMNS = `
   p.id, p.origin_city AS "originCity", p.origin_state AS "originState",
@@ -57,9 +63,10 @@ const BROKER_COLUMNS = `
 // fields, never as a vanished row.
 const BROKER_JOIN = `LEFT JOIN brokers b ON b.id = p.broker_id`
 
-// LEFT JOIN LATERAL: find the nearest available (not off-duty, no active
-// load) driver to this posting's origin. Returns NULL when no driver has
-// coordinates or all eligible drivers are off-duty.
+// LEFT JOIN LATERAL: find the nearest driver with coordinates who is not on
+// an active load. A resting/off-duty driver counts: they are standing in a
+// city, which is a valid reference point. Returns NULL when no driver has
+// coordinates or all of them are out on a run.
 const DEADHEAD_LATERAL = `
   LEFT JOIN LATERAL (
     SELECT d.id, d.name, d.hos_remaining_min AS "hosRemainingMin",
@@ -67,10 +74,9 @@ const DEADHEAD_LATERAL = `
     FROM drivers d
     WHERE d.current_lat IS NOT NULL
       AND d.current_lon IS NOT NULL
-      AND d.duty_status <> 'off'
       AND NOT EXISTS (
         SELECT 1 FROM loads l
-        WHERE l.driver_id = d.id AND l.status <> 'done'
+        WHERE l.driver_id = d.id AND l.status IN (${ACTIVE_LOAD_STATUS_SQL})
       )
     ORDER BY mi ASC
     LIMIT 1
@@ -91,10 +97,9 @@ const BASE_CTE_FLEET = `
       FROM drivers d
       WHERE d.current_lat IS NOT NULL
         AND d.current_lon IS NOT NULL
-        AND d.duty_status <> 'off'
-        AND NOT EXISTS (
+          AND NOT EXISTS (
           SELECT 1 FROM loads l
-          WHERE l.driver_id = d.id AND l.status <> 'done'
+          WHERE l.driver_id = d.id AND l.status IN (${ACTIVE_LOAD_STATUS_SQL})
         )
       ORDER BY road_miles(d.current_lat, d.current_lon, p.origin_lat, p.origin_lon) ASC
       LIMIT 1
@@ -488,17 +493,16 @@ export async function getFleetEquipmentKeys() {
   return new Set(result.rows.map((r) => r.trailerType))
 }
 
-// Check if at least one driver is available (duty_status <> 'off' and
-// no active load). Used by the 'no-available-driver' warning.
+// Check if at least one driver is available (has coordinates, no active
+// load; resting/off-duty drivers count). Used by the 'no-available-driver' warning.
 export async function hasAvailableDriver() {
   const result = await query(
     `SELECT 1 FROM drivers d
-     WHERE d.duty_status <> 'off'
-       AND d.current_lat IS NOT NULL
+     WHERE d.current_lat IS NOT NULL
        AND d.current_lon IS NOT NULL
        AND NOT EXISTS (
          SELECT 1 FROM loads l
-         WHERE l.driver_id = d.id AND l.status IN ('ontime','warn','crit')
+         WHERE l.driver_id = d.id AND l.status IN (${ACTIVE_LOAD_STATUS_SQL})
        )
      LIMIT 1`,
   )
@@ -512,12 +516,11 @@ export async function findNearestAvailableDriver(originLat, originLon) {
     `SELECT d.id, d.name, d.hos_remaining_min AS "hosRemainingMin",
            road_miles(d.current_lat, d.current_lon, $1, $2)::int AS "deadheadMi"
      FROM drivers d
-     WHERE d.duty_status <> 'off'
-       AND d.current_lat IS NOT NULL
+     WHERE d.current_lat IS NOT NULL
        AND d.current_lon IS NOT NULL
        AND NOT EXISTS (
          SELECT 1 FROM loads l
-         WHERE l.driver_id = d.id AND l.status IN ('ontime','warn','crit')
+         WHERE l.driver_id = d.id AND l.status IN (${ACTIVE_LOAD_STATUS_SQL})
        )
      ORDER BY road_miles(d.current_lat, d.current_lon, $1, $2) ASC
      LIMIT 1`,
