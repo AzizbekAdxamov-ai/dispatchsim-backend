@@ -38,7 +38,29 @@ function loadNationRings() {
   return JSON.parse(src.slice(start + marker.length, end).trim().replace(/;$/, ''))
 }
 
-const NATION_RINGS = loadNationRings()
+// Read on first use, not at import. The deployed API (Vercel) ships the
+// backend repo alone -- there is no frontend/ beside it -- and an import-time
+// read crashed every function on start (2026-11-08, ENOENT usMap.js). The
+// API only needs this file's constants and route math; the land mask is for
+// the stop generator. Without the frontend file the mask is null and
+// isOnLand accepts the point (logged once): no stop is dropped, none is
+// invented, and the seed scripts, which run beside the frontend, keep it.
+let nationRingsCache
+let nationRingsWarned = false
+export function nationRings() {
+  if (nationRingsCache !== undefined) return nationRingsCache
+  try {
+    nationRingsCache = loadNationRings()
+  } catch (err) {
+    if (err?.code !== 'ENOENT') throw err
+    nationRingsCache = null
+    if (!nationRingsWarned) {
+      nationRingsWarned = true
+      console.warn('[facilities] frontend usMap.js not found -- US land mask off')
+    }
+  }
+  return nationRingsCache
+}
 
 // Deliberately imports NOTHING from vocabulary.js/vocabularySchema.js/
 // validate.js, even though vocabularySchema.js imports MAX_STOPS_PER_ROUTE
@@ -366,7 +388,8 @@ export function offsetPoint(lat, lon, bearingRad, distanceMi) {
 // along one meridian. Islands count (they are land); the Great Lakes do
 // not (their water is outside the dissolved outer boundary). Pure, and
 // exported for the tests: the coastal-city mutation lives or dies here.
-export function isOnLand(lat, lon, rings = NATION_RINGS) {
+export function isOnLand(lat, lon, rings = nationRings()) {
+  if (rings === null) return true
   let inside = false
   for (const ring of rings) {
     // A cheap bounding check first: most candidate points are far from
