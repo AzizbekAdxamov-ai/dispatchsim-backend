@@ -22,6 +22,7 @@ import { stripSpeakerLabel } from '../../lib/speakerLabel.js'
 import { getCarrier, carrierEmail } from '../carrier/carrier.repository.js'
 import { findById } from '../auth/users.repository.js'
 import { negotiate, lastAuthorizedEmail, RATE_MISS_REASON } from './negotiation.js'
+import { varyRepeat } from './repeatGuard.js'
 import { buildBrokerContext } from './brokerContext.js'
 import * as repo from './brokerChat.repository.js'
 import { talkFacts } from '../../constants/freightTerms.js'
@@ -364,6 +365,9 @@ export async function sendMessage({ conversationId, userId, text }, { deps = DEF
       }
       else if (remaining) console.warn(`[brokerChat] regenerated reply still ${remaining.why}`)
     }
+    // Whatever is still the same answer as a moment ago (a fixed line, or a
+    // regeneration that did not change) goes out with a spoken lead-in.
+    reply = varyRepeat(reply, brokerSaid)
   } catch (err) {
     failure = err.message
     console.error(`[brokerChat] model call failed: ${err.message}`)

@@ -18,7 +18,8 @@ import { blockUntil, BROKER_BLOCK_DAYS, BLOCK_REASON_CARRIER_CANCEL, BLOCK_REASO
 // was one who did not open dev tools.
 //
 // Booking reads it server-side through getAgreedRate, and the PDF prints
-// it once rateConDelivered() says the broker has sent it.
+// it once rateConDelivered() says the broker has sent it. listMessages
+// returns it on a delivered, unvoided rate con row, for the card.
 const CONVERSATION_COLUMNS = `
   c.id, c.posting_id AS "postingId", c.user_id AS "userId",
   c.agreed_rate_usd AS "agreedRateUsd", c.status,
@@ -87,10 +88,16 @@ export async function getConversation(conversationId, userId) {
 // second window cannot skip it.
 export async function listMessages(conversationId) {
   const result = await query(
-    `SELECT id, role, content, kind, created_at AS "createdAt"
-       FROM broker_messages
-      WHERE conversation_id = $1 AND deliver_at <= now()
-      ORDER BY deliver_at ASC, created_at ASC, id ASC`,
+    `SELECT m.id, m.role, m.content, m.kind, m.created_at AS "createdAt", m.voided_at AS "voidedAt",
+            -- The paper's own figures, only on a rate con that has arrived (deliver_at
+            -- below) and was not voided: the dispatcher reads them on the card.
+            CASE WHEN m.kind = 'rate_con' AND m.voided_at IS NULL THEN c.rate_con_rate_usd END AS "rateConRateUsd",
+            CASE WHEN m.kind = 'rate_con' AND m.voided_at IS NULL THEN c.rate_con_basis END AS "rateConBasis",
+            CASE WHEN m.kind = 'rate_con' AND m.voided_at IS NULL THEN c.rate_con_fuel_surcharge_usd END AS "rateConFuelSurchargeUsd"
+       FROM broker_messages m
+       JOIN broker_conversations c ON c.id = m.conversation_id
+      WHERE m.conversation_id = $1 AND m.deliver_at <= now()
+      ORDER BY m.deliver_at ASC, m.created_at ASC, m.id ASC`,
     [conversationId],
   )
   return result.rows

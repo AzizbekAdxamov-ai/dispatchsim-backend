@@ -20,7 +20,8 @@ import {
 import { weightChangeAgreed, weightHoldLine } from './weightTalk.js'
 import { personaBreak } from '../../lib/personaBreak.js'
 import { paperClaimProblem, paperNextLine } from './paperTalk.js'
-import { negotiationReplyProblem, bookingTurn } from './negotiation.js'
+import { negotiationReplyProblem, bookingTurn, confirmBookLine } from './negotiation.js'
+import { repeatsRecent } from './repeatGuard.js'
 import { introductionOnly, introductionReply } from './turnTalk.js'
 import { quoteText } from './rateQuote.js'
 import { proposesRebroker, agreesRebroker, refusesRebroker, ONE_CARRIER_RULE, ONE_CARRIER_REPLY } from './carrierPolicy.js'
@@ -37,6 +38,14 @@ export const WRONG_MC_LINE = "That MC isn't showing up on our end. What's your c
 // 2026-11-06: "provide the authorized email address"). A broker just asks.
 const AUTH_JARGON_RE = /\bauthori[sz]ed\s+(?:e-?mail(?:\s+address)?|recipient|address)\b|\brecipient\s+e-?mail\b/i
 const ASK_EMAIL_LINE = 'What email should I send the rate con to?'
+// "Which email should I use?" when the thread already has one: a broker who did not read.
+const ASKS_EMAIL_RE = /\b(?:which|what)\s+e-?mail\b[^?]*\?/i
+// A bare acknowledgement ("Noted.") to a message that carried booking details.
+const BARE_ACK_RE = /^\s*(?:noted|confirmed|got it|ok(?:ay)?)[.!]?\s*$/i
+const GAVE_BOOKING_INFO_RE = /\bdriver\b|@/i
+// "...cancelled and remains on hold": a cancel is not a hold.
+const SAYS_CANCELLED_RE = /\bcancel(?:l?ed)?\b/i
+const SAYS_ON_HOLD_RE = /\bon hold\b/i
 const MARKDOWN = /\*\*|__|`/
 const HELP_DESK_CLOSING = /please let me know if you have any other concerns|thank you,?\s*mc\b/i
 const QUESTION_MARK = /\?/g
@@ -163,6 +172,11 @@ export function brokerReplyProblem(reply, {
     hint: ' Return only their greeting and optionally your own name. Do not volunteer a lane, availability or price.',
     unusable: true, safeReply: introductionReply(),
   }
+  if (negotiation?.intent?.kind === 'cancel' && SAYS_CANCELLED_RE.test(reply) && SAYS_ON_HOLD_RE.test(reply)) return {
+    why: 'called a cancelled load both cancelled and on hold',
+    hint: ' A cancel is a cancel: nothing is on hold. Follow the decision line.',
+    unusable: true, safeReply: negotiation.line ?? discussionReply(text ?? '', posting ?? {}, negotiation),
+  }
   const rateProblem = negotiationReplyProblem(reply, negotiation)
   if (rateProblem) {
     // A figure-less confirmation is fixed by spelling the number out; every
@@ -177,10 +191,25 @@ export function brokerReplyProblem(reply, {
       unusable: true, safeReply: negotiation.line ?? `My offer is ${quoteText(negotiation.rateQuote ?? {}, negotiation.state.offer)}.`,
     }
   }
+  // The thread already has the email for the paper (given before or at the agreement).
+  const hasEmailOnFile = Boolean(negotiation?.knownEmail || negotiation?.state?.recipient)
   if (AUTH_JARGON_RE.test(reply)) return {
     why: 'used help-desk wording for the email request',
     hint: ' Ask which email to send the rate con to, in plain desk words; never say "authorized" or "recipient".',
-    unusable: true, safeReply: negotiation?.line ?? ASK_EMAIL_LINE,
+    unusable: true, safeReply: negotiation?.line ?? (hasEmailOnFile ? paperNextLine(paper) : ASK_EMAIL_LINE),
+  }
+  if (hasEmailOnFile && ASKS_EMAIL_RE.test(reply)) return {
+    why: 'asked for an email the dispatcher already gave',
+    hint: ' They already gave the email for the rate confirmation: do not ask for it again.',
+    unusable: true, safeReply: negotiation.line ?? paperNextLine(paper),
+  }
+  // Booking details given, nothing agreed, and the answer is a bare "Noted.".
+  if (negotiation && negotiation.state.agreed === null && BARE_ACK_RE.test(reply)
+    && (bookingTurn(text ?? '', negotiation) || GIVES_MC.test(text ?? '') || GAVE_BOOKING_INFO_RE.test(text ?? ''))) return {
+    why: 'acknowledged their booking details with a bare "Noted."',
+    hint: ' Answer what they said: the current offer, or the one thing still missing.',
+    unusable: true,
+    safeReply: negotiation.line ?? (posting ? confirmBookLine(quoteText(negotiation.rateQuote ?? posting, negotiation.state.offer)) : undefined),
   }
   if (negotiation?.unverifiedReason && echoesCarrierClaim(reply, text ?? '')) return {
     why: "repeated the carrier's unverified claim as fact",
@@ -322,6 +351,13 @@ export function brokerReplyProblem(reply, {
   if (negotiation && /\bC[SD]T\b/.test(reply)) return {
     why: 'used an ambiguous Central time abbreviation', hint: ' Say Central Time, as the appointments are written.',
     unusable: true, safeReply: reply.replace(/\bC[SD]T\b/g, 'Central Time'),
+  }
+  // Last: the same answer twice in a row. One regeneration is enough; the
+  // service then puts a short lead-in on whatever is still a repeat.
+  if (repeatsRecent(reply, brokerSaid)) return {
+    why: 'repeated your previous reply almost word for word',
+    hint: ' Same facts and figure, new wording; add the next useful point.',
+    unusable: false,
   }
   return null
 }
