@@ -148,7 +148,7 @@ export async function getThread({ conversationId, userId }, { deps = DEFAULT_DEP
 
 // The booked-thread path. Fixed lines from recorded facts (postBookingPolicy.js):
 // no model, no budget, and nothing here can write the agreed rate.
-async function sendPostBooking({ conversation, posting, userId, text, brokerBlocked }, deps) {
+async function sendPostBooking({ conversation, posting, userId, text, brokerBlocked, cancelBooking = false }, deps) {
   const conversationId = conversation.id
   const thread = await deps.repo.listMessages(conversationId)
   if (releasedToAnotherTruck(thread)) {
@@ -160,7 +160,10 @@ async function sendPostBooking({ conversation, posting, userId, text, brokerBloc
   // A block from another load does not cut off this one's own paperwork: a
   // delivered load can still be asked about payment. Any earlier stage
   // stays refused.
-  if (brokerBlocked && stage !== LOAD_STAGES.DELIVERED) throw new AppError('BROKER_BLOCKED')
+  // The explicit cancel-booking action is the one exception: a block from
+  // another load must not trap this booking, so it is cancelled without a
+  // second block (alreadyBlocked below).
+  if (brokerBlocked && !cancelBooking && stage !== LOAD_STAGES.DELIVERED) throw new AppError('BROKER_BLOCKED')
   const decision = postBookingDecision({ stage, text, thread, load: facts, openEvent: facts?.openEvent })
   const exchange = { conversationId, text, line: decision.line }
   const sent = { awaitingReply: false, action: decision.action, loadStage: stage }
@@ -168,6 +171,7 @@ async function sendPostBooking({ conversation, posting, userId, text, brokerBloc
   if (decision.action === 'block' || decision.action === POST_BOOKING_ACTIONS.ABANDON) {
     const dispatcherMessage = await deps.repo.cancelAndBlock({
       ...exchange, brokerId: posting?.brokerId, brokerMc: posting?.mcNumber, brokerContact: posting?.contactName,
+      ...(brokerBlocked ? { alreadyBlocked: true } : {}),
       ...(decision.action === POST_BOOKING_ACTIONS.ABANDON ? { reason: BLOCK_REASON_ABANDONED_IN_TRANSIT } : {}),
     })
     return { ...sent, dispatcherMessage, blocked: true }
@@ -189,7 +193,8 @@ async function sendPostBooking({ conversation, posting, userId, text, brokerBloc
   return { ...sent, dispatcherMessage, blocked: false, ...(decision.action === 'ask_eta' ? { waitingForEta: true } : {}) }
 }
 
-export async function sendMessage({ conversationId, userId, text }, { deps = DEFAULT_DEPS } = {}) {
+// cancelBooking: set only by cancelBookingForLoad (never from HTTP input); see sendPostBooking.
+export async function sendMessage({ conversationId, userId, text, cancelBooking = false }, { deps = DEFAULT_DEPS } = {}) {
   const conversation = await deps.repo.getConversation(conversationId, userId)
   if (!conversation) throw new AppError('CONVERSATION_NOT_FOUND')
 
@@ -197,7 +202,7 @@ export async function sendMessage({ conversationId, userId, text }, { deps = DEF
   const brokerBlocked = (await deps.repo.isBrokerBlocked?.({ brokerId: posting?.brokerId, brokerMc: posting?.mcNumber })) === true
   // A booked deal stays open for real talk (trouble on the road, payment,
   // cancelling) but is never negotiated again: its own path, no model call.
-  if (conversation.status === 'booked') return sendPostBooking({ conversation, posting, userId, text, brokerBlocked }, deps)
+  if (conversation.status === 'booked') return sendPostBooking({ conversation, posting, userId, text, brokerBlocked, cancelBooking }, deps)
   if (brokerBlocked) throw new AppError('BROKER_BLOCKED')
   // Server-side cancellation policy, decided before any model call: a
   // cancel blocks the broker, "can you wait" asks for an ETA and, with no
@@ -526,7 +531,7 @@ export const CANCEL_BOOKING_TEXT = 'We have to cancel this load.'
 
 // Cancel the booking with the broker from the load page. Irreversible: the
 // broker is told, the rate con is voided, the load is cancelled and the broker
-// is blocked. A delivered or already-cancelled load is refused BEFORE any
+// is blocked (unless it already was, from another load: no second block). A delivered or already-cancelled load is refused BEFORE any
 // message is written.
 export async function cancelBookingForLoad({ loadId, userId }, { deps = DEFAULT_DEPS } = {}) {
   const conversation = await deps.repo.openLoadConversation(loadId, userId)
@@ -535,7 +540,7 @@ export async function cancelBookingForLoad({ loadId, userId }, { deps = DEFAULT_
   const facts = await deps.repo.bookedLoadFacts(conversation.id, userId)
   const stage = facts ? loadStage(facts) : LOAD_STAGES.BOOKED
   if (stage === LOAD_STAGES.DELIVERED || stage === LOAD_STAGES.CANCELLED) throw new AppError('LOAD_NOT_CANCELLABLE')
-  const sent = await sendMessage({ conversationId: conversation.id, userId, text: CANCEL_BOOKING_TEXT }, { deps })
+  const sent = await sendMessage({ conversationId: conversation.id, userId, text: CANCEL_BOOKING_TEXT, cancelBooking: true }, { deps })
   // Anything but a block means the broker did not take it (for example a
   // trouble reply); the thread keeps what was said, the load stays booked.
   if (!sent.blocked) throw new AppError('BOOKING_NOT_CANCELLED')

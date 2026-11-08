@@ -159,8 +159,9 @@ export function makeFakeBrokerRepo({
     async isBrokerBlocked({ brokerId = null, brokerMc = null } = {}) {
       return blocks.some((b) => (brokerId && b.brokerId === brokerId) || (brokerMc && b.brokerMc === brokerMc))
     },
-    async cancelAndBlock({ conversationId, text, line, brokerId = null, brokerMc = null, brokerContact = null, reason = 'carrier_cancelled_agreed_load' }) {
+    async cancelAndBlock({ conversationId, text, line, brokerId = null, brokerMc = null, brokerContact = null, reason = 'carrier_cancelled_agreed_load', alreadyBlocked = false }) {
       const dispatcher = withdrawAndExchange(conversationId, text, line, 'carrier_cancelled')
+      if (alreadyBlocked) return { ...dispatcher, blockId: null }
       blocks.push({ id: `b${blocks.length + 1}`, brokerId, brokerMc, brokerContact, conversationId, reason })
       return { ...dispatcher, blockId: blocks[blocks.length - 1].id }
     },

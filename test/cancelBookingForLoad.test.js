@@ -5,7 +5,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { cancelBookingForLoad, CANCEL_BOOKING_TEXT } from '../src/modules/brokerChat/brokerChat.service.js'
+import { cancelBookingForLoad, sendMessage, CANCEL_BOOKING_TEXT } from '../src/modules/brokerChat/brokerChat.service.js'
 import { RECLAIM_LINE } from '../src/modules/brokerChat/blockPolicy.js'
 import { makeFakeBrokerRepo, fakePosting, FAKE_IDS } from './helpers/fakeBrokerRepo.js'
 
@@ -77,12 +77,30 @@ test('no broker thread for this user: LOAD_HAS_NO_BROKER_THREAD', async () => {
   await assert.rejects(cancel(t, LOAD.id, 'someone-else'), { code: 'LOAD_HAS_NO_BROKER_THREAD' })
 })
 
-// Kills: a broker that already blocked the carrier being reported as a successful cancel
-test('a broker that already blocked this carrier is reported, not cancelled again', async () => {
+// Kills: a block from another load trapping this booking (BROKER_BLOCKED) or adding a second block row
+test('blocked by another load: the booking is still cancelled, no second block', async () => {
   const t = setup(LOAD)
-  await t.fake.repo.cancelAndBlock({ conversationId: FAKE_IDS.conversation, text: 'x', line: 'y', brokerId: fakePosting().brokerId, brokerMc: fakePosting().mcNumber })
+  const p = fakePosting()
+  await t.fake.repo.cancelAndBlock({ conversationId: FAKE_IDS.conversation, text: 'x', line: 'y', brokerId: p.brokerId, brokerMc: p.mcNumber })
+  // the other load's block left this thread booked
   t.fake.state.conversation.status = 'booked'
-  await assert.rejects(cancel(t), { code: 'BROKER_BLOCKED' })
+  const blocksBefore = t.fake.state.blocks.length
+  const cancelledBefore = t.fake.state.cancelledLoads.length
+  const res = await cancel(t)
+  assert.equal(res.cancelled, true)
+  assert.equal(t.fake.state.blocks.length, blocksBefore)
+  assert.equal(t.fake.state.messages.at(-2).content, CANCEL_BOOKING_TEXT)
+  assert.equal(t.fake.state.conversation.status, 'open')
+  assert.equal(t.fake.state.cancelledLoads.length, cancelledBefore + 1)
+})
+
+// Kills: the bypass leaking into ordinary chat (a typed message on a blocked broker must still be refused)
+test('ordinary chat on a blocked broker is still refused', async () => {
+  const t = setup(LOAD)
+  const p = fakePosting()
+  await t.fake.repo.cancelAndBlock({ conversationId: FAKE_IDS.conversation, text: 'x', line: 'y', brokerId: p.brokerId, brokerMc: p.mcNumber })
+  t.fake.state.conversation.status = 'booked'
+  await assert.rejects(sendMessage({ conversationId: FAKE_IDS.conversation, userId: FAKE_IDS.user, text: 'eta 2 hrs' }, { deps: t.deps }), { code: 'BROKER_BLOCKED' })
 })
 
 // Kills: a cancel the broker answered without blocking (released to another truck, RECLAIM_LINE) reported as cancelled
@@ -91,4 +109,19 @@ test('a reply that is not a block throws BOOKING_NOT_CANCELLED', async () => {
   t.fake.state.messages.push({ id: 'r1', role: 'broker', content: RECLAIM_LINE, kind: 'text', deliverAt: new Date().toISOString() })
   await assert.rejects(cancel(t), { code: 'BOOKING_NOT_CANCELLED' })
   assert.equal(t.fake.state.blocks.length, 0)
+})
+
+// Kills: alreadyBlocked still inserting a broker_blocks row (or skipping the load cancel)
+test('cancelAndBlock with alreadyBlocked writes no block row but still withdraws and writes the exchange', async () => {
+  const { cancelAndBlock } = await import('../src/modules/brokerChat/brokerChat.repository.js')
+  const statements = []
+  const client = { query: async (sql) => { statements.push(sql); return { rows: [{ id: 'x' }], rowCount: 1 } } }
+  const run = (fn) => fn(client)
+  await cancelAndBlock({ conversationId: 'c1', text: 'cancel', line: 'no', alreadyBlocked: true }, { run })
+  assert.equal(statements.filter((s) => /INSERT INTO broker_blocks/.test(s)).length, 0)
+  assert.equal(statements.filter((s) => /INSERT INTO broker_messages/.test(s)).length, 2)
+  assert.ok(statements.some((s) => /UPDATE broker_conversations/.test(s)))
+  statements.length = 0
+  await cancelAndBlock({ conversationId: 'c1', text: 'cancel', line: 'no' }, { run })
+  assert.equal(statements.filter((s) => /INSERT INTO broker_blocks/.test(s)).length, 1)
 })

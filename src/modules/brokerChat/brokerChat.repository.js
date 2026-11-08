@@ -466,17 +466,23 @@ export async function insertExchange(client, conversationId, text, line) {
 }
 
 export async function cancelAndBlock(
-  { conversationId, text, line, brokerId = null, brokerMc = null, brokerContact = null, reason = BLOCK_REASON_CARRIER_CANCEL } = {},
+  { conversationId, text, line, brokerId = null, brokerMc = null, brokerContact = null, reason = BLOCK_REASON_CARRIER_CANCEL, alreadyBlocked = false } = {},
   { run = withTransaction } = {},
 ) {
   return run(async (client) => {
     await withdrawAgreement(client, conversationId, 'carrier_cancelled')
-    const block = await client.query(`INSERT INTO broker_blocks
-      (broker_id, broker_mc, broker_contact, blocked_until, reason, conversation_id)
-      VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-    [brokerId, brokerMc, brokerContact, blockUntil(new Date(), BROKER_BLOCK_DAYS), reason, conversationId])
+    // alreadyBlocked: the broker blocked this carrier over another load; the
+    // booking is still cancelled and told, but no second block row is added.
+    let blockId = null
+    if (!alreadyBlocked) {
+      const block = await client.query(`INSERT INTO broker_blocks
+        (broker_id, broker_mc, broker_contact, blocked_until, reason, conversation_id)
+        VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+      [brokerId, brokerMc, brokerContact, blockUntil(new Date(), BROKER_BLOCK_DAYS), reason, conversationId])
+      blockId = block.rows[0].id
+    }
     const dispatcher = await insertExchange(client, conversationId, text, line)
-    return { ...dispatcher, blockId: block.rows[0].id }
+    return { ...dispatcher, blockId }
   })
 }
 
