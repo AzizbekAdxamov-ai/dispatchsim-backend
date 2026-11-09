@@ -103,7 +103,7 @@ test('the actual live basis clarification may repeat the unresolved ask without 
 
 test('paper freezes the actual paper total and components; posting changes do not rewrite it', async () => {
   const load = { ...posting }
-  const fake = makeFakeBrokerRepo({ posting: load, lines: ['This is Keystone Line Haul, MC-741309.'] })
+  const fake = makeFakeBrokerRepo({ posting: load, lines: ['This is Keystone Line Haul, MC-741309. 53-foot dry van, driver is Ethan, truck #12.'] })
   const ids = { conversationId: FAKE_IDS.conversation, userId: FAKE_IDS.user }
   const deps = { repo: fake.repo, getCarrier: async () => ({ name: 'Keystone Line Haul', mcNumber: 'MC-741309' }),
     findById: async () => null, assertCanSend: async () => {}, chatConfigFor: () => ({ model: 'fake' }), logTurn: async () => {},

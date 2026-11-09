@@ -130,7 +130,7 @@ test('live Toledo transcript counters without identity spam, agreement or docume
 
 function setup() {
   const fake = makeFakeBrokerRepo({ posting: fakePosting({ rateUsd: 1571, distanceMi: 442, weightLbs: 42000 }),
-    lines: ['This is Keystone Line Haul, MC-741309.', 'Our truck is in Dallas, 53-foot dry van.'] })
+    lines: ['This is Keystone Line Haul, MC-741309.', 'Our truck is in Dallas, 53-foot dry van. Driver is Ethan, truck #12.'] })
   let calls = 0
   const deps = { repo: fake.repo, getCarrier: async () => carrier,
     findById: async () => ({ email: 'login@example.com' }), assertCanSend: async () => {},

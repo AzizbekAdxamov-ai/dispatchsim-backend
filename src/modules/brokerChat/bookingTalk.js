@@ -207,6 +207,21 @@ function missingFor(f, posting, now) {
   return out
 }
 
+// The details the rate con cannot be prepared without, in the order a broker
+// asks for them. Returns the first one still missing, or null.
+export function paperPrerequisite(facts) {
+  if (facts.trailer.type === null || facts.trailer.lengthFt === null) return 'trailer'
+  if (facts.driverName === null) return 'driverName'
+  if (facts.truckNumber === null) return 'truckNumber'
+  return null
+}
+
+export const PAPER_ASK_LINE = Object.freeze({
+  trailer: 'What trailer are you running, and how long is it?',
+  driverName: "What's the driver's name for the rate con?",
+  truckNumber: "What's the truck number?",
+})
+
 // -- Reading a broker reply ------------------------------------------------
 
 // The reply tells the carrier it is booked / the paper is coming.

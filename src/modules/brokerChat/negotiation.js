@@ -2,7 +2,7 @@
 import { asciiPunct } from '../../lib/plainText.js'
 import { ceilingFor } from './ratePolicy.js'
 import { rateReasons, REASON_WORDS } from './rateTalk.js'
-import { saysBooked, mcQuestion } from './bookingTalk.js'
+import { saysBooked, mcQuestion, paperPrerequisite, PAPER_ASK_LINE } from './bookingTalk.js'
 import { rateQuote, quoteText, SPLIT_RATE } from './rateQuote.js'
 import { proposesRebroker, ONE_CARRIER_REPLY } from './carrierPolicy.js'
 import { brokerStyle, voiceKey, pickVariant } from './brokerStyle.js'
@@ -573,12 +573,15 @@ export function negotiate({ conversation, posting, text, booking, truck, effecti
     else state.pendingClose = pending
   }
   // Sharing an email is authorization only after a handshake; never from profile alone.
-  if (state.stage === 'awaiting_email' && ['email', 'accept', 'accept_amount', 'offer'].includes(intent.kind)) {
+  // Plain talk also counts when the email is already known: the last missing detail (driver, truck #) releases the paper.
+  if (state.stage === 'awaiting_email' && (['email', 'accept', 'accept_amount', 'offer'].includes(intent.kind) || (knownEmail && intent.kind === 'talk'))) {
     const email = intent.emails?.length === 1 ? intent.emails[0] : intent.useOwnEmail ? effectiveEmail : knownEmail
     if (email && !verified) {
       line = ['mismatch', 'unverifiable'].includes(booking?.mc?.verdict) ? 'What is your correct MC?' : "What's your MC?"
     } else if (email && (truck?.makesIt === false || booking?.trailer?.fits === false)) {
       line = 'We need a truck that meets the pickup and equipment requirements before I prepare the rate confirmation.'
+    } else if (email && booking && paperPrerequisite(booking)) {
+      line = PAPER_ASK_LINE[paperPrerequisite(booking)]
     } else if (email) {
       state.recipient = email; state.stage = 'paper_pending'; issuePaper = true; changed = true
       line = `${quote(state.agreed)} confirmed. The rate confirmation will appear here shortly for you to review and sign.`

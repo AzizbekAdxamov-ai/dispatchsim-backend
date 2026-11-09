@@ -9,7 +9,7 @@ import { makeFakeBrokerRepo, fakePosting, FAKE_IDS } from './helpers/fakeBrokerR
 // Kills: dropping knownEmail from the service call (the paper waited on a second "What email?")
 test('email first, then "Deal." with the MC: the paper goes to that email and the email is not asked for again', async () => {
   const posting = fakePosting({ rateUsd: 8153, distanceMi: 2180 })
-  const fake = makeFakeBrokerRepo({ posting, lines: ['Example Freight MC-741309.'] })
+  const fake = makeFakeBrokerRepo({ posting, lines: ['Example Freight MC-741309. 53-foot dry van, driver is Ethan, truck #12.'] })
   let reply = 'Hey, what can I help with on this one?'
   const deps = { repo: fake.repo, getCarrier: async () => ({ name: 'Example Freight', mcNumber: 'MC-741309' }),
     findById: async () => null, assertCanSend: async () => {}, chatConfigFor: () => ({ model: 'fake' }),

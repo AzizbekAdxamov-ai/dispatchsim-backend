@@ -67,7 +67,7 @@ test('explicit put-on recipient directions parse; quotes, conditions, holds and 
 
 test('natural recipient directions issue one paper only after agreement and never through a hold', async () => {
   for (const suffix of ['', ' Once I confirm.', ' Hold up, dont book nothing yet.']) {
-    const fake = makeFakeBrokerRepo({ posting, lines: ['Example Freight MC-741309.'] })
+    const fake = makeFakeBrokerRepo({ posting, lines: ['Example Freight MC-741309. 53-foot dry van, driver is Ethan, truck #12.'] })
     const deps = { repo: fake.repo, getCarrier: async () => ({ name: 'Example Freight', mcNumber: 'MC-741309' }),
       findById: async () => null, assertCanSend: async () => {}, chatConfigFor: () => ({ model: 'fake' }),
       logTurn: async () => {}, chatText: async () => 'Please confirm the rate first.' }
