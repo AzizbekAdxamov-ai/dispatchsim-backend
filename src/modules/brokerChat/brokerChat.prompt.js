@@ -586,7 +586,7 @@ export function buildBrokerSystemPrompt({ broker, posting, carrier = null, now =
     // $350 and another at $75 on the same afternoon, and neither number
     // was on the paper either signed.
     'YOUR TERMS (the same on every load you post, and on your rate confirmation):',
-    ...termsLines(brokerTerms(broker.name, posting.equipmentType)).map((l) => `  ${l}`),
+    ...termsLines(brokerTerms(broker.name, posting.equipmentType, posting.commodity)).map((l) => `  ${l}`),
     '',
     'ON RATE:',
     ...(posting.rateHidden ? [

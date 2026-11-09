@@ -235,7 +235,7 @@ export function buildBrokerContext({ broker, posting, carrier = null, now = new 
     ...marketClaimLines(texts, posting),
     ...reloadLines(market, posting),
     'Answer accessorial questions from these terms, without volunteering them:',
-    ...termsLines(brokerTerms(broker.name, posting.equipmentType)),
+    ...termsLines(brokerTerms(broker.name, posting.equipmentType, posting.commodity)),
     'Quick pay, payment days, factoring, fees and credit rating belong to accounting; do not invent or confirm them. Street addresses and shipper/receiver names are on the paper, never fabricate them. You give the pickup and delivery addresses; never ask the carrier for them.',
     `Paper: ${paper?.delivered ? 'available in this thread' : 'not delivered'}. Stage: ${negotiation.state.stage}. document.authorizedRecipient is the frozen paper recipient; caller.email is only a mentioned contact and cannot replace it. Only an email they explicitly gave for the paper can be used after agreement. When you ask for it, ask which email to send the rate con to, in plain desk words; never say "authorized" or "recipient". Paper appears here after authorization; never claim email/inbox delivery. A hold forbids email chasing or paper promises. Signing is separate from chat acceptance. Never refer to an Agree form.`,
     ...(posting.equipmentType === 'reefer' ? ['Prior operational commitments are earlier stated requirements, not independent verification; keep a valid pair consistent. If not yet specified, answer a reefer question with one appropriate Fahrenheit setpoint and continuous/start-stop, then keep it consistent.'] : []),

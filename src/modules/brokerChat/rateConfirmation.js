@@ -10,6 +10,7 @@
 
 import PDFDocument from 'pdfkit'
 import { brokerTerms, termsLines } from '../../constants/accessorials.js'
+import { tarpFor, securementFor } from '../../constants/freightHandling.js'
 import { rateQuote, SPLIT_RATE } from './rateQuote.js'
 import { APP_TIMEZONE } from '../../constants/appClock.js'
 
@@ -176,6 +177,18 @@ export function generateRateConfirmation({ conversation, posting, broker, carrie
     y += 15
     doc.text(`${posting.commodity || '—'}  ·  ${(posting.weightLbs || 0).toLocaleString()} lbs`, leftCol, y)
 
+    // Open-deck freight: what the carrier covers and ties down with.
+    const tarp = tarpFor(posting)
+    if (tarp && tarp.needed !== null) {
+      y += 15
+      doc.text(tarp.needed ? `Tarp: ${tarp.kind} required` : 'Tarp: not required', leftCol, y)
+    }
+    const tiedown = securementFor(posting)
+    if (tiedown) {
+      y += 15
+      doc.text(`Securement: ${tiedown.count} ${tiedown.kind}`, leftCol, y)
+    }
+
     // Shipper and receiver side by side, each with its appointment. The names
     // and streets are made up per posting (stops.js).
     y += 18
@@ -238,7 +251,7 @@ export function generateRateConfirmation({ conversation, posting, broker, carrie
     doc.fontSize(9).font('Helvetica-Bold').fillColor('#000000')
     doc.text('ACCESSORIALS', leftCol, y)
     doc.font('Helvetica').fillColor('#444444')
-    for (const line of termsLines(brokerTerms(broker.name, posting.equipmentType))) {
+    for (const line of termsLines(brokerTerms(broker.name, posting.equipmentType, posting.commodity))) {
       y += 13
       doc.text(line, leftCol, y)
     }
