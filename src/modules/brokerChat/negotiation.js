@@ -415,6 +415,16 @@ export function negotiationState(conversation, posting) {
   }
 }
 
+// The newest price the dispatcher asked for, from their earlier messages. The
+// broker never gives more than this, so a later push or walk stops here.
+export function lastCarrierAskUsd(texts, posting) {
+  for (const text of [...(texts ?? [])].reverse()) {
+    const intent = chatIntent(text, posting, { openNegotiation: true })
+    if (['offer', 'accept_amount'].includes(intent.kind) && Number.isSafeInteger(intent.rateUsd)) return intent.rateUsd
+  }
+  return null
+}
+
 // The figure the dispatcher gave that the broker then asked "total or linehaul
 // plus fuel?" about, when the newest dispatcher message is the answer to it.
 export function pendingBasisAskUsd(thread, posting) {
@@ -428,7 +438,7 @@ export function pendingBasisAskUsd(thread, posting) {
   return intent.kind === 'ambiguous_rate' && Number.isSafeInteger(intent.requestedAmountUsd) ? intent.requestedAmountUsd : null
 }
 
-export function negotiate({ conversation, posting, text, booking, truck, effectiveEmail = null, knownEmail = null, now = new Date(), offerVisible = false, pendingBasisUsd = null }) {
+export function negotiate({ conversation, posting, text, booking, truck, effectiveEmail = null, knownEmail = null, now = new Date(), offerVisible = false, pendingBasisUsd = null, lastAskUsd = null }) {
   const previous = negotiationState(conversation, posting)
   const state = { ...previous }
   const pending = previous.pendingClose
@@ -477,7 +487,7 @@ export function negotiate({ conversation, posting, text, booking, truck, effecti
     if (state.offer !== previous.offer) changed = true
     line = `I can offer ${quote(state.offer)}. Does that work for you?`
   } else if (['offer', 'accept_amount', 'push'].includes(intent.kind)) {
-    const amount = intent.kind === 'push' ? ceilingFor(posting) : intent.rateUsd
+    const amount = intent.kind === 'push' ? Math.min(ceilingFor(posting), lastAskUsd ?? Infinity) : intent.rateUsd
     const min = Math.max(100, posting.distanceMi, posting.rateBasis === SPLIT_RATE ? posting.fuelSurchargeUsd + 1 : 0)
     const max = Math.min(20000, posting.distanceMi * 5)
     if (state.agreed !== null && (amount !== state.agreed || intent.kind === 'push')) clear()
@@ -503,8 +513,8 @@ export function negotiate({ conversation, posting, text, booking, truck, effecti
       const steps = reasons.length > 0 ? 2 : 1
       const effectivePush = state.pushes + steps - 1
       if (effectivePush >= 3) {
-        state.offer = ceilingFor(posting)
-        line = `Best I can do is ${quote(state.offer)}, that's my max.`
+        // Never more than was asked: the ceiling only when the ask is above it.
+        state.offer = Math.max(state.offer, Math.min(ceilingFor(posting), amount))
       } else if (effectivePush === 2) {
         const ceiling = ceilingFor(posting)
         // A first push with a verified reason jumps to the second rung; it
@@ -522,6 +532,7 @@ export function negotiate({ conversation, posting, text, booking, truck, effecti
       if (state.offer >= ceilingFor(posting)) line = previous.offer >= ceilingFor(posting)
         ? `${quote(state.offer)} is as high as I can go.`
         : `Best I can do is ${quote(state.offer)}. That's my max.`
+      else if (intent.kind !== 'push' && state.offer === amount) line = `I can do ${quote(amount)}. Want me to book it?`
       else line = `I can offer ${quote(state.offer)}. Does that work for you?`
     }
   } else if (intent.kind === 'accept') {
@@ -532,7 +543,7 @@ export function negotiate({ conversation, posting, text, booking, truck, effecti
     clear(); state.stage = 'held'; line = 'Understood. I will withdraw the rate confirmation.'
   } else if (intent.kind === 'walk' && state.agreed === null && !state.bestCounterUsed) {
     clear(); state.bestCounterUsed = true
-    state.offer = Math.max(state.offer, ceilingFor(posting))
+    state.offer = Math.max(state.offer, Math.min(ceilingFor(posting), lastAskUsd ?? Infinity))
     line = `Before you go, I can do ${quote(state.offer)}. Would that work?`
   } else if (['talk', 'ambiguous'].includes(intent.kind) && state.agreed === null && pending === null
     && new RegExp(MONEY, 'i').test(intentText(text)) && BOOK_WORD_RE.test(intentText(text)) && !NEGATIVE.test(text)) {

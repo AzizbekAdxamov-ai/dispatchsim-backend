@@ -2,7 +2,9 @@
 // negotiation misreads. Band numbers follow the 2026-11-10 brief, section A.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { chatIntent, pendingBasisAskUsd } from '../src/modules/brokerChat/negotiation.js'
+import { chatIntent, pendingBasisAskUsd, negotiate, lastCarrierAskUsd } from '../src/modules/brokerChat/negotiation.js'
+import { ceilingFor, CEILING_STEP_USD } from '../src/modules/brokerChat/ratePolicy.js'
+import { quoteText } from '../src/modules/brokerChat/rateQuote.js'
 import { sendMessage } from '../src/modules/brokerChat/brokerChat.service.js'
 import { makeFakeBrokerRepo, fakePosting, FAKE_IDS } from './helpers/fakeBrokerRepo.js'
 
@@ -127,4 +129,73 @@ test('a price called too low, or an unplaced close, is not a bare offer', () => 
   const toddler = chatIntent('8100 to low brother can u add litle bit or what is your best', { rateUsd: 8153, distanceMi: 2180 }, OPEN)
   assert.equal(toddler.kind, 'push')
   assert.equal(chatIntent('ok 3500 sounds whatever works lol', { rateUsd: 3500, distanceMi: 1500 }, OPEN).kind, 'talk')
+})
+
+// Band 3 --------------------------------------------------------------------
+const matched = { mc: { verdict: 'match' }, trailer: { fits: true } }
+const room = fakePosting({ rateUsd: 3500, distanceMi: 1500 })
+const ceiling = ceilingFor(room)
+const ASK_BELOW_CEILING = ceiling - CEILING_STEP_USD
+const open = (extra = {}) => ({ status: 'open', negotiationStage: 'negotiating', brokerOfferUsd: room.rateUsd, ...extra })
+const turn = (text, conversation = open(), extra = {}) =>
+  negotiate({ conversation, posting: room, text, booking: matched, offerVisible: true, ...extra })
+
+// Kills: the third push going straight to the ceiling (live: carrier asked $5,000, broker gave $5,025 "that's my max")
+test('the third push gives what was asked, not the ceiling', () => {
+  const decision = turn(`can you do ${ASK_BELOW_CEILING}?`, open({ ratePushCount: 2 }))
+  assert.equal(decision.state.offer, ASK_BELOW_CEILING)
+  assert.ok(decision.line.includes(quoteText(room, ASK_BELOW_CEILING)))
+  assert.doesNotMatch(decision.line, /max/i)
+  assert.equal(decision.hasRateRoom, true)
+})
+
+// Kills: a no-figure push ignoring the carrier's last ask (lastAskUsd)
+test('a push without a figure moves to the last ask, never past it', () => {
+  const decision = turn('need more money', open({ ratePushCount: 2 }), { lastAskUsd: ASK_BELOW_CEILING })
+  assert.equal(decision.state.offer, ASK_BELOW_CEILING)
+  assert.doesNotMatch(decision.line, /max/i)
+})
+
+// Kills: the walk counter jumping to the ceiling when the carrier asked for less
+test('walking away is answered with the last ask, not the ceiling', () => {
+  const decision = turn("I'll pass", open({ ratePushCount: 1 }), { lastAskUsd: ASK_BELOW_CEILING })
+  assert.equal(decision.intent.kind, 'walk')
+  assert.equal(decision.state.offer, ASK_BELOW_CEILING)
+})
+
+// Kills: dropping the ceiling clamp (an ask above the ceiling must still stop at it)
+test('an ask above the ceiling is still capped at the ceiling', () => {
+  const decision = turn(`can you do ${ceiling + 500}?`, open({ ratePushCount: 2 }))
+  assert.equal(decision.state.offer, ceiling)
+  assert.match(decision.line, /max/i)
+})
+
+// Kills: a first-rung counter equal to the ask still being phrased as a haggle
+test('a counter that meets the ask offers to book it', () => {
+  const decision = turn(`can you do ${ASK_BELOW_CEILING}?`, open({ ratePushCount: 2 }))
+  assert.equal(decision.line, `I can do ${quoteText(room, ASK_BELOW_CEILING)}. Want me to book it?`)
+})
+
+// Kills: lastCarrierAskUsd reading the first message, a non-ask, or ignoring openNegotiation
+test('lastCarrierAskUsd finds the newest price ask', () => {
+  assert.equal(lastCarrierAskUsd(['$5,000 all in', 'hello'], allIn), 5000)
+  assert.equal(lastCarrierAskUsd(['can you do 4800?', '$5,000 all in', 'hello'], allIn), 5000)
+  assert.equal(lastCarrierAskUsd(['hello', 'where does it deliver?'], allIn), null)
+})
+
+// Kills: the service not passing lastAskUsd (third reply said "max" at a higher figure than asked)
+test('through the service, three pushes and a final plain push end at the asked figure', async () => {
+  const posting = fakePosting({ rateUsd: 3500, distanceMi: 1500 })
+  const ask = ceilingFor(posting) - CEILING_STEP_USD
+  const fake = makeFakeBrokerRepo({ posting })
+  const deps = { repo: fake.repo, getCarrier: async () => ({ name: 'Example Freight', mcNumber: 'MC-741309' }),
+    findById: async () => null, assertCanSend: async () => {}, chatConfigFor: () => ({ model: 'fake' }),
+    logTurn: async () => {}, chatText: async () => '$1 all in.' }
+  for (let n = 0; n < 3; n += 1) {
+    await sendMessage({ conversationId: FAKE_IDS.conversation, userId: FAKE_IDS.user, text: n < 2 ? `can you do ${ask}?` : "need more money" }, { deps })
+    fake.deliverAll()
+  }
+  const last = fake.state.messages.filter((m) => m.role === 'broker').at(-1).content
+  assert.ok(last.replaceAll(',', '').includes(String(ask)), last)
+  assert.doesNotMatch(last, /max/i)
 })

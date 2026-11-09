@@ -21,7 +21,7 @@ import { AppError } from '../../lib/errors.js'
 import { stripSpeakerLabel } from '../../lib/speakerLabel.js'
 import { getCarrier, carrierEmail } from '../carrier/carrier.repository.js'
 import { findById } from '../auth/users.repository.js'
-import { negotiate, lastAuthorizedEmail, pendingBasisAskUsd, RATE_MISS_REASON } from './negotiation.js'
+import { negotiate, lastAuthorizedEmail, pendingBasisAskUsd, lastCarrierAskUsd, RATE_MISS_REASON } from './negotiation.js'
 import { varyRepeat } from './repeatGuard.js'
 import { buildBrokerContext } from './brokerContext.js'
 import * as repo from './brokerChat.repository.js'
@@ -275,6 +275,7 @@ export async function sendMessage({ conversationId, userId, text, cancelBooking 
     effectiveEmail: carrierEmail(carrier, await deps.findById(userId)).effectiveEmail,
     knownEmail: lastAuthorizedEmail(dispatcherTexts(thread).slice(0, -1)),
     pendingBasisUsd: pendingBasisAskUsd(thread, posting),
+    lastAskUsd: lastCarrierAskUsd(dispatcherTexts(thread).slice(0, -1), posting),
     offerVisible: brokerSaid.some((line) => line.replaceAll(',', '').includes(String(turnConversation.brokerOfferUsd ?? posting.rateUsd))),
   })
   const paper = { status: decision.state.agreed === null ? 'open' : 'agreed', delivered: delivered && !decision.invalidatePaper, stage: decision.state.stage }
