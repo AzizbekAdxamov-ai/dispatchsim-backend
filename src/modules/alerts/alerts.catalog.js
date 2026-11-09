@@ -26,6 +26,7 @@
 
 import { CREDIT_LIMIT_USD, CREDIT_APR } from '../../constants/simClock.js'
 import { DRIVING_LIMIT_HOURS } from '../../constants/hosClock.js'
+import { DRIVER_STAGES, describeWait } from '../../constants/driverPay.js'
 
 // The clock this family watches is the law's 11-hour driving limit; the
 // alert fires inside the last hour of it -- a plain constant, but derived
@@ -165,6 +166,20 @@ export const FAMILIES = Object.freeze({
     fingerprint: () => 'idle',
     href: (a) => `/drivers/${a.driverId}`,
     stakeUsd: () => 0,
+  },
+
+  'driver.pay-overdue': {
+    // Settlement money past its due date. The thresholds are the driver's
+    // own (DRIVER_STAGES), so the alert and the chat agree on when the
+    // driver stops taking loads and when the driver leaves.
+    title: (a) => (a.stage === 'refuses'
+      ? `${a.driverName}'s pay is ${describeWait(a.daysOverdue)} overdue — not taking loads · leaves at ${DRIVER_STAGES.quits}`
+      : `${a.driverName}'s pay is ${describeWait(a.daysOverdue)} overdue — stops taking loads at ${DRIVER_STAGES.refuses}, leaves at ${DRIVER_STAGES.quits}`),
+    detail: (a) => `$${a.owedUsd.toLocaleString('en-US')} owed across ${a.unpaidCount} ${a.unpaidCount === 1 ? 'settlement' : 'settlements'} · paid on a payroll run`,
+    // A new stage is a new situation: acking "asks" must not hide "refuses".
+    fingerprint: (a) => a.stage,
+    href: () => '/finance/settlements',
+    stakeUsd: (a) => a.owedUsd,
   },
 
   'driver.hos-low': {

@@ -450,6 +450,9 @@ export function buildDriverSystemPrompt({ driver, standing, load, carrier = null
           : ' Nothing is past due yet.')
       : '  Nothing outstanding. You have been paid for everything you have run.',
     `  Settlements are due ${SETTLEMENT_TERM_SIM_DAYS} days after a load delivers.`,
+    ...(standing.stage === 'refuses'
+      ? [`  If it is still unpaid ${describeWait(DRIVER_STAGES.quits - standing.daysOverdue)} from now, you leave the company. Say it once, as a fact, when pay comes up.`]
+      : []),
     '',
     ...stance,
     '',

@@ -10,6 +10,7 @@ import { FAMILIES, isLeavingSoon, HOS_LOW_THRESHOLD_MIN } from './alerts.catalog
 import { simAgo, realAgo, place } from './alerts.format.js'
 import { EVENT_TYPES } from '../../constants/loadEvents.js'
 import * as solvencyService from '../cash/solvency.service.js'
+import * as payrollService from '../payroll/payroll.service.js'
 import config from '../../config.js'
 
 // Build one alert from a catalog family and the row behind it. Anything the
@@ -63,10 +64,21 @@ export function cashAlert({ standing, balanceUsd, enabled = config.financeEnable
   return null
 }
 
+// One alert per driver whose settlement is past due and who is still on the
+// job. The SQL clamps days overdue to 0, so a settlement not yet due reads
+// as stage 'asks' too; oldestDueAt is what says it is actually late. A
+// driver at 'quits' has already left, so there is nothing left to warn about.
+const PAY_ALERT_STAGES = new Set(['asks', 'refuses'])
+export function payOverdueAlerts(owed, now = new Date()) {
+  return owed
+    .filter((r) => r.oldestDueAt && new Date(r.oldestDueAt) <= now && PAY_ALERT_STAGES.has(r.stage))
+    .map((r) => build('driver.pay-overdue', r.driverId, r))
+}
+
 export async function listAlerts({ userId, now = new Date() }) {
   const degraded = []
 
-  const [loads, roadEvents, unassigned, invoices, drivers, hosLow, replies, rateCons, applicants, listings, balanceUsd, standing, acks] =
+  const [loads, roadEvents, unassigned, invoices, drivers, hosLow, replies, rateCons, applicants, listings, balanceUsd, standing, acks, owedPay] =
     await Promise.all([
       collect('lateLoads', () => repo.lateLoads(), degraded),
       collect('openRoadEvents', () => repo.openRoadEvents(), degraded),
@@ -81,6 +93,7 @@ export async function listAlerts({ userId, now = new Date() }) {
       collect('balance', () => cashRepo.getBalance(), degraded).then((v) => (Array.isArray(v) ? 0 : v)),
       collect('solvency', () => solvencyService.solvency(), degraded).then((v) => (Array.isArray(v) ? null : v)),
       collect('acks', () => repo.listAcks({ userId }), degraded),
+      collect('overduePay', () => payrollService.listOwed(), degraded),
     ])
 
   const alerts = []
@@ -127,6 +140,8 @@ export async function listAlerts({ userId, now = new Date() }) {
       alerts.push(build('driver.idle', d.driverId, d))
     }
   }
+
+  alerts.push(...payOverdueAlerts(owedPay, now))
 
   for (const d of hosLow) {
     alerts.push(build('driver.hos-low', d.driverId, {

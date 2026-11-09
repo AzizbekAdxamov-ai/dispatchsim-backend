@@ -17,7 +17,7 @@
 // technique brokerChat uses for its per-posting ceiling.
 
 import { REASONS } from '../../constants/availabilityReasons.js'
-import { describeWait } from '../../constants/driverPay.js'
+import { DRIVER_STAGES, describeWait } from '../../constants/driverPay.js'
 
 function hashPick(id, n) {
   let h = 2166136261
@@ -33,10 +33,13 @@ function money(n) {
   return `$${Math.abs(n ?? 0).toLocaleString('en-US')}`
 }
 
+// The driver says when they leave, as a fact, once per refusal.
+const leavesIn = (a) => ` If it is not settled in ${describeWait(DRIVER_STAGES.quits - a.daysOverdue)}, I am done here.`
+
 const UNPAID = [
-  (a) => `I am not taking another load until I am paid. ${money(a.owedUsd)} still owed, oldest one is ${describeWait(a.daysOverdue)} past due.`,
-  (a) => `Sorry, no. You still owe me ${money(a.owedUsd)} across ${a.unpaidCount} settlement${a.unpaidCount === 1 ? '' : 's'} and the oldest is ${describeWait(a.daysOverdue)} out. Settle that and I will roll.`,
-  (a) => `Not until that ${money(a.owedUsd)} hits my account. I have been waiting ${describeWait(a.daysOverdue)} on the oldest one.`,
+  (a) => `I am not taking another load until I am paid. ${money(a.owedUsd)} still owed, oldest one is ${describeWait(a.daysOverdue)} past due.` + leavesIn(a),
+  (a) => `Sorry, no. You still owe me ${money(a.owedUsd)} across ${a.unpaidCount} settlement${a.unpaidCount === 1 ? '' : 's'} and the oldest is ${describeWait(a.daysOverdue)} out. Settle that and I will roll.` + leavesIn(a),
+  (a) => `Not until that ${money(a.owedUsd)} hits my account. I have been waiting ${describeWait(a.daysOverdue)} on the oldest one.` + leavesIn(a),
 ]
 
 const QUIT = [
