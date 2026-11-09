@@ -76,8 +76,13 @@ export async function listPostings(input, { repo = loadBoardRepo } = {}) {
 
   const deadheadTo = toCity && toState ? { city: toCity, state: toState } : null
 
+  // Whether the fleet owns a truck for each trailer type at all. "No driver"
+  // can also mean every matching driver is busy; only this says the fleet has none.
+  const fleetKeys = (await repo.getFleetEquipmentKeys?.()) ?? null
+  const withFleet = (p) => ({ ...withMarket(p), fleetHasEquipment: fleetKeys ? fleetKeys.has(p.equipmentType) : null })
+
   return {
-    postings: postings.map(withMarket),
+    postings: postings.map(withFleet),
     meta: {
       page,
       limit,
@@ -101,7 +106,8 @@ export async function getPostingById(id, { fromCity, fromState, toCity, toState 
   if (!posting) {
     throw new AppError('POSTING_NOT_FOUND')
   }
-  return withMarket(posting)
+  const fleetKeys = await loadBoardRepo.getFleetEquipmentKeys()
+  return { ...withMarket(posting), fleetHasEquipment: fleetKeys.has(posting.equipmentType) }
 }
 
 // ---------------------------------------------------------------------

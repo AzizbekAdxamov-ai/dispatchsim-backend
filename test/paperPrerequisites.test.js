@@ -67,3 +67,12 @@ test('a thread warns before signing when the fleet has no truck for the load tra
   assert.deepEqual((await threadWith(['dry-van'])).preSignWarnings, ['no-matching-equipment'])
   assert.deepEqual((await threadWith(['dry-van', 'flatbed'])).preSignWarnings, [])
 })
+
+// Kills: replacing every plain-talk reply with the paper question ("what's the detention?" got "What's the truck number?")
+test('plain talk with no new detail keeps the model reply; a new detail asks the next one', () => {
+  const idle = turn(['48ft flatbed'], "what's the detention?")
+  assert.equal(idle.issuePaper, false)
+  assert.equal(idle.line, null)
+  assert.equal(turn(['48ft flatbed'], 'ok').line, null)
+  assert.equal(turn(['48ft flatbed'], 'driver is Ethan').line, PAPER_ASK_LINE.truckNumber)
+})

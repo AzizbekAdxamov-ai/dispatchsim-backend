@@ -2,7 +2,7 @@
 import { asciiPunct } from '../../lib/plainText.js'
 import { ceilingFor } from './ratePolicy.js'
 import { rateReasons, REASON_WORDS } from './rateTalk.js'
-import { saysBooked, mcQuestion, paperPrerequisite, PAPER_ASK_LINE } from './bookingTalk.js'
+import { saysBooked, mcQuestion, bookingFacts, paperPrerequisite, PAPER_ASK_LINE } from './bookingTalk.js'
 import { rateQuote, quoteText, SPLIT_RATE } from './rateQuote.js'
 import { proposesRebroker, ONE_CARRIER_REPLY } from './carrierPolicy.js'
 import { brokerStyle, voiceKey, pickVariant } from './brokerStyle.js'
@@ -449,6 +449,13 @@ export function pendingBasisAskUsd(thread, posting) {
   return intent.kind === 'ambiguous_rate' && Number.isSafeInteger(intent.requestedAmountUsd) ? intent.requestedAmountUsd : null
 }
 
+// Plain talk only moves the paper along when this very message gives a
+// trailer, driver or truck detail; "ok" or a terms question keeps the model's answer.
+function givesPaperDetail(text, posting) {
+  const said = bookingFacts({ texts: [text], posting })
+  return said.trailer.type !== null || said.trailer.lengthFt !== null || said.driverName !== null || said.truckNumber !== null
+}
+
 export function negotiate({ conversation, posting, text, booking, truck, effectiveEmail = null, knownEmail = null, now = new Date(), offerVisible = false, pendingBasisUsd = null, lastAskUsd = null }) {
   const previous = negotiationState(conversation, posting)
   const state = { ...previous }
@@ -574,7 +581,7 @@ export function negotiate({ conversation, posting, text, booking, truck, effecti
   }
   // Sharing an email is authorization only after a handshake; never from profile alone.
   // Plain talk also counts when the email is already known: the last missing detail (driver, truck #) releases the paper.
-  if (state.stage === 'awaiting_email' && (['email', 'accept', 'accept_amount', 'offer'].includes(intent.kind) || (knownEmail && intent.kind === 'talk'))) {
+  if (state.stage === 'awaiting_email' && (['email', 'accept', 'accept_amount', 'offer'].includes(intent.kind) || (knownEmail && intent.kind === 'talk' && givesPaperDetail(text, posting)))) {
     const email = intent.emails?.length === 1 ? intent.emails[0] : intent.useOwnEmail ? effectiveEmail : knownEmail
     if (email && !verified) {
       line = ['mismatch', 'unverifiable'].includes(booking?.mc?.verdict) ? 'What is your correct MC?' : "What's your MC?"

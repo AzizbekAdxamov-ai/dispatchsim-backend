@@ -285,3 +285,12 @@ test('a dry-van driver is nearest for a dry-van posting and for no flatbed posti
     assert.equal(await ask('flatbed'), undefined)
   })
 })
+
+// Kills: the board telling the frontend nothing about the fleet's trailers (a busy driver read as "no truck in the fleet")
+test('each posting says whether the fleet has a truck with its trailer type', async () => {
+  const { repo } = stubRepo({ hasDriver: true, first: null })
+  repo.listPostings = async () => [{ id: 'p1', equipmentType: 'flatbed' }, { id: 'p2', equipmentType: 'dry-van' }]
+  repo.getFleetEquipmentKeys = async () => new Set(['dry-van'])
+  const { postings } = await listPostings(SEARCH, { repo })
+  assert.deepEqual(postings.map((p) => p.fleetHasEquipment), [false, true])
+})
