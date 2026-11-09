@@ -19,6 +19,12 @@ function formatCurrency(amount) {
   return '$' + Number(amount).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })
 }
 
+// "flatbed 48 ft  #T-552": only the parts the dispatcher said.
+function trailerValue(carrier) {
+  const kind = [carrier?.trailerType, carrier?.trailerLengthFt ? `${carrier.trailerLengthFt} ft` : null].filter(Boolean).join(' ')
+  return [kind, carrier?.trailerNumber ? `#${carrier.trailerNumber}` : null].filter(Boolean).join('  ')
+}
+
 export function formatDate(dateStr) {
   if (!dateStr) return '—'
   const d = new Date(dateStr)
@@ -132,6 +138,7 @@ export function generateRateConfirmation({ conversation, posting, broker, carrie
     for (const [label, value] of [
       ['DRIVER', carrier?.driverName],
       ['TRUCK', carrier?.truckNumber],
+      ['TRAILER', trailerValue(carrier)],
       ['DISPATCH EMAIL', carrier?.dispatcherEmail],
     ]) {
       if (!value) continue

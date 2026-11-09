@@ -143,6 +143,15 @@ test('S9a line 6: driver, truck number and email', () => {
   for (const key of ['driverName', 'truckNumber', 'email']) assert.equal(f.missing.includes(key), false, key)
 })
 
+// Kills: dropping TRAILER_NO_RE, or making the # optional ("53 ft trailer" read as trailer number "53")
+test('a trailer number needs the word trailer and a marker; a length is not a number', () => {
+  assert.equal(facts(['trailer # T552']).trailerNumber, 'T552')
+  assert.equal(facts(['trailer number T-552 please']).trailerNumber, 'T-552')
+  assert.equal(facts(['53 ft trailer']).trailerNumber, null)
+  assert.equal(facts(['trailer is empty']).trailerNumber, null)
+  assert.equal(facts(['ok']).missing.includes('trailerNumber'), false)
+})
+
 // Kills: "driver is in dallas" read as a driver called "In Dallas"
 test('a driver name needs a name, not a verb or a place', () => {
   assert.equal(facts(['driver is in dallas']).driverName, null)

@@ -109,6 +109,8 @@ const NAME_STOPS = new Set([
 ])
 const DRIVER_RE = /\bdriver(?:'s| is|:)?\s+(?:name\s*:?\s*(?:is\s+)?)?([a-z]+(?:\s+[a-z]+)?)/gi
 const TRUCK_NO_RE = /\b(?:truck|unit|trk|tractor)\s*(?:#|no\.?|number|:)?\s*([A-Z0-9][A-Z0-9-]{1,11})\b/gi
+// The marker is required: "53 ft trailer" and "trailer is empty" carry no number.
+const TRAILER_NO_RE = /\b(?:trailer|trl|trlr)\s*(?:#|no\.?|number|:)\s*([A-Z0-9][A-Z0-9-]{1,11})\b/gi
 const UNIT_AFTER = /^\s*(?:ft\b|foot\b|feet\b|'|mi\b|miles?\b)/i
 const EMAIL_RE = /[a-z0-9._%+-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}/i
 
@@ -122,6 +124,12 @@ function driverNameIn(text) {
     const kept = NAME_STOPS.has((words[1] ?? '').toLowerCase()) ? words.slice(0, 1) : words
     found = titleCase(kept.join(' '))
   }
+  return found
+}
+
+function trailerNumberIn(text) {
+  let found = null
+  for (const m of asciiPunct(text).matchAll(TRAILER_NO_RE)) if (/\d/.test(m[1])) found = m[1].toUpperCase()
   return found
 }
 
@@ -176,6 +184,7 @@ export function bookingFacts({ texts, carrier = null, posting = null, now = new 
     trailer: { type, lengthFt, fits },
     driverName: newest(said, driverNameIn),
     truckNumber: newest(said, truckNumberIn),
+    trailerNumber: newest(said, trailerNumberIn),
     email: newest(said, (t) => EMAIL_RE.exec(t)?.[0].toLowerCase() ?? null),
   }
   facts.missing = missingFor(facts, posting, now)

@@ -141,6 +141,18 @@ test('the paper carries shipper, receiver, appointments, driver, truck and email
   assert.equal(pages, 1, `the rate confirmation came out ${pages} pages`)
 })
 
+// Kills: dropping the TRAILER line -- the paper named the driver and truck but not the trailer
+test('the paper carries the trailer type, length and number the dispatcher gave', async () => {
+  const buf = await generateRateConfirmation({
+    conversation: CONVERSATION, posting: { ...POSTING, ...STOPS }, broker: BROKER,
+    carrier: { ...CARRIER, mcNumber: 'MC-741309', ...TOLD, trailerNumber: 'T-552', trailerType: 'flatbed', trailerLengthFt: 48 },
+  })
+  const text = pdfText(buf)
+  assert.ok(text.includes('TRAILER'), 'TRAILER label')
+  assert.ok(text.includes('T-552') && text.includes('flatbed 48 ft'))
+  assert.equal((buf.toString('latin1').match(/\/Type \/Page[^s]/g) ?? []).length, 1)
+})
+
 // Kills: a placeholder printed for what was never said
 test('driver, truck and email lines are absent when they were not said', async () => {
   const text = pdfText(await generateRateConfirmation({

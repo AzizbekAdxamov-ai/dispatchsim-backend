@@ -51,6 +51,9 @@ export function rateConInput(data, carrier) {
       // Only what the dispatcher said in the chat; absent otherwise.
       driverName: data.booking.driverName,
       truckNumber: data.booking.truckNumber,
+      trailerNumber: data.booking.trailerNumber,
+      trailerType: data.booking.trailer?.type,
+      trailerLengthFt: data.booking.trailer?.lengthFt,
       dispatcherEmail: data.booking.email,
     },
   }
