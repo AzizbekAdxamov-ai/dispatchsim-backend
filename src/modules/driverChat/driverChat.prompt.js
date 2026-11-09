@@ -223,7 +223,12 @@ export function situationLines({ driver, load, now = new Date() }) {
   if (left) {
     lines.push(`  Driving time left today: ${left}.`)
   }
-  if (driver.dutyStatus === 'resting') {
+  if (driver.dutyStatus === 'resting' && driver.restEndsAt) {
+    const upAt = new Date(driver.restEndsAt)
+    lines.push(upAt.getTime() > now.getTime()
+      ? `  Your ten is up around ${clockWhen(upAt.toISOString(), now.toISOString())}. If asked, say it plainly, like 'my ten's up around 6'.`
+      : '  Your ten is done; you can roll.')
+  } else if (driver.dutyStatus === 'resting') {
     lines.push("  You don't know when your current ten-hour break ends, and the driving hours you have left don't say when you can roll again. If asked, say it plainly, like 'not sure when my ten's up'.")
   }
 

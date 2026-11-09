@@ -18,6 +18,7 @@ import {
   DRIVING_LIMIT_HOURS, DUTY_WINDOW_HOURS, BREAK_AFTER_DRIVING_HOURS, BREAK_MINUTES,
   WEEKLY_LIMIT_HOURS_7DAY, WEEKLY_LIMIT_HOURS_8DAY, RESTART_HOURS,
   SLEEPER_BERTH_MIN_HOURS, SLEEPER_OFF_MIN_HOURS, REQUIRED_REST_HOURS,
+  restEndsAt,
 } from '../src/constants/hosClock.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -770,4 +771,22 @@ test('038 enforces annotation length 4..60 and unidentified-only null driver', (
   assert.match(sql, /driver_id IS NOT NULL\s+OR \(origin = 'unidentified' AND truck_id IS NOT NULL\)/)
   const sql037 = readFileSync(join(here, '../src/db/migrations/037_duty_events.sql'), 'utf8')
   assert.match(sql037, /'unidentified'/, '037 must already allow the unidentified origin 038 relies on')
+})
+
+// --- when the current ten ends -------------------------------------------
+
+// Kills: ending the rest at the wrong time (rest length not read from REQUIRED_REST_HOURS, or not converted back to the compressed calendar)
+test('a rest that began when driving ended is up REQUIRED_REST_HOURS later on the HOS clock', () => {
+  const T = 1000 * HOUR
+  const now = T + 5 * 60 * 1000
+  const events = [{ status: DUTY_STATUS.DRIVING, startedAt: T - 4 * HOUR, endedAt: T }]
+  const expected = fromHosMs(toHosMs(T, now) + REQUIRED_REST_HOURS * HOUR, now)
+  assert.equal(restEndsAt(events, now).getTime(), expected)
+})
+
+// Kills: inventing a rest end for a driver who is not resting or has no log
+test('no log, or a driver still driving, has no rest end', () => {
+  const now = 1000 * HOUR
+  assert.equal(restEndsAt([], now), null)
+  assert.equal(restEndsAt([{ status: DUTY_STATUS.DRIVING, startedAt: now - HOUR, endedAt: null }], now), null)
 })

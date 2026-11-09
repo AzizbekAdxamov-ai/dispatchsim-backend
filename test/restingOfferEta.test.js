@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs'
 import { offerFacts } from '../src/modules/driverChat/offerTalk.js'
 import { buildDriverSystemPrompt, offerLines } from '../src/modules/driverChat/driverChat.prompt.js'
 import { driverReplyProblem } from '../src/modules/driverChat/replyProblem.js'
+import { clockTime } from '../src/constants/appClock.js'
 
 const now = new Date('2026-10-19T13:58:00.000Z')
 const driver = {
@@ -143,4 +144,38 @@ test('resting driver cannot offer fuzzy arrival times without a verified rest en
     assert.equal(driverReplyProblem(reply, { offer, driver, text })?.unusable, true, reply)
   }
   assert.equal(driverReplyProblem("I don't know when this rest ends, so I can't give you an ETA.", { offer, driver, text }), null)
+})
+
+// -- A rest end read from the duty log (release 2026-11-10, band 15) ---------
+
+const restEndsAt = new Date(now.getTime() + 3 * 3600e3)
+const known = { ...driver, restEndsAt }
+const upAt = clockTime(restEndsAt.toISOString())
+const standingOk = { stage: 'ok', unpaidCount: 0, owedUsd: 0, daysOverdue: 0 }
+
+// Kills: still telling a driver with a recorded rest that the end is unknown
+test('a known rest end is told to the driver; an unknown one stays unknown', () => {
+  const withEnd = buildDriverSystemPrompt({ driver: known, offer: null, load: null, now, standing: standingOk })
+  assert.match(withEnd, /Your ten is up around/)
+  assert.doesNotMatch(withEnd, /You don't know when your current ten-hour break ends/)
+  const past = buildDriverSystemPrompt({ driver: { ...driver, restEndsAt: new Date(now.getTime() - 60e3) }, offer: null, load: null, now, standing: standingOk })
+  assert.match(past, /Your ten is done; you can roll\./)
+  const none = buildDriverSystemPrompt({ driver, offer: null, load: null, now, standing: standingOk })
+  assert.match(none, /You don't know when your current ten-hour break ends/)
+})
+
+// Kills: starting the trip now when the ten is not over (restEndUnknown with a known end)
+test('with a known rest end the trip starts when the ten ends, and the verdict is computed', () => {
+  const offer = offerFacts({ driver: known, texts, now })
+  assert.equal(offer.restEndUnknown, undefined)
+  assert.ok(offer.earliestAt.getTime() > restEndsAt.getTime())
+  assert.equal(typeof offer.makesIt === 'boolean' || offer.makesIt === null, true)
+})
+
+// Kills: calling the driver's own computed rest end an invented time
+test('quoting the computed rest end is allowed; another clock time is not', () => {
+  const ask = 'When does your rest end?'
+  assert.equal(driverReplyProblem(`My ten's up around ${upAt}.`, { offer: null, text: ask, driver: known }), null)
+  const other = clockTime(new Date(restEndsAt.getTime() + 2 * 3600e3).toISOString())
+  assert.ok(driverReplyProblem(`My ten's up around ${other}.`, { offer: null, text: ask, driver: known }))
 })
