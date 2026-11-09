@@ -30,7 +30,8 @@ test('an amount above the quote with a booking word is an ask, not a booking', (
   const decision = turn('yes 3800 book it')
   assert.equal(decision.state.agreed, null)
   assert.ok(decision.state.pushes >= 1)
-  assert.match(decision.line, /I can offer|Best I can do/)
+  assert.ok(decision.line.includes(quoteText(posting, decision.state.offer)), decision.line)
+  assert.doesNotMatch(decision.line, /max|best i can do/i)
 })
 
 // Kills: AMOUNT_BOOK without a required accept word ("3500 all in" alone becoming a booking)

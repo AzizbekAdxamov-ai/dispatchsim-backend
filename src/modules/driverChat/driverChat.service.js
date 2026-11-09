@@ -23,7 +23,10 @@ import { assertCanSend } from '../chat/chatBudget.service.js'
 import { chatConfigFor } from '../chat/chatProvider.js'
 import { AppError } from '../../lib/errors.js'
 import { stripSpeakerLabel } from '../../lib/speakerLabel.js'
-import { withTransaction } from '../../db/pool.js'
+import { withTransaction, pool } from '../../db/pool.js'
+import * as dutyEventsRepo from '../hos/dutyEvents.repository.js'
+import { restEndsAt, HOS_LOOKBACK_HOURS } from '../../constants/hosClock.js'
+import { simDaysToMs } from '../../constants/simClock.js'
 import * as repo from './driverChat.repository.js'
 import * as payrollService from '../payroll/payroll.service.js'
 import { getCarrier } from '../carrier/carrier.repository.js'
@@ -52,6 +55,17 @@ export async function openConversation({ driverId, userId }) {
     driver: context.driver,
     messages: await repo.listMessages(conversation.id),
   }
+}
+
+// When the driver's current ten ends, from the duty log (null for a driver
+// who is not resting, or whose log has no rest to read).
+async function withRestEnd(context, now = new Date()) {
+  if (context?.driver?.dutyStatus !== 'resting') return context
+  const events = await dutyEventsRepo.recentForDriver(pool, {
+    driverId: context.driver.id,
+    since: new Date(now.getTime() - simDaysToMs(HOS_LOOKBACK_HOURS / 24)),
+  })
+  return { ...context, driver: { ...context.driver, restEndsAt: restEndsAt(events, now.getTime()) } }
 }
 
 export async function getThread({ conversationId, userId }) {
@@ -86,7 +100,7 @@ export async function sendMessage({ conversationId, userId, text, images }) {
   const conversation = await repo.getConversation(conversationId, userId)
   if (!conversation) throw new AppError('CONVERSATION_NOT_FOUND')
 
-  const context = await repo.getDriverContext(conversation.driverId)
+  const context = await withRestEnd(await repo.getDriverContext(conversation.driverId))
   if (!context) throw new AppError('DRIVER_NOT_FOUND')
 
   // Shared with the broker chat and derived from the provider's published

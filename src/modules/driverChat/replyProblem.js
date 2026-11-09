@@ -125,6 +125,8 @@ function inventedRestEta(reply, text, offer, driver, load = null) {
   if (offer?.makesIt === false && saysCannotMake(reply)) return false
   // Her own load's recorded ETA is a fact she was given, not a guess (ED02).
   if (!offer && quotesRecordedEta(reply, load)) return false
+  // The end of her ten is computed from her log (driver.restEndsAt): quoting it is a fact.
+  if (driver?.restEndsAt && quotesClock(reply, new Date(driver.restEndsAt).toISOString())) return false
   const asked = /\b(?:rest\s+(?:end|finish)|(?:end|finish)\s+(?:my|your|the)?\s*rest|eta|arrival|arrive|reach|make\s+(?:it|the\s+pickup)|roll\s+into|(?:be|get)\s+there)\b/i.test(text ?? '')
   if (!asked) return false
   return /\b\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)\b|\b\d{1,2}:\d{2}\b|\b(?:noon|midnight)\b|\b(?:can|cannot|can't|will|won't|could|would|should)\s+(?:\w+\s+){0,2}(?:make\s+(?:it|the\s+pickup)|reach\b|get\s+to\b|be\s+there\b|get\s+there\b)|\b(?:before|after)\s+(?:the\s+)?pickup\b|\b(?:expect|likely|probably|should|will|can|could|would)\b.{0,30}\b(?:tomorrow|tonight|morning|afternoon|evening|dawn|dusk|lunch)\b|\b(?:by|before|after|around)\s+(?:tomorrow\s+)?(?:morning|afternoon|evening|dawn|dusk|lunch)\b|^\s*(?:yes|yeah|yep|sure|I can)\b/i.test(reply)
@@ -134,12 +136,17 @@ function inventedRestEta(reply, text, offer, driver, load = null) {
 // around Fri, Nov 6, 9:45 AM", driverChat.prompt.js). A reply whose every
 // clock time is that one quotes a fact. ED02 (eval 2026-11-02, both models):
 // "whats ur eta" was answered with this time and regenerated as invented.
-function recordedEtaClock(load) {
-  const m = /(\d{1,2}):(\d{2})\s*([AP])M\b/.exec(clockDateTime(load?.etaAt) ?? '')
+function clockOf(iso) {
+  const m = /(\d{1,2}):(\d{2})\s*([AP])M\b/.exec(clockDateTime(iso) ?? '')
   return m ? { hour: Number(m[1]), minute: Number(m[2]), half: m[3] } : null
 }
 function quotesRecordedEta(reply, load) {
-  const eta = recordedEtaClock(load)
+  return quotesClock(reply, load?.etaAt)
+}
+// Every clock time in the reply is that one (the load's recorded ETA, or the
+// end of the driver's computed rest).
+function quotesClock(reply, iso) {
+  const eta = clockOf(iso)
   if (!eta) return false
   const times = [...asciiPunct(String(reply ?? '')).matchAll(/\b(\d{1,2})(?::(\d{2}))?\s*([ap])\.?\s*m\b/gi)]
   return times.length > 0 && times.every((t) => Number(t[1]) === eta.hour

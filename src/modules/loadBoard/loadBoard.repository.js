@@ -72,6 +72,7 @@ const DEADHEAD_LATERAL = `
     SELECT d.id, d.name, d.hos_remaining_min AS "hosRemainingMin",
            road_miles(d.current_lat, d.current_lon, p.origin_lat, p.origin_lon)::int AS mi
     FROM drivers d
+    JOIN trucks t ON t.driver_id = d.id AND t.trailer_type = p.equipment_type
     WHERE d.current_lat IS NOT NULL
       AND d.current_lon IS NOT NULL
       AND NOT EXISTS (
@@ -95,6 +96,7 @@ const BASE_CTE_FLEET = `
     LEFT JOIN LATERAL (
       SELECT d.id, d.name, d.hos_remaining_min, d.current_lat, d.current_lon
       FROM drivers d
+      JOIN trucks t ON t.driver_id = d.id AND t.trailer_type = p.equipment_type
       WHERE d.current_lat IS NOT NULL
         AND d.current_lon IS NOT NULL
         AND NOT EXISTS (
@@ -505,6 +507,7 @@ export const HAS_AVAILABLE_DRIVER_SQL = `SELECT 1 FROM drivers d
 export const NEAREST_AVAILABLE_DRIVER_SQL = `SELECT d.id, d.name, d.hos_remaining_min AS "hosRemainingMin",
            road_miles(d.current_lat, d.current_lon, $1, $2)::int AS "deadheadMi"
      FROM drivers d
+     JOIN trucks t ON t.driver_id = d.id AND t.trailer_type = $3
      WHERE d.current_lat IS NOT NULL
        AND d.current_lon IS NOT NULL
        AND NOT EXISTS (
@@ -523,7 +526,7 @@ export async function hasAvailableDriver() {
 
 // Find the nearest available driver to a posting's origin, with HOS.
 // Returns { id, name, deadheadMi, hosRemainingMin } or null.
-export async function findNearestAvailableDriver(originLat, originLon) {
-  const result = await query(NEAREST_AVAILABLE_DRIVER_SQL, [originLat, originLon])
+export async function findNearestAvailableDriver(originLat, originLon, equipmentType) {
+  const result = await query(NEAREST_AVAILABLE_DRIVER_SQL, [originLat, originLon, equipmentType])
   return result.rows[0] ?? null
 }

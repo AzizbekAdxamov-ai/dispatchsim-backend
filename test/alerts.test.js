@@ -13,6 +13,7 @@ import {
   FAMILIES, FAMILY_KEYS, cashFingerprint, fractionRemaining, isLeavingSoon,
   CASH_ACK_RESOLUTION_USD, LEAVING_SOON_FRACTION,
 } from '../src/modules/alerts/alerts.catalog.js'
+import { payOverdueAlerts } from '../src/modules/alerts/alerts.service.js'
 import { simAgo, realAgo } from '../src/modules/alerts/alerts.format.js'
 import { REAL_MS_PER_SIM_DAY } from '../src/constants/simClock.js'
 
@@ -147,4 +148,32 @@ test('driver.hos-low: the detail names the CFR section it counts down to', () =>
     loadId: '600009', hosRemainingMin: 45 * 60,
   })
   assert.ok(detail.includes('395.3(a)(3)'), detail)
+})
+
+// --- pay overdue ------------------------------------------------------
+
+// Kills: a missing family, or numbers typed into the text instead of read from DRIVER_STAGES
+test('a late pay alert says when the driver stops taking loads and when the driver leaves', () => {
+  const title = FAMILIES['driver.pay-overdue'].title({ driverName: 'Ethan', daysOverdue: 3, stage: 'asks' })
+  assert.equal(title, "Ethan's pay is 3 days overdue — stops taking loads at 7, leaves at 14")
+  assert.match(FAMILIES['driver.pay-overdue'].title({ driverName: 'Ethan', daysOverdue: 9, stage: 'refuses' }), /not taking loads · leaves at 14/)
+})
+
+// Kills: alerting on money not yet due (the SQL clamps days to 0, so 'asks' also covers not-yet-due), or on a driver who already left
+test('only settlements already due, for a driver who has not left, raise the alert', () => {
+  const now = new Date('2026-11-10T12:00:00Z')
+  const row = (extra) => ({ driverId: 'd5', driverName: 'Ethan', owedUsd: 1840, unpaidCount: 1, daysOverdue: 0, stage: 'asks', ...extra })
+  const past = '2026-11-10T11:00:00Z'
+  const future = '2026-11-12T11:00:00Z'
+  const alerts = payOverdueAlerts([
+    row({ driverId: 'd1', oldestDueAt: past }),
+    row({ driverId: 'd2', oldestDueAt: future }),
+    row({ driverId: 'd3', oldestDueAt: past, stage: 'quits', daysOverdue: 20 }),
+    row({ driverId: 'd4', oldestDueAt: null, owedUsd: 0, daysOverdue: null, stage: 'ok' }),
+    row({ driverId: 'd6', oldestDueAt: past, stage: 'refuses', daysOverdue: 8 }),
+  ], now)
+  assert.deepEqual(alerts.map((a) => a.key), ['driver.pay-overdue:d1', 'driver.pay-overdue:d6'])
+  assert.equal(alerts[0].href, '/finance/settlements')
+  assert.equal(alerts[0].stakeUsd, 1840)
+  assert.notEqual(alerts[0].fingerprint, alerts[1].fingerprint)
 })

@@ -419,6 +419,13 @@ export function offerFacts({ driver, load = null, texts, now = new Date() }) {
   // except when the pickup is out of reach even if her rest ended this
   // minute with a full clock (ED07: 1,982 mi, about 20 hours away). That
   // verdict does not depend on the unknown rest end, so it is given.
+  if (driver.dutyStatus === 'resting' && driver.restEndsAt) {
+    // The end of her ten is known from her log: the trip starts then, not now.
+    const startsAt = Math.max(now.getTime(), new Date(driver.restEndsAt).getTime())
+    const earliestAt = new Date(startsAt + legalTransitHours(miles) * 3600e3)
+    return { ...base, miles, fromCity: `${from.city}, ${from.state}`, onLoad: false, earliestAt, pickupAt,
+      makesIt: pickupAt ? earliestAt.getTime() <= pickupAt.getTime() : null }
+  }
   if (driver.dutyStatus === 'resting') {
     if (pickupAt && exceedsLegalReach(miles, (pickupAt.getTime() - now.getTime()) / 3600e3)) {
       return { ...base, miles, fromCity: `${from.city}, ${from.state}`, onLoad: false,

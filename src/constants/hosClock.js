@@ -612,6 +612,19 @@ export function withOffDutyGaps(events, untilMs) {
   return out
 }
 
+// When the rest the driver is in ends: the start of the unbroken off-duty /
+// sleeper run that covers `nowMs`, plus the required ten hours, back on the
+// compressed calendar. null when the driver is not resting now or there is no
+// log. The start is in the log (duty_events); a gap since the last event
+// counts as off duty, as everywhere else in this file.
+export function restEndsAt(events, nowMs) {
+  const now = msOf(nowMs)
+  const filled = withOffDutyGaps(toHosDomain(events, now), now)
+  const run = mergeRuns(filled, (status) => REST_STATUSES.has(status)).pop()
+  if (!run || run.start > now || run.end < now) return null
+  return new Date(fromHosMs(run.start + REQUIRED_REST_HOURS * 3600e3, now))
+}
+
 // ---------------------------------------------------------------------
 // The four drivers columns, finally with a writer
 // ---------------------------------------------------------------------

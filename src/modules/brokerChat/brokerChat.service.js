@@ -21,13 +21,14 @@ import { AppError } from '../../lib/errors.js'
 import { stripSpeakerLabel } from '../../lib/speakerLabel.js'
 import { getCarrier, carrierEmail } from '../carrier/carrier.repository.js'
 import { findById } from '../auth/users.repository.js'
-import { negotiate, lastAuthorizedEmail, RATE_MISS_REASON } from './negotiation.js'
+import { negotiate, lastAuthorizedEmail, pendingBasisAskUsd, lastCarrierAskUsd, RATE_MISS_REASON } from './negotiation.js'
 import { varyRepeat } from './repeatGuard.js'
 import { buildBrokerContext } from './brokerContext.js'
 import * as repo from './brokerChat.repository.js'
 import { talkFacts } from '../../constants/freightTerms.js'
 import { replyDelaySec, rateConAmount } from './replyTiming.js'
 import { bookPosting } from '../loadBoard/loadBoard.service.js'
+import { getFleetEquipmentKeys } from '../loadBoard/loadBoard.repository.js'
 import {
   buildMessages,
   FALLBACK_REPLY,
@@ -56,7 +57,8 @@ function assertPostingOpen(posting) {
 // What the booking flow reaches outside this file for. The default is the
 // real database; the booking-flow test hands in an in-memory stand-in, so
 // the whole agree -> paper -> accept path runs without a DB or a token.
-const DEFAULT_DEPS = Object.freeze({ repo, getCarrier, bookPosting, findById, chatText, assertCanSend, chatConfigFor, logTurn, reportRoadEvent: reportEventFromDispatcher })
+const NO_MATCHING_EQUIPMENT = 'no-matching-equipment'
+const DEFAULT_DEPS = Object.freeze({ repo, getCarrier, bookPosting, findById, chatText, assertCanSend, chatConfigFor, logTurn, reportRoadEvent: reportEventFromDispatcher, fleetEquipmentKeys: getFleetEquipmentKeys })
 
 // No agreement and no signed paper until the MC the dispatcher gave checks
 // out (decision 2, 2026-10-17). The broker's own sentence goes to the screen
@@ -126,7 +128,11 @@ export async function getThread({ conversationId, userId }, { deps = DEFAULT_DEP
   // A booked thread says where its load is (booked, in transit, delivered)
   // so the panel can word the bar above the input.
   const facts = conversation.status === 'booked' ? await repo.bookedLoadFacts?.(conversationId, userId) : null
+  // Said before signing, not after: the fleet has no truck for this load's trailer.
+  const fleetKeys = posting && deps.fleetEquipmentKeys ? await deps.fleetEquipmentKeys() : null
+  const preSignWarnings = fleetKeys && !fleetKeys.has(posting.equipmentType) ? [NO_MATCHING_EQUIPMENT] : []
   return {
+    preSignWarnings,
     conversation: { ...conversation, negotiationStage: conversation.status === 'booked' ? 'booked'
       : await repo.rateConDelivered(conversation.id) ? 'paper_delivered' : conversation.negotiationStage },
     ...(facts ? { loadStage: loadStage(facts), loadId: facts.id } : {}),
@@ -274,6 +280,8 @@ export async function sendMessage({ conversationId, userId, text, cancelBooking 
     posting, text, booking, truck, now,
     effectiveEmail: carrierEmail(carrier, await deps.findById(userId)).effectiveEmail,
     knownEmail: lastAuthorizedEmail(dispatcherTexts(thread).slice(0, -1)),
+    pendingBasisUsd: pendingBasisAskUsd(thread, posting),
+    lastAskUsd: lastCarrierAskUsd(dispatcherTexts(thread).slice(0, -1), posting),
     offerVisible: brokerSaid.some((line) => line.replaceAll(',', '').includes(String(turnConversation.brokerOfferUsd ?? posting.rateUsd))),
   })
   const paper = { status: decision.state.agreed === null ? 'open' : 'agreed', delivered: delivered && !decision.invalidatePaper, stage: decision.state.stage }

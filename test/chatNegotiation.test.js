@@ -187,7 +187,7 @@ test('MC questions wait for acceptance while authorized prices and reason guards
   const hello = step('wassap brother', initial, { booking: missing })
   const premature = brokerReplyProblem('May I have your MC number?', { posting, booking: missing, text: 'wassap brother', negotiation: hello })
   assert.equal(premature.unusable, true)
-  assert.match(premature.safeReply, /^Hey!/)
+  assert.match(premature.safeReply, /^(?:hey|hi|hello|good)/i)
   for (const text of ['What is the rate?', 'My driver is Ethan Brooks', 'Can you do $1800?']) {
     const decision = step(text, initial, { booking: missing })
     assert.equal(brokerReplyProblem('Please provide your MC.', { posting, booking: missing, text, negotiation: decision }).unusable, true)

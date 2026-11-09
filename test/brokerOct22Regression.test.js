@@ -67,7 +67,7 @@ test('explicit put-on recipient directions parse; quotes, conditions, holds and 
 
 test('natural recipient directions issue one paper only after agreement and never through a hold', async () => {
   for (const suffix of ['', ' Once I confirm.', ' Hold up, dont book nothing yet.']) {
-    const fake = makeFakeBrokerRepo({ posting, lines: ['Example Freight MC-741309.'] })
+    const fake = makeFakeBrokerRepo({ posting, lines: ['Example Freight MC-741309. 53-foot dry van, driver is Ethan, truck #12.'] })
     const deps = { repo: fake.repo, getCarrier: async () => ({ name: 'Example Freight', mcNumber: 'MC-741309' }),
       findById: async () => null, assertCanSend: async () => {}, chatConfigFor: () => ({ model: 'fake' }),
       logTurn: async () => {}, chatText: async () => 'Please confirm the rate first.' }
@@ -254,7 +254,9 @@ test('actual deadhead counter keeps the requested price and best-we-can-do is no
   assert.equal(negotiationReplyProblem(reply, decision), 'claimed a permanent final rate while authorized bargaining room remains')
   assert.equal(negotiationReplyProblem('The best I can do is $8,153 all-in.', decision), 'claimed a permanent final rate while authorized bargaining room remains')
   // Kills: treating the posted rate as the new authorized counter.
-  assert.equal(negotiationReplyProblem(`The best we can do right now is $${decision.state.offer.toLocaleString('en-US')} all-in.`, decision), null)
+  // Review 2026-11-10: a softened "best we can do right now" is still a cap claim while room remains (this line used to expect null).
+  assert.equal(negotiationReplyProblem(`The best we can do right now is $${decision.state.offer.toLocaleString('en-US')} all-in.`, decision), 'claimed a permanent final rate while authorized bargaining room remains')
+  assert.equal(negotiationReplyProblem(`Right now I can do $${decision.state.offer.toLocaleString('en-US')} all-in.`, decision), null)
 })
 
 // Live 2026-11-05, the Chicago→Dallas thread: the dispatcher pushed and the

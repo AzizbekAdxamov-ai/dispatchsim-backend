@@ -23,11 +23,18 @@
 // student can learn once and stop asking about.
 
 import { hash01 } from '../lib/stableHash.js'
+import { tarpFor } from './freightHandling.js'
 
 export const DETENTION_PER_HOUR = Object.freeze({ standard: Object.freeze([50, 90]), specialized: Object.freeze([75, 125]) })
 export const FREE_HOURS = Object.freeze({ standard: 2, specialized: 3 })
 export const TONU_USD = Object.freeze([150, 500])
 export const LAYOVER_PER_DAY = Object.freeze([75, 300])
+// Tarp pay per load, paid on freight that must be tarped. Dispatch-company
+// pages (not a survey), checked 2026-11-10:
+//   https://otrucking.com/resources/guides/flatbed-tarping-guide/
+//   https://lane-math.pages.dev/accessorials/tarp-pay/
+export const TARP_PAY_USD = Object.freeze([75, 150])
+const TARP_PAY_STEP_USD = 25
 
 // The source names flatbed and step deck as specialized (and hazmat,
 // which this program does not model). Everything else is standard.
@@ -37,15 +44,18 @@ function pickIn([lo, hi], unit, key) {
   return Math.round((lo + hash01(key) * (hi - lo)) / unit) * unit
 }
 
-export function brokerTerms(brokerName, equipmentType) {
+export function brokerTerms(brokerName, equipmentType, commodity = null) {
   const kind = SPECIALIZED.has(equipmentType) ? 'specialized' : 'standard'
   const name = String(brokerName ?? '')
+  const tarp = tarpFor({ equipmentType, commodity })
   return {
     openDeck: kind === 'specialized',
     detentionPerHour: pickIn(DETENTION_PER_HOUR[kind], 5, `${name}:detention:${kind}`),
     freeHours: FREE_HOURS[kind],
     tonuUsd: pickIn(TONU_USD, 25, `${name}:tonu`),
     layoverPerDay: pickIn(LAYOVER_PER_DAY, 25, `${name}:layover`),
+    tarp,
+    tarpPayUsd: tarp?.needed ? pickIn(TARP_PAY_USD, TARP_PAY_STEP_USD, `${name}:tarp`) : null,
   }
 }
 
@@ -60,6 +70,7 @@ export function termsLines(t) {
     `Detention${t.openDeck ? ' (open-deck freight)' : ''}: $${t.detentionPerHour}/hr after ${t.freeHours} hours free, at pickup or delivery.`,
     `TONU: $${t.tonuUsd} if the load is cancelled after the truck is dispatched.`,
     `Layover: $${t.layoverPerDay} per day if the truck has to wait overnight.`,
+    ...(t.tarpPayUsd ? [`Tarp pay: $${t.tarpPayUsd} per load (${t.tarp.kind}).`] : []),
     'Lumper: paid by the broker against a receipt.',
   ]
 }

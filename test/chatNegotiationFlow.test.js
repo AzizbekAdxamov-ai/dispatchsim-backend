@@ -114,7 +114,7 @@ test('live Toledo transcript counters without identity spam, agreement or docume
     assert.equal(fake.state.conversation.agreedRateUsd, null)
     assert.equal(fake.state.messages.filter((m) => m.kind === 'rate_con').length, 0)
   }
-  assert.match(replies[0], /^Hey!/)
+  assert.match(replies[0], /^(?:hey|hi|hello|good)/i)
   assert.match(replies[1], /still available/)
   assert.match(replies[2], /8,153/)
   // Kills: silently keeping the posted price after pressure.
@@ -130,7 +130,7 @@ test('live Toledo transcript counters without identity spam, agreement or docume
 
 function setup() {
   const fake = makeFakeBrokerRepo({ posting: fakePosting({ rateUsd: 1571, distanceMi: 442, weightLbs: 42000 }),
-    lines: ['This is Keystone Line Haul, MC-741309.', 'Our truck is in Dallas, 53-foot dry van.'] })
+    lines: ['This is Keystone Line Haul, MC-741309.', 'Our truck is in Dallas, 53-foot dry van. Driver is Ethan, truck #12.'] })
   let calls = 0
   const deps = { repo: fake.repo, getCarrier: async () => carrier,
     findById: async () => ({ email: 'login@example.com' }), assertCanSend: async () => {},

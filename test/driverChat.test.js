@@ -15,6 +15,8 @@ import {
 } from '../src/modules/driverChat/driverChat.prompt.js'
 import { driverReplyDelaySec, DRIVER_REPLY_SEC } from '../src/modules/driverChat/driverChat.replyTiming.js'
 import { stageFor, DRIVER_STAGES } from '../src/constants/driverPay.js'
+import { refusalLine } from '../src/modules/driverChat/driverChat.refusal.js'
+import { REASONS } from '../src/constants/availabilityReasons.js'
 import { GET_DRIVER_CONTEXT_SQL } from '../src/modules/driverChat/driverChat.sql.js'
 import { seeded } from './helpers/rng.js'
 
@@ -181,5 +183,22 @@ test('an unknown duty status still produces a usable delay', () => {
   for (const st of ['nonsense', null, undefined, '']) {
     const d = driverReplyDelaySec(st, rng)
     assert.ok(Number.isInteger(d) && d > 0, `${st} -> ${d}`)
+  }
+})
+
+// Kills: the driver never saying when the driver leaves (live: "he stops taking loads at 7, leaves at 14" was only in the alert)
+test('a refusing driver says once that unpaid money ends in leaving; an asking driver does not', () => {
+  const refuses = buildDriverSystemPrompt({ driver: DRIVER, standing: standing(9), load: null })
+  assert.match(refuses, /you leave the company/)
+  assert.match(refuses, new RegExp(`${DRIVER_STAGES.quits - 9} days from now`))
+  const asks = buildDriverSystemPrompt({ driver: DRIVER, standing: standing(2), load: null })
+  assert.doesNotMatch(asks, /you leave the company/)
+})
+
+// Kills: refusal lines that never mention the leaving deadline
+test('every unpaid refusal variant names the days left before the driver leaves', () => {
+  for (const driverId of ['d1', 'd2', 'd3', 'd4', 'd5', 'd6', 'd7', 'd8', 'd9']) {
+    const line = refusalLine({ driverId, reason: REASONS.UNPAID, owedUsd: 1840, unpaidCount: 1, daysOverdue: 9 })
+    assert.match(line, /settled in 5 days, I am done here/, line)
   }
 })

@@ -10,7 +10,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { brokerTerms, termsLines, DETENTION_PER_HOUR, FREE_HOURS, TONU_USD, LAYOVER_PER_DAY } from '../src/constants/accessorials.js'
+import { brokerTerms, termsLines, DETENTION_PER_HOUR, FREE_HOURS, TONU_USD, LAYOVER_PER_DAY, TARP_PAY_USD } from '../src/constants/accessorials.js'
 import { BROKERS } from '../scripts/seed/schemas.js'
 import { buildBrokerSystemPrompt } from '../src/modules/brokerChat/brokerChat.prompt.js'
 
@@ -78,4 +78,16 @@ test('the broker is told their own terms', () => {
 test('open-deck detention says it is the open-deck figure; van and reefer do not', () => {
   assert.match(termsLines(brokerTerms(BROKERS[0], 'flatbed'))[0], /^Detention \(open-deck freight\): \$\d+\/hr after 3 hours free/)
   assert.match(termsLines(brokerTerms(BROKERS[0], 'dry-van'))[0], /^Detention: \$\d+\/hr after 2 hours free/)
+})
+
+// Kills: leaving tarp pay out of the terms -- a flatbed broker quoted tarp money the paper never carried
+test('a tarped load carries tarp pay inside the sourced range; untarped freight carries none', () => {
+  const lines = termsLines(brokerTerms('Ironwood Freight', 'flatbed', 'Copper tubing'))
+  const tarp = lines.find((l) => /^Tarp pay: \$\d+ per load \(steel tarps \(4 ft drop\)\)/.test(l))
+  assert.ok(tarp, lines.join(', '))
+  const usd = brokerTerms('Ironwood Freight', 'flatbed', 'Copper tubing').tarpPayUsd
+  assert.ok(usd >= TARP_PAY_USD[0] && usd <= TARP_PAY_USD[1], String(usd))
+  for (const [type, commodity] of [['dry-van', 'Copper tubing'], ['flatbed', 'Concrete pipe'], ['flatbed', null]]) {
+    assert.ok(!termsLines(brokerTerms('Ironwood Freight', type, commodity)).some((l) => /^Tarp pay/.test(l)), `${type} ${commodity}`)
+  }
 })
