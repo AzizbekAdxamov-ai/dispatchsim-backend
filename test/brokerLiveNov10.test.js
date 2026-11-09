@@ -290,3 +290,21 @@ test('the prompt for a "how are you" greeting asks for a few words about how the
   assert.match(prompt(GREETING_WITH_HOW), /say how you are in a few words/)
   assert.doesNotMatch(prompt('hello brother'), /say how you are in a few words/)
 })
+
+// Review round 1, finding 1 ---------------------------------------------------
+const TINY_RAISE_USD = 10
+// Kills: the second rung adding a $25 minimum step past a small ask (3510 then 3520 gave 3535)
+test('the second push never gives more than the figure just asked', () => {
+  const ask1 = room.rateUsd + TINY_RAISE_USD
+  const first = turn(`can you do ${ask1}?`)
+  assert.ok(first.state.offer <= ask1)
+  const ask2 = ask1 + TINY_RAISE_USD
+  const second = turn(`can you do ${ask2}?`, open({ ratePushCount: first.state.pushes, brokerOfferUsd: first.state.offer }))
+  assert.equal(second.state.pushes, 2)
+  assert.ok(second.state.offer <= ask2, `${second.state.offer} > ${ask2}`)
+  // Every push depth stays at or below the ask.
+  for (let pushes = 0; pushes < 5; pushes += 1) {
+    const decision = turn(`can you do ${ask2}?`, open({ ratePushCount: pushes, brokerOfferUsd: first.state.offer }))
+    assert.ok(decision.state.offer <= Math.max(ask2, first.state.offer), `pushes ${pushes}: ${decision.state.offer}`)
+  }
+})

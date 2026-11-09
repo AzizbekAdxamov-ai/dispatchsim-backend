@@ -529,7 +529,8 @@ export function negotiate({ conversation, posting, text, booking, truck, effecti
         const skippedFirstRung = steps === 2 && state.pushes === 1
         const base = skippedFirstRung ? Math.max(state.offer, firstRungOffer(posting, amount)) : state.offer
         const step = Math.max(25, Math.round((Math.min(amount, ceiling) - base) * STEP_2_SHARE / 25) * 25)
-        state.offer = Math.min(ceiling, base + step)
+        // The $25 minimum step must not carry the offer past what was asked.
+        state.offer = Math.max(state.offer, Math.min(ceiling, base + step, amount))
       } else {
         // Ordinary bargaining can earn one small counter, not an endless
         // ladder. Anchor it to the posting so retries never compound it.
@@ -547,6 +548,7 @@ export function negotiate({ conversation, posting, text, booking, truck, effecti
     clear(); state.stage = 'held'; line = 'Understood. I will withdraw the rate confirmation.'
   } else if (intent.kind === 'walk' && state.agreed === null && !state.bestCounterUsed) {
     clear(); state.bestCounterUsed = true
+    // With no earlier ask on record (lastAskUsd null) there is nothing to stay under: the ceiling applies.
     state.offer = Math.max(state.offer, Math.min(ceilingFor(posting), lastAskUsd ?? Infinity))
     line = say('walkCounter', state.offer)
   } else if (['talk', 'ambiguous'].includes(intent.kind) && state.agreed === null && pending === null
