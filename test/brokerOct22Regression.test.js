@@ -254,7 +254,9 @@ test('actual deadhead counter keeps the requested price and best-we-can-do is no
   assert.equal(negotiationReplyProblem(reply, decision), 'claimed a permanent final rate while authorized bargaining room remains')
   assert.equal(negotiationReplyProblem('The best I can do is $8,153 all-in.', decision), 'claimed a permanent final rate while authorized bargaining room remains')
   // Kills: treating the posted rate as the new authorized counter.
-  assert.equal(negotiationReplyProblem(`The best we can do right now is $${decision.state.offer.toLocaleString('en-US')} all-in.`, decision), null)
+  // Review 2026-11-10: a softened "best we can do right now" is still a cap claim while room remains (this line used to expect null).
+  assert.equal(negotiationReplyProblem(`The best we can do right now is $${decision.state.offer.toLocaleString('en-US')} all-in.`, decision), 'claimed a permanent final rate while authorized bargaining room remains')
+  assert.equal(negotiationReplyProblem(`Right now I can do $${decision.state.offer.toLocaleString('en-US')} all-in.`, decision), null)
 })
 
 // Live 2026-11-05, the Chicago→Dallas thread: the dispatcher pushed and the

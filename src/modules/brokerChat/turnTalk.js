@@ -7,7 +7,7 @@ export const GREETING_LEAD = /^(?:hi|hey|hello|yo|bro|wass?up|wassap|what'?s up|
 // "how are you" asked at the end of a greeting: social, so the message is still only a greeting.
 const HOW_ARE_YOU_TAIL = /[\s,!.]+(?:how(?:'s| is) it going|how (?:are|r) (?:you|u|ya)(?: doing| today)?|how you doing|hru|u good|you good)\s*[?.!]*\s*$/i
 // A reply that already greets back in its first sentence.
-export const GREETS_BACK = /\b(?:hi|hey|hello|morning|afternoon|evening|good|doing|thanks|thx)\b/i
+export const GREETS_BACK = /\b(?:hi|hey|hello|morning|afternoon|evening|good day|doing|thanks|thx)\b/i
 
 const withoutHowAreYou = (text) => text.replace(HOW_ARE_YOU_TAIL, '')
 

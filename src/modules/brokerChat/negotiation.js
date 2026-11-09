@@ -624,7 +624,7 @@ export function negotiationLines(decision) {
 // A cap stated as fact ("$4,750 max", "as high as I can go"). Unlike the
 // rate-word patterns below, "right now" and "for now" do not soften it; only
 // a quoted dispatcher ("you said", "your") is not the broker's own claim.
-const CAP_CLAIM = /\b(?:(?:my|our|the|that'?s|thats|is)\s+max(?:imum)?|\d[\d,]*k?\s+max(?:imum)?|max(?:imum)?\s+(?:i|we)\s+can|as high as (?:i|we)(?: can)? go|(?:that'?s|thats|that is)\s+(?:my|our|the)\s+(?:limit|ceiling|top)|top dollar|tapped out|(?:cant|wont)\s+(?:go|pay|move|come)(?: any)? (?:higher|above|up|more))\b/i
+const CAP_CLAIM = /\b(?:(?:my|our|the|that'?s|thats|is)\s+max(?:imum)?(?!\s+(?:weight|payload|load|capacity|hours?|miles|speed|length|height)\b)|\d[\d,]*k?\s+max(?:imum)?(?!\s+(?:weight|payload|load|capacity|hours?|miles|speed|length|height)\b)|best (?:i|we) can (?:do|pay|offer)|max(?:imum)?\s+(?:i|we)\s+can|as high as (?:i|we)(?: can)? go|(?:that'?s|thats|that is)\s+(?:my|our|the)\s+(?:limit|ceiling|top)|top dollar|tapped out|(?:cant|wont)\s+(?:go|pay|move|come)(?: any)? (?:higher|above|up|more))\b/i
 const claimsCap = (clause) => !/\b(?:you said|u said|your|ur)\b/i.test(clause) && CAP_CLAIM.test(clause)
 
 export function negotiationReplyProblem(reply, decision) {

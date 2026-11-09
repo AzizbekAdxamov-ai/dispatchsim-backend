@@ -326,3 +326,37 @@ test('the live price phrases are still offers after the false-positive veto', ()
   assert.equal(asks.length, 16)
   for (const text of asks) assert.equal(chatIntent(text, allIn, OPEN).kind, 'offer', text)
 })
+
+// Review round 1, findings 3 and 4 ---------------------------------------------
+// Kills: CAP_CLAIM matching "the max <spec>" (a weight or hours limit refused as a rate cap)
+test('a max that is a load spec is not a cap claim', () => {
+  const decision = turn('need more money')
+  for (const reply of ['The max weight is 45,000 lbs.', 'Max payload is 45,000 lbs.', 'The max length is 53 feet.', 'Our max hours are 11 a day.', 'The max capacity is 48 pallets.']) {
+    assert.equal(negotiationReplyProblem(reply, decision), null, reply)
+  }
+})
+
+// Kills: "best I can do" escaping the guard when softened by "right now" / "for now"
+test('a softened "best I can do" is still a cap claim', () => {
+  const decision = turn('need more money')
+  const o = usd(decision.state.offer)
+  for (const reply of [`Best I can do right now is ${o}.`, `best i can do for now is ${o}`, `The best we can offer at the moment is ${o}.`]) {
+    assert.equal(negotiationReplyProblem(reply, decision), PERMANENT_CAP, reply)
+  }
+})
+
+// Kills: any "good" counting as a greeting back ("Good news, ..." skipped the hello)
+test('"Good news" is not a greeting back', () => {
+  const posting = fakePosting({ originCity: 'Columbus', destinationCity: 'Dallas' })
+  const text = 'hey, is the Columbus load still open?'
+  const negotiation = negotiate({ conversation: {}, posting, text, booking: matched, offerVisible: true })
+  assert.equal(brokerReplyProblem('Good news, it is still open.', { posting, text, negotiation })?.why, 'skipped their greeting')
+  assert.equal(brokerReplyProblem('Good morning, it is still open.', { posting, text, negotiation }), null)
+})
+
+// Kills: the shared live line staying generic ("Best I can do" must not appear while there is room)
+test('a line with room left never claims a limit', () => {
+  const decision = turn('need more money')
+  assert.equal(decision.hasRateRoom, true)
+  assert.doesNotMatch(decision.line, /max|best i can do/i)
+})
