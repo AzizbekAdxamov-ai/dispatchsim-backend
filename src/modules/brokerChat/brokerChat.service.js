@@ -11,7 +11,7 @@ import { loadStage, LOAD_STAGES, postBookingDecision, POST_BOOKING_ACTIONS } fro
 import { reportEventFromDispatcher } from '../loadEvents/loadEvents.service.js'
 import { truckFacts } from './truckTalk.js'
 import { bookingFacts, carrierNotVerified } from './bookingTalk.js'
-import { stopsForRow } from './stops.js'
+import { stopsFor, stopsForRow } from './stops.js'
 import { fileURLToPath } from 'node:url'
 import { promptVersionOf } from '../../lib/promptVersion.js'
 import { turnRow, logTurn } from '../chat/turnLog.js'
@@ -435,6 +435,7 @@ export async function sendMessage({ conversationId, userId, text, cancelBooking 
     conversationId, userId, revision: turnConversation.negotiationRevision, decision, reply: reply.trim() || FALLBACK_REPLY,
     delaySec: replyDelaySec(posting.creditRating), paperDelaySec: replyDelaySec(posting.creditRating),
     paperRate: decision.issuePaper ? rateConAmount(decision.state.agreed, posting.creditRating, { minRate: posting.distanceMi }) : null,
+    paperStops: decision.issuePaper ? stopsFor(posting) : null,
   })
 
   // brokerMessage is deliberately NOT returned. Handing the caller a
@@ -574,5 +575,8 @@ export async function getRateConfirmation({ conversationId, userId }, { deps = D
     carrier: await deps.getCarrier(),
     posting: row,
   })
-  return { ...row, booking: { ...booking, email: row.recipientEmail ?? booking.email }, stops: stopsForRow(row) }
+  // Names are frozen when the paper is issued. A paper issued before that was
+  // stored gets its (unchanged) names written on this first read.
+  const stops = row.rateConStops ?? await deps.repo.freezeRateConStops(conversationId, stopsForRow(row))
+  return { ...row, booking: { ...booking, email: row.recipientEmail ?? booking.email }, stops }
 }

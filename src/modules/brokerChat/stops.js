@@ -3,10 +3,11 @@
 //
 // A broker gives the city and the appointment before booking; the full
 // names and addresses are on the rate confirmation (Azizbek, 2026-10-17).
-// Nothing is stored: like ceilingFor and brokerTerms they are a pure
-// function of the posting id (stableHash), so the chat, the paper and a
-// re-download all agree. The cost: if these lists change, a re-downloaded
-// rate confirmation shows new names.
+// stopsFor is a pure function of the posting id (stableHash), so the chat
+// and the paper agree. The names on an ISSUED rate confirmation are frozen:
+// they are copied to broker_conversations.rate_con_stops when the paper is
+// issued (migration 074) and read back from there, so changing these lists
+// no longer changes a paper that was already sent.
 //
 // No real company names -- the lists are invented words that are not a
 // known shipper. The street is invented too; the city and state are the
@@ -20,7 +21,7 @@ export const NAME_FIRST = Object.freeze([
 ])
 // The second word fits what the posting hauls: a flatbed of copper tubing
 // does not ship from a "Cold Storage". Lists are by equipment key. NOTE: a
-// rate confirmation downloaded again after these lists change shows new names.
+// rate confirmation issued AFTER these lists change shows new names; an issued one keeps its own.
 export const NAME_SECOND_BY_EQUIPMENT = Object.freeze({
   'dry-van': Object.freeze(['Distribution', 'Packaging', 'Warehousing', 'Fulfillment', 'Trading', 'Logistics Center', 'Manufacturing']),
   reefer: Object.freeze(['Foods Supply', 'Cold Storage', 'Fresh Foods', 'Distribution', 'Logistics Center']),
