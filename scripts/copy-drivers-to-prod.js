@@ -20,6 +20,7 @@ import {
   MVR_MAX_AGE_DAYS, MVR_EXPIRING_DAYS, readDocumentStatus, dispatchClear,
 } from '../src/constants/driverQualification.js'
 import { REAL_MS_PER_SIM_DAY } from '../src/constants/simClock.js'
+import { inspectionOutcome } from '../src/constants/preTrip.js'
 
 export const USAGE = 'Usage: node scripts/copy-drivers-to-prod.js [--dry-run | --confirm]'
 export const LOCK_SQL = "SELECT pg_advisory_xact_lock(hashtext('copy-drivers-to-prod'))"
@@ -213,14 +214,41 @@ export function mapDq(localDq, driverId, prodNowIso) {
   return { columns: entries.map(([c]) => c), values: entries.map(([, v]) => v) }
 }
 
+// The truck must sit where its driver sits. Local trucks keep their place in
+// current_location ("City, ST") and often leave location_city/location_state
+// NULL; those two are filled from the driver. A non-NULL value that disagrees
+// with the driver is a STOP, never silently overwritten.
 export function mapTruck(localTruck, mappedDriver) {
   const driver = toRecord(mappedDriver)
   if (localTruck.status === 'maintenance') throw new Error(`Truck ${localTruck.id} is in maintenance; refusing`)
-  if (localTruck.location_city !== driver.current_city || localTruck.location_state !== driver.current_state) {
-    throw new Error(`Truck ${localTruck.id} location does not match driver ${driver.id} current city/state; refusing`)
+  const mismatch = () => new Error(`Truck ${localTruck.id} location does not match driver ${driver.id}; refusing`)
+  const driverPlace = driver.current_location ?? `${driver.current_city}, ${driver.current_state}`
+  if (localTruck.current_location !== driverPlace) throw mismatch()
+  if ((localTruck.location_city != null && localTruck.location_city !== driver.current_city)
+    || (localTruck.location_state != null && localTruck.location_state !== driver.current_state)) {
+    throw mismatch()
   }
-  const entries = [...pickCopy('trucks', localTruck), ['status', 'active'], ['driver_id', driver.id]]
+  const filled = { location_city: driver.current_city, location_state: driver.current_state }
+  const entries = [
+    ...pickCopy('trucks', localTruck).map(([c, v]) => [c, c in filled ? filled[c] : v]),
+    ['status', 'active'], ['driver_id', driver.id],
+  ]
   return { columns: entries.map(([c]) => c), values: entries.map(([, v]) => v) }
+}
+
+// Informational truck-side preview. dispatch-check's pre-trip reads odometer
+// and tires only (inspectionOutcome, no dice); fuel is not a dispatch gate --
+// the stop planner starts from the tank level and plans a refuel -- so an
+// empty tank is a warning, not a blocker.
+export function truckReadiness(truck) {
+  const t = toRecord(truck)
+  const outcome = inspectionOutcome({
+    truck: { odometerMi: t.odometer_mi, tireFrontPct: t.tire_front_pct, tireRearPct: t.tire_rear_pct },
+    lastDvir: null,
+  })
+  const warnings = []
+  if (t.fuel_gallons === 0 || t.fuel_pct === 0) warnings.push('tank is empty: dispatch is not blocked, the planner will schedule a refuel stop')
+  return { truckId: t.id, preTripDefects: outcome.defects.map((d) => d.item), blocksDispatch: outcome.defects.length > 0, warnings }
 }
 
 // ---------- 4. readiness and collisions ----------
@@ -287,7 +315,7 @@ export async function readSource(client) {
     await client.query('COMMIT')
     return { schema, drivers, dq, trucks }
   } catch (err) {
-    await client.query('ROLLBACK')
+    await client.query('ROLLBACK').catch(() => {})
     throw err
   }
 }
@@ -309,7 +337,7 @@ async function readProdState(client, planned) {
   }
 }
 
-function insertStatement(table, { columns, values }) {
+export function insertStatement(table, { columns, values }) {
   const slots = columns.map((c, i) => (JSON_COLUMNS.has(c) ? `$${i + 1}::jsonb` : `$${i + 1}`))
   const params = values.map((v, i) => (JSON_COLUMNS.has(columns[i]) && v != null ? JSON.stringify(v) : v))
   return [`INSERT INTO ${table} (${columns.join(', ')}) VALUES (${slots.join(', ')})`, params]
@@ -351,6 +379,7 @@ export async function runCopy({ source, target, confirm = false, verify = defaul
 
     const rows = { drivers: [], dq: [], trucks: [] }
     const readiness = []
+    const truckReadinessList = []
     for (const p of PLAN) {
       const localDriver = src.drivers.find((r) => r.id === p.driverId)
       const driver = mapDriver(localDriver)
@@ -360,6 +389,7 @@ export async function runCopy({ source, target, confirm = false, verify = defaul
       rows.drivers.push(driver)
       rows.dq.push(dq)
       rows.trucks.push(truck)
+      truckReadinessList.push(truckReadiness(truck))
       readiness.push({
         driverId: p.driverId,
         ...predictReadiness({ driver: toRecord(driver), dq: toRecord(dq) }, nowMs),
@@ -386,7 +416,7 @@ export async function runCopy({ source, target, confirm = false, verify = defaul
       mode: confirm ? 'apply' : 'dry-run',
       prodNow: prodNowIso,
       planned: { drivers: planned.drivers, dq: rows.dq.map(toRecord), trucks: planned.trucks },
-      collisions, readiness, blockers,
+      collisions, readiness, truckReadiness: truckReadinessList, blockers,
       prod: { otherDrivers: stats.otherDrivers, driversWithoutDq: stats.withoutDq, hiredDriverIdSeq: seq },
     }
 
@@ -409,7 +439,7 @@ export async function runCopy({ source, target, confirm = false, verify = defaul
     await target.query('COMMIT')
     return { ...preview, applied: true, verification }
   } catch (err) {
-    await target.query('ROLLBACK')
+    await target.query('ROLLBACK').catch(() => {})
     throw err
   }
 }

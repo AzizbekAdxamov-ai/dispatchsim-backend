@@ -4,7 +4,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   MAPPING, EXPECTED_UNIQUES, PLAN, LOCK_SQL, SETVAL_SQL, parseArgs, checkHosts, classifyColumns,
-  compareSchemas, mapDriver, mapDq, mapTruck, toRecord, predictReadiness, findCollisions, runCopy,
+  compareSchemas, mapDriver, mapDq, mapTruck, truckReadiness, toRecord, predictReadiness, findCollisions, runCopy,
 } from '../scripts/copy-drivers-to-prod.js'
 
 const NOW = Date.parse('2026-11-09T12:00:00Z')
@@ -35,11 +35,11 @@ const truckRow = (over = {}) => ({
   trailer_type: 'dry-van', trailer_length_ft: 53, vin: 'V'.repeat(17), engine_make: 'x', engine_model: 'y',
   horsepower: 400, transmission: 't', sleeper: 'sleeper-72', suspension: 'air-ride', axle_config: '6x4',
   wheelbase_in: 200, front_axle_lbs: 12000, rear_axle_lbs: 40000, gvwr_lbs: 52000, has_apu: true,
-  location_city: 'Dallas', location_state: 'TX', created_at: new Date(), updated_at: new Date(), ...over,
+  location_city: null, location_state: null, created_at: new Date(), updated_at: new Date(), ...over,
 })
 const ethan = () => driverRow({ id: 'd118', name: 'Ethan Brooks', email: 'e@example.com', cdl_number: 'CDL-2',
   current_city: 'Chicago', current_state: 'IL', current_location: 'Chicago, IL' })
-const ethanTruck = () => truckRow({ id: 'IL-2048-EB', driver_id: 'd118', vin: 'W'.repeat(17), location_city: 'Chicago', location_state: 'IL' })
+const ethanTruck = () => truckRow({ id: 'IL-2048-EB', driver_id: 'd118', vin: 'W'.repeat(17), current_location: 'Chicago, IL' })
 
 const schema = (over = {}) => ({
   versions: ['001', '002'], columns: liveColumns(), uniques: [...EXPECTED_UNIQUES], ...over,
@@ -87,9 +87,30 @@ test('mapTruck sets active + mapped driver, and refuses maintenance or location 
   assert.equal(t.driver_id, 'd11')
   assert.ok(!('created_at' in t))
   assert.throws(() => mapTruck(truckRow({ status: 'maintenance' }), d), /maintenance/)
+  assert.throws(() => mapTruck(truckRow({ current_location: 'Austin, TX' }), d), /location/)
+  assert.throws(() => mapTruck(truckRow({ current_location: null }), d), /location/)
+})
+
+test('mapTruck fills NULL location_city/state from the driver; non-NULL mismatch stops', () => {
+  // Kills: copying NULL location columns into prod, or overwriting a conflicting non-NULL value.
+  const d = mapDriver(driverRow())
+  const t = toRecord(mapTruck(truckRow(), d))
+  assert.equal(t.location_city, 'Dallas')
+  assert.equal(t.location_state, 'TX')
+  const same = toRecord(mapTruck(truckRow({ location_city: 'Dallas', location_state: 'TX' }), d))
+  assert.equal(same.location_city, 'Dallas')
   assert.throws(() => mapTruck(truckRow({ location_city: 'Austin' }), d), /location/)
   assert.throws(() => mapTruck(truckRow({ location_state: 'OK' }), d), /location/)
-  assert.throws(() => mapTruck(truckRow({ location_city: null }), d), /location/)
+})
+
+test('truckReadiness warns on an empty tank without blocking, flags worn tires', () => {
+  // Kills: treating fuel as a dispatch gate, or dropping the empty-tank warning from the preview.
+  const d = mapDriver(driverRow())
+  const empty = truckReadiness(mapTruck(truckRow({ fuel_pct: 0, fuel_gallons: 0 }), d))
+  assert.equal(empty.blocksDispatch, false)
+  assert.equal(empty.warnings.length, 1)
+  assert.equal(truckReadiness(mapTruck(truckRow(), d)).warnings.length, 0)
+  assert.equal(truckReadiness(mapTruck(truckRow({ tire_front_pct: 1 }), d)).blocksDispatch, true)
 })
 
 test('predictReadiness: stale MVR is expired, fresh MVR is valid', () => {
@@ -264,6 +285,14 @@ test('apply is blocked when readiness fails', async () => {
   await assert.rejects(runCopy({ source: bad.source, target: bad.target, confirm: true, nowMs: NOW, verify: verifyOk }), /not ready/)
   assert.equal(bad.calls.at(-1).sql, 'ROLLBACK')
   assert.equal(bad.calls.filter(({ sql }) => sql.startsWith('INSERT')).length, 0)
+})
+
+test('a failing ROLLBACK does not mask the original error', async () => {
+  // Kills: letting a ROLLBACK failure replace the real cause.
+  const { source, target } = fakes({ prodDrivers: [{ id: 'd5', name: 'Grace Lindqvist', email: 'z@z.com', cdl_number: 'Q' }] })
+  const real = target.query.bind(target)
+  target.query = async (sql, p) => { if (sql === 'ROLLBACK') throw new Error('conn lost'); return real(sql, p) }
+  await assert.rejects(runCopy({ source, target, confirm: true, nowMs: NOW, verify: verifyOk }), /Blocked/)
 })
 
 test('verification failure rolls back before setval', async () => {
