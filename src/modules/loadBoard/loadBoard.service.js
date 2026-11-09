@@ -142,7 +142,7 @@ async function collectWarnings(posting, driverId) {
     }
   }
   if (!tightWindow && posting.originLat != null && posting.originLon != null) {
-    const nearest = await loadBoardRepo.findNearestAvailableDriver(posting.originLat, posting.originLon)
+    const nearest = await loadBoardRepo.findNearestAvailableDriver(posting.originLat, posting.originLon, posting.equipmentType)
     if (nearest) {
       const driveTimeMin = (nearest.deadheadMi / 55) * 60
       if (driveTimeMin > nearest.hosRemainingMin) {

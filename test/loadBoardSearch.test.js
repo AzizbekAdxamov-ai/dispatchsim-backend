@@ -28,9 +28,14 @@ import {
 import { resolveDeadheadFrom, listPostings } from '../src/modules/loadBoard/loadBoard.service.js'
 import { listPostingsSchema } from '../src/modules/loadBoard/loadBoard.schemas.js'
 import { CITIES } from '../scripts/seed/cities.js'
+import { inRollback } from './helpers/rollback.js'
+import { makeCheckFixture } from './helpers/dispatchFixture.js'
+
+const { hasDb } = await import('./helpers/db.js')
 
 const BASE = { sort: 'posted', limit: 25, offset: 0 }
 const DALLAS = CITIES.find((c) => c.city === 'Dallas' && c.state === 'TX')
+const COLUMBUS = CITIES.find((c) => c.city === 'Columbus' && c.state === 'OH')
 const ATLANTA = CITIES.find((c) => c.city === 'Atlanta' && c.state === 'GA')
 
 // Every $n in the text must have a value behind it, and every value must
@@ -254,4 +259,29 @@ test('listPostings with a nearest driver on the first posting skips the fleet ch
   assert.equal(calls.hasAvailableDriver, 0)
   assert.equal(meta.deadheadFrom.kind, 'driver')
   assert.equal(meta.nearby, 127)
+})
+
+// Kills: a nearest driver whose trailer cannot carry the load (live: a dry van "nearest" to a flatbed posting)
+test('the nearest driver must pull the trailer type of the posting', () => {
+  for (const build of [buildListPostingsSql, buildCountPostingsSql]) {
+    const { text } = build({ ...BASE, maxDeadheadMi: 150 })
+    assert.match(text, /JOIN trucks t ON t\.driver_id = d\.id AND t\.trailer_type = p\.equipment_type/)
+  }
+  assert.match(buildListPostingsSql({ ...BASE }).text, /JOIN trucks t ON t\.driver_id = d\.id AND t\.trailer_type = p\.equipment_type/)
+  assert.match(NEAREST_AVAILABLE_DRIVER_SQL, /JOIN trucks t ON t\.driver_id = d\.id AND t\.trailer_type = \$3/)
+})
+
+// Kills: dropping the trailer join -- a Columbus dry van answered for a flatbed posting
+test('a dry-van driver is nearest for a dry-van posting and for no flatbed posting', { skip: !hasDb }, async () => {
+  const { pool } = await import('../src/db/pool.js')
+  await inRollback(pool, async (client) => {
+    const { driverId, truckId } = await makeCheckFixture(client)
+    // Only the fixture driver has a position (rolled back), so no seed driver ties with it.
+    await client.query('UPDATE drivers SET current_lat = NULL, current_lon = NULL')
+    await client.query('UPDATE drivers SET current_lat = $2, current_lon = $3 WHERE id = $1', [driverId, COLUMBUS.lat, COLUMBUS.lon])
+    await client.query("UPDATE trucks SET trailer_type = 'dry-van' WHERE id = $1", [truckId])
+    const ask = async (type) => (await client.query(NEAREST_AVAILABLE_DRIVER_SQL, [COLUMBUS.lat, COLUMBUS.lon, type])).rows[0]
+    assert.equal((await ask('dry-van')).id, driverId)
+    assert.equal(await ask('flatbed'), undefined)
+  })
 })
