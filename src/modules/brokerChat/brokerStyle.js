@@ -1,13 +1,26 @@
 // One writing style per broker, for good. The same broker writing "u" on one
 // load and a full formal sentence on the next reads as a machine, so the style
-// comes from the broker's id and nothing else (hash01, like the ceiling).
+// is fixed per broker: the persona narrows the choice (a "precise, a little
+// formal" broker never writes "u"), the broker id (hash01) settles the rest.
 import { hash01 } from '../../lib/stableHash.js'
+import { chatVoice } from '../../lib/chatVoice.js'
 
 export const BROKER_STYLES = Object.freeze(['casual', 'neutral', 'formal'])
 const STYLE_HASH_SALT = 'writing-style'
 
-export function brokerStyle(brokerId) {
-  return BROKER_STYLES[Math.floor(hash01(`${STYLE_HASH_SALT}:${brokerId}`) * BROKER_STYLES.length)]
+// Styles each persona voice may use. Neutral personas keep both plain registers.
+const STYLE_BY_VOICE = Object.freeze({
+  reserved: Object.freeze(['formal']),
+  direct: Object.freeze(['casual']),
+  warm: Object.freeze(['casual']),
+  neutral: Object.freeze(['neutral', 'formal']),
+})
+
+// persona is required (undefined is a caller bug); null or '' reads as neutral.
+export function brokerStyle(brokerId, persona) {
+  if (persona === undefined) throw new TypeError('brokerStyle needs the broker persona')
+  const allowed = STYLE_BY_VOICE[chatVoice(persona ?? '')]
+  return allowed[Math.floor(hash01(`${STYLE_HASH_SALT}:${brokerId}`) * allowed.length)]
 }
 
 // Prompt text for each style. Figures, cities and times stay exact in all three.

@@ -245,7 +245,7 @@ export function buildBrokerContext({ broker, posting, carrier = null, now = new 
     'CURRENT TURN RESPONSE:',
     ONE_CARRIER_RULE,
     chatVoiceInstruction(broker.persona),
-    STYLE_INSTRUCTION[brokerStyle(posting.brokerId)],
+    STYLE_INSTRUCTION[brokerStyle(posting.brokerId, broker.persona)],
     `CURRENT TASK: ${turnTask(latest, negotiation)}`,
     ['offer', 'push', 'accept_amount', 'walk'].includes(negotiation.intent.kind) && !towardBooking && negotiation.state.stage !== 'held'
       ? 'Put the direct answer in your first sentence: a present-tense first-person quote of the authorized amount. Describe your current position rather than an ability maximum. If acknowledging an unverified empty distance, explicitly attribute it to what the carrier said, separately from your quote; do not present it as your route verification or reason for extra payment. Then stop. All factual, safety, agreement and document constraints above still apply.'

@@ -17,12 +17,20 @@ import { fakePosting } from './helpers/fakeBrokerRepo.js'
 
 const BROKER_SAMPLE = 200
 const brokerIds = Array.from({ length: BROKER_SAMPLE }, (_, n) => `broker-${n}`)
+const PERSONA = {
+  formal: 'Precise and polite, a little formal. Numbers to the cent, times to the minute.',
+  chatty: 'Friendly and chatty. You use the other person first name once you know it.',
+  blunt: 'Blunt and fast. Messages of three to eight words.',
+  plain: 'Efficient and impersonal. You answer exactly what was asked and nothing more.',
+}
+const PERSONAS = Object.values(PERSONA)
+const personaOf = (n) => PERSONAS[n % PERSONAS.length]
 const matched = { mc: { verdict: 'match' }, trailer: { fits: true } }
 
 // Kills: a style that changes between calls (a broker who writes "u" today and "you" tomorrow)
 test('a broker keeps one style, and every style is in use', () => {
-  for (const id of brokerIds) assert.equal(brokerStyle(id), brokerStyle(id))
-  const seen = new Set(brokerIds.map(brokerStyle))
+  for (const [n, id] of brokerIds.entries()) assert.equal(brokerStyle(id, personaOf(n)), brokerStyle(id, personaOf(n)))
+  const seen = new Set(brokerIds.map((id, n) => brokerStyle(id, personaOf(n))))
   assert.deepEqual([...seen].sort(), [...BROKER_STYLES].sort())
   for (const style of BROKER_STYLES) assert.ok(STYLE_INSTRUCTION[style].length > 0, style)
 })
@@ -30,8 +38,8 @@ test('a broker keeps one style, and every style is in use', () => {
 // Kills: a style instruction that is not in the prompt, or the typo rule being dropped
 test('the broker prompt carries the broker\'s own style and still forbids copying the dispatcher', () => {
   for (const style of BROKER_STYLES) {
-    const brokerId = brokerIds.find((id) => brokerStyle(id) === style)
-    const posting = fakePosting({ brokerId })
+    const n = brokerIds.findIndex((id, i) => brokerStyle(id, personaOf(i)) === style)
+    const posting = fakePosting({ brokerId: brokerIds[n], persona: personaOf(n) })
     const negotiation = negotiate({ conversation: {}, posting, text: 'hello', booking: matched, offerVisible: true })
     const { systemPrompt } = buildBrokerContext({
       broker: { name: posting.name, contactName: posting.contactName, persona: posting.persona },
@@ -45,10 +53,10 @@ test('the broker prompt carries the broker\'s own style and still forbids copyin
 
 // Kills: voiceKey ignoring the conversation or the revision (the same wording every turn)
 test('the decision carries the style and a per-turn voice key', () => {
-  const posting = fakePosting({ brokerId: 'broker-7' })
+  const posting = fakePosting({ brokerId: 'broker-7', persona: PERSONA.plain })
   const turn = (revision) => negotiate({ conversation: { id: 'conv-1', negotiationRevision: revision }, posting, text: 'hello', booking: matched, offerVisible: true })
   const first = turn(1)
-  assert.equal(first.style, brokerStyle('broker-7'))
+  assert.equal(first.style, brokerStyle('broker-7', PERSONA.plain))
   assert.equal(first.voiceKey, voiceKey({ brokerId: 'broker-7', conversationId: 'conv-1', revision: 1 }))
   assert.notEqual(first.voiceKey, turn(2).voiceKey)
   assert.notEqual(voiceKey({ brokerId: 'a', conversationId: 'c', revision: 1 }), voiceKey({ brokerId: 'b', conversationId: 'c', revision: 1 }))
@@ -135,4 +143,35 @@ test('a split quote keeps its linehaul, fuel and total in every line kind', () =
   const absurd = negotiate({ conversation: { status: 'open', negotiationStage: 'negotiating' }, posting: split, text: 'can you do 1000 total?', booking: matched, offerVisible: true })
   assert.ok(absurd.line.includes(quoteText(split, absurd.state.offer)), absurd.line)
   assert.match(absurd.line, /figure/)
+})
+
+// Live session 2026-11-10: "Precise and polite, a little formal" wrote "u" and "rn". The persona now picks the register.
+// Kills: a style chosen by broker id alone, ignoring the persona text
+test('a formal persona is always formal, a blunt or chatty one casual, a plain one neutral or formal', () => {
+  for (const id of brokerIds) {
+    assert.equal(brokerStyle(id, PERSONA.formal), 'formal', id)
+    assert.equal(brokerStyle(id, PERSONA.chatty), 'casual', id)
+    assert.equal(brokerStyle(id, PERSONA.blunt), 'casual', id)
+  }
+  const plain = new Set(brokerIds.map((id) => brokerStyle(id, PERSONA.plain)))
+  assert.ok(!plain.has('casual'))
+  assert.ok(plain.has('neutral') && plain.has('formal'))
+})
+
+// Kills: a missing persona silently falling back to the id hash (the old behaviour)
+test('a caller that forgets the persona fails loudly; an empty persona reads as plain', () => {
+  assert.throws(() => brokerStyle('broker-1'), TypeError)
+  assert.notEqual(brokerStyle('broker-1', null), 'casual')
+  assert.notEqual(brokerStyle('broker-1', ''), 'casual')
+})
+
+// Kills: the prompt taking its style from the id instead of the posting's persona
+test('the broker prompt of a formal persona carries the formal style and not the casual one', () => {
+  for (const brokerId of brokerIds.slice(0, 20)) {
+    const posting = fakePosting({ brokerId, persona: PERSONA.formal })
+    const negotiation = negotiate({ conversation: {}, posting, text: 'hello', booking: matched, offerVisible: true })
+    const { systemPrompt } = buildBrokerContext({ broker: { name: posting.name, contactName: posting.contactName, persona: posting.persona }, posting, said: ['hello'], negotiation })
+    assert.ok(systemPrompt.includes(STYLE_INSTRUCTION.formal), brokerId)
+    assert.ok(!systemPrompt.includes(STYLE_INSTRUCTION.casual), brokerId)
+  }
 })

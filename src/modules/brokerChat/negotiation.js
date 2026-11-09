@@ -467,7 +467,7 @@ export function negotiate({ conversation, posting, text, booking, truck, effecti
   })
   const quote = (amount) => quoteText(posting, amount)
   // The server's rate lines, worded in this broker's style and picked per turn.
-  const style = brokerStyle(posting.brokerId)
+  const style = brokerStyle(posting.brokerId, posting.persona)
   const key = voiceKey({ brokerId: posting.brokerId, conversationId: conversation.id ?? posting.id, revision: conversation.negotiationRevision ?? 0 })
   const say = (kind, amount) => pickVariant(LINE_VARIANTS[kind][style], `${key}:${kind}`)(quote(amount))
   let changed = false
