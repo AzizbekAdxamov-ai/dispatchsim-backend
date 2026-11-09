@@ -30,6 +30,12 @@ if (!script) {
   process.exit(1)
 }
 
+// This one command reads LOCAL and writes PROD itself. Keep both URLs intact
+// and let its stricter host/argument guards decide whether copying is safe.
+const DUAL_DATABASE_SCRIPT = 'copy:drivers-prod'
+const isDualDatabase = script === DUAL_DATABASE_SCRIPT
+const childEnv = isDualDatabase ? { ...process.env } : { ...process.env, DATABASE_URL: url }
+
 // Ma'lumot o'chiradigan skriptlar. Ular production'da ham KERAK bo'ladi —
 // masalan test boshlanishidan oldin kompaniyani tozalash — lekin tasodifan
 // emas.
@@ -104,7 +110,8 @@ if (nodeScript) {
       nodeScript[1],
       ...(extra ? extra.split(/\s+/) : []),
       ...process.argv.slice(3).filter((a) => !a.startsWith('--confirm-host=')),
-      // --allow-remote HAR BIR skriptga beriladi.
+      // --allow-remote oddiy bitta-bazali skriptlarga beriladi.
+      // Ikki bazali copy bu bayroqni qabul qilmaydi va o'z hostlarini tekshiradi.
       //
       // Skriptlarning o'z himoyasi ("localhost bo'lmasa --allow-remote
       // talab qilaman") tasodifan production'ga tegib ketishdan saqlaydi.
@@ -118,9 +125,9 @@ if (nodeScript) {
       //
       // Haqiqiy himoya --confirm-host: u ma'lumot o'chiradigan skriptlar
       // uchun ALOHIDA ishlaydi va bu qatordan mustaqil.
-      '--allow-remote',
+      ...(isDualDatabase ? [] : ['--allow-remote']),
     ],
-    { stdio: 'inherit', env: { ...process.env, DATABASE_URL: url } },
+    { stdio: 'inherit', env: childEnv },
   )
 } else {
   // `node` bilan boshlanmaydigan skript. Qobiq orqali, chunki boshqa
@@ -129,7 +136,7 @@ if (nodeScript) {
   child = spawn(command + (process.argv.slice(3).length ? ' ' + process.argv.slice(3).join(' ') : ''), {
     stdio: 'inherit',
     shell: true,
-    env: { ...process.env, DATABASE_URL: url },
+    env: childEnv,
   })
 }
 
