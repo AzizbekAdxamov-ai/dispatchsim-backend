@@ -20,5 +20,7 @@ router.get('/:id', driversController.getDriver)
 // owns the trucks and could already do this from the truck's side.
 router.get('/:id/truck-options', driversController.truckOptions)
 router.post('/:id/truck', requireRole('dispatcher', 'fleet-manager'), driversController.assignTruck)
+// Taking the driver off the truck: same two roles; refused while a load is moving on it.
+router.delete('/:id/truck', requireRole('dispatcher', 'fleet-manager'), driversController.unassignTruck)
 
 export default router

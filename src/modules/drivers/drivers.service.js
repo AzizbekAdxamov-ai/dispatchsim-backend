@@ -11,13 +11,14 @@ import { AppError } from '../../lib/errors.js'
 import { computeProgress } from '../../lib/loadTimeline.js'
 import { fuelPercent } from '../driverChat/driverChat.prompt.js'
 import config from '../../config.js'
+import { weeklyLeaseFor } from '../../constants/truckLease.js'
 import { whereNow } from '../driverChat/livePlace.js'
 // The assignment itself belongs to fleet and stays there: the idle check,
 // the row lock, the UNIQUE-violation translation. The dispatcher's button
 // calls that same function -- a second copy of "who may drive what" would
 // be a second rule, and the two would disagree the first time either
 // changed.
-import { assignDriver as assignTruckToDriver } from '../fleet/truckListings.service.js'
+import { assignDriver as assignTruckToDriver, unassignDriver as unassignTruckFromDriver } from '../fleet/truckListings.service.js'
 
 function withCurrentLoadProgress(driver) {
   if (!driver.currentLoad) return driver
@@ -95,6 +96,12 @@ export function truckOptionsFromRows(rows) {
       model: t.model,
       year: t.year,
       status: t.status,
+      // The equipment KEY and trailer length, so the page can say what the
+      // truck pulls; the label is the page's job (data/equipmentTypes.js).
+      equipmentType: t.equipmentType ?? null,
+      trailerLengthFt: t.trailerLengthFt ?? null,
+      isLeased: Boolean(t.isLeased),
+      leaseWeeklyUsd: t.isLeased ? weeklyLeaseFor(t.equipmentType) : null,
       locationCity: t.locationCity ?? null,
       locationState: t.locationState ?? null,
       assignable,
@@ -118,6 +125,11 @@ export async function truckOptionsFor(driverId) {
     driverHasTruck: Boolean(driver.truck),
     trucks: truckOptionsFromRows(await driversRepo.truckOptions()),
   }
+}
+
+export async function unassignTruck({ driverId }) {
+  await requireDriver(driverId)
+  return unassignTruckFromDriver({ driverId })
 }
 
 export async function assignTruck({ driverId, truckId }) {

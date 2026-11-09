@@ -22,6 +22,11 @@ export async function truckOptions(req, res) {
   res.status(200).json(await driversService.truckOptionsFor(id))
 }
 
+export async function unassignTruck(req, res) {
+  const id = driverIdSchema.parse(req.params.id)
+  res.status(200).json(await driversService.unassignTruck({ driverId: id }))
+}
+
 export async function assignTruck(req, res) {
   const id = driverIdSchema.parse(req.params.id)
   const { truckId } = assignTruckSchema.parse(req.body)

@@ -128,6 +128,8 @@ export async function listDrivers({ limit = 100, offset = 0 } = {}) {
 // others cannot. Exported for scripts/sql-check.js.
 export const TRUCK_OPTIONS_SQL = `
   SELECT t.id, t.make, t.model, t.year, t.status,
+         t.trailer_type AS "equipmentType", t.trailer_length_ft AS "trailerLengthFt",
+         t.is_leased AS "isLeased",
          t.location_city AS "locationCity", t.location_state AS "locationState"
     FROM trucks t
    WHERE t.driver_id IS NULL

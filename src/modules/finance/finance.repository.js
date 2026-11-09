@@ -251,6 +251,19 @@ export async function listFuelExpenseRows() {
   return result.rows
 }
 
+// Weekly lease paid per truck, to date (cash_ledger kind 'truck_lease', ref =
+// the truck's plate). Positive dollars; the ledger holds them as negatives.
+export const TRUCK_LEASE_ROWS_SQL = `SELECT ref_id AS "truckId", sum(-amount_usd)::float AS "amountUsd"
+     FROM cash_ledger
+     WHERE kind = 'truck_lease' AND ref_type = 'truck'
+     GROUP BY ref_id
+     ORDER BY ref_id ASC`
+
+export async function listTruckLeaseRows() {
+  const result = await query(TRUCK_LEASE_ROWS_SQL)
+  return result.rows
+}
+
 // Completed maintenance jobs billed in the current SIMULATED calendar
 // month — same window maintenance.repository.js's monthCostUsd uses.
 export async function listMaintenanceExpenseRows() {

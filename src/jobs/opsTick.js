@@ -26,7 +26,7 @@ async function tick(reason) {
   if (running) return
   running = true
   try {
-    const { delivered, paid, stopsSettled, interest, insurance, events } = await runTick()
+    const { delivered, paid, stopsSettled, interest, insurance, lease, events } = await runTick()
     if (delivered.length > 0) {
       for (const d of delivered) {
         console.log(`[opsTick] delivered ${d.id} — fuel $${d.fuelUsd}, driver owed $${d.owedUsd}, invoice due in ${d.dueIn} days`)
@@ -55,9 +55,10 @@ async function tick(reason) {
     const costs = []
     if (interest) costs.push(`interest $${interest.amountUsd}`)
     if (insurance) costs.push(`insurance $${insurance.amountUsd} (${insurance.trucks} truck${insurance.trucks === 1 ? '' : 's'})`)
+    if (lease) costs.push(`truck lease $${lease.amountUsd} (${lease.trucks} truck${lease.trucks === 1 ? '' : 's'})`)
     if (costs.length > 0) {
-      const total = (interest?.amountUsd ?? 0) + (insurance?.amountUsd ?? 0)
-      const balance = insurance?.balance ?? interest?.balance
+      const total = (interest?.amountUsd ?? 0) + (insurance?.amountUsd ?? 0) + (lease?.amountUsd ?? 0)
+      const balance = lease?.balance ?? insurance?.balance ?? interest?.balance
       console.log(
         `[opsTick] -$${total} — ${costs.join(', ')}` +
         (balance != null ? ` — balance $${balance.toLocaleString()}` : ''),
