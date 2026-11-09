@@ -22,6 +22,15 @@ import { validateLoadItem } from './validate.js'
 // uses the same 150-mile search radius; five is the pending default decision.
 export const DEADHEAD_MAX_MI = 150
 export const MIN_NEAR_LOADS = 5
+// Pickup and delivery appointments sit on the half hour.
+export const APPOINTMENT_STEP_MIN = 30
+const SECONDS_PER_MIN = 60
+
+// now() + offset, rounded UP to the next appointment slot (:00 or :30).
+export function appointmentSql(offsetMin) {
+  const stepSec = APPOINTMENT_STEP_MIN * SECONDS_PER_MIN
+  return raw(`to_timestamp(ceil(extract(epoch from now() + interval '${offsetMin} minutes') / ${stepSec}) * ${stepSec})`)
+}
 
 // ---------------------------------------------------------------------
 // Configuration
@@ -284,8 +293,8 @@ export function buildPostingRows({ rng, postingItems, drivers, trucks, fleetEqui
       equipment_length_ft: equipLengths[Math.floor(rng() * equipLengths.length)],
       posted_at: raw(`now() + interval '${postedOffset} minutes'`),
       expires_at: raw(`now() + interval '${expiresOffset} minutes'`),
-      pickup_at: raw(`now() + interval '${pickupOffset} minutes'`),
-      delivery_at: raw(`now() + interval '${deliveryOffset} minutes'`),
+      pickup_at: appointmentSql(pickupOffset),
+      delivery_at: appointmentSql(deliveryOffset + APPOINTMENT_STEP_MIN),
       status: 'open',
       tier,
     }
