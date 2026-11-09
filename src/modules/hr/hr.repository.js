@@ -5,6 +5,10 @@
 // camelCase aliases, no SELECT *.
 
 import { query } from '../../db/pool.js'
+import { DRIVING_LIMIT_HOURS } from '../../constants/hosClock.js'
+
+const MINUTES_PER_HOUR = 60
+const FULL_DRIVE_CLOCK_MIN = DRIVING_LIMIT_HOURS * MINUTES_PER_HOUR
 
 const APPLICANT_COLUMNS = `
   a.id, a.full_name AS "fullName", a.email, a.phone,
@@ -111,6 +115,7 @@ export async function insertDriver(client, {
   homeBaseCity, homeBaseState, dutyStatus,
   payModel, payPercentBp, payPerMileCents,
   currentCity, currentState, currentLat, currentLon,
+  bio, preferences = {},
 }) {
   const result = await client.query(
     `INSERT INTO drivers (
@@ -118,7 +123,8 @@ export async function insertDriver(client, {
        home_base_city, home_base_state, current_city, current_state,
        current_lat, current_lon,
        duty_status, hos_remaining_min,
-       pay_model, pay_percent_bp, pay_per_mile_cents
+       pay_model, pay_percent_bp, pay_per_mile_cents,
+       bio, preferences, current_location
      ) VALUES (
        $1, $2, $3, $4, $5, $6, $7,
        $8, $9, $10, $11,
@@ -126,8 +132,9 @@ export async function insertDriver(client, {
        -- A full clock, not NULL. NULL meant collectWarnings compared the
        -- pickup drive time against nothing, so tight-pickup-window never
        -- fired for a driver hired through HR.
-       $14, 660,
-       $15, $16, $17
+       $14, $18,
+       $15, $16, $17,
+       $19, $20::jsonb, $21
      )
      RETURNING id`,
     [
@@ -136,9 +143,49 @@ export async function insertDriver(client, {
       currentLat, currentLon,
       dutyStatus,
       payModel, payPercentBp, payPerMileCents,
+      FULL_DRIVE_CLOCK_MIN, bio, JSON.stringify(preferences), `${currentCity}, ${currentState}`,
     ],
   )
   return result.rows[0]
+}
+
+// The onboarding charge already covers a physical, drug screen and MVR
+// pull. Record completion in the SAME transaction; no expiry date is
+// invented when the applicant does not provide one. Dispatch stays advisory.
+export async function insertQualification(client, driverId, applicant) {
+  await client.query(
+    `INSERT INTO driver_qualification
+       (driver_id, cdl_status, medical_status, mvr_checked_on, mvr_violations, mvr_status, da_status)
+     VALUES ($1, 'valid', 'valid', CURRENT_DATE, $2, 'valid', 'valid')
+     ON CONFLICT (driver_id) DO NOTHING`,
+    [driverId, applicant.mvrViolations],
+  )
+}
+
+export async function listHiredWithoutBio(client, { lock = false } = {}) {
+  const result = await client.query(
+    `SELECT ${APPLICANT_COLUMNS}, d.id AS "driverId",
+            d.current_city AS "driverCurrentCity", d.current_state AS "driverCurrentState"
+       FROM driver_applicants a JOIN drivers d ON d.id = a.hired_driver_id
+      WHERE a.status = 'hired' AND NULLIF(btrim(d.bio), '') IS NULL
+      ORDER BY a.id ${lock ? 'FOR UPDATE OF d, a' : ''}`,
+  )
+  return result.rows
+}
+
+export async function fillMissingProfile(client, driverId, { bio }) {
+  const result = await client.query(
+    `UPDATE drivers SET bio = $2,
+       current_location = CASE
+         WHEN NULLIF(btrim(current_location), '') IS NULL
+          AND current_city IS NOT NULL AND current_state IS NOT NULL
+         THEN current_city || ', ' || current_state ELSE current_location END,
+       updated_at = now()
+     WHERE id = $1 AND NULLIF(btrim(bio), '') IS NULL
+     RETURNING id`,
+    [driverId, bio],
+  )
+  return result.rows[0] ?? null
 }
 
 // Atomic conditional UPDATE on applicant — race-condition gate.

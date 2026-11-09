@@ -21,6 +21,7 @@
     "clear:fleet": "node scripts/clear-fleet.js",
     "reset:company": "node scripts/reset-company.js",
     "copy:drivers-prod": "node scripts/copy-drivers-to-prod.js",
+    "backfill:driver-profiles": "node scripts/backfill-hired-driver-profiles.js",
     "fresh:start": "node scripts/fresh-start.js",
     "refresh:postings": "node scripts/refresh-postings.js",
     "refresh:vocabulary": "node scripts/refresh-vocabulary.js",

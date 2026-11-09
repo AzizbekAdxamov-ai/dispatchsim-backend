@@ -10,6 +10,7 @@ import { AppError } from '../../lib/errors.js'
 import { findCity } from '../../../scripts/seed/cities.js'
 import * as cash from '../cash/cash.service.js'
 import { DRIVER_ONBOARDING_USD } from '../../constants/simClock.js'
+import { buildDriverPersona } from './driverPersona.js'
 
 // ---------------------------------------------------------------------
 // Read endpoints
@@ -85,6 +86,7 @@ export async function hireApplicant({ applicantId, userId }) {
 
       // Step 3: Insert driver with coordinates from home base
       await hrRepo.insertDriver(client, {
+        ...buildDriverPersona(applicant),
         id: driverId,
         name: applicant.fullName,
         email: applicant.email,
@@ -126,6 +128,8 @@ export async function hireApplicant({ applicantId, userId }) {
         refId: driverId,
         userId,
       })
+
+      await hrRepo.insertQualification(client, driverId, applicant)
 
       // Step 4: Atomically mark applicant as hired
       const updated = await hrRepo.hireApplicantAtomically(client, applicantId, userId, driverId)
