@@ -51,14 +51,21 @@ const WHOLE_QUOTED = /^\s*"([^"]+)"\s*[.!?]?\s*$/
 // A price with no verb ("$5,000 all in", "4900?") is an offer only while the
 // negotiation is open, only for a figure near the posted rate, and only when
 // nothing around it says the number is something else (an MC, a truck, a time).
-// Known residual risk: "paid 4000 for tires" with a rate near 4000 reads as an offer.
+// A bare figure also needs a price cue in its clause ("all in", "total", "do", "make it",
+// "bump", "meet me at", "and it's yours", "can u") or must be the whole message. History
+// ("paid 4000 last time"), counts, invoices and expenses carry no cue and stay talk.
+// Known residual risk: a cue plus an unrelated figure ("can u do the 4000 mile run") in range reads as an offer.
 const BARE_RATE_MIN_SHARE = 0.5
 const BARE_RATE_MAX_SHARE = 2
 const BARE_AMOUNT = new RegExp(`(?<![\w#.,])${MONEY}(?![\w.%:/]|[.,]\d)`, 'gi')
 const AMOUNT_UNIT_TAIL = /^\s*(?:[-/]\s*\d|(?:lbs?|pounds?|miles?|mi|ft|feet|gal|hours?|hrs?|per|\/|%|am|pm)\b)/i
-const BARE_LABEL_BEFORE = /\b(?:mc|dot|truck|trailer|unit|tractor|zip|ref|po|pin|load|order|phone|pickup|pu|delivery|del|appt|appointment|eta|by|until)\s*(?:#|no\.?|number)?\s*:?\s*(?:at\s+)?$|#\s*$/i
+const BARE_LABEL_BEFORE = /\b(?:mc|dot|truck|trailer|unit|tractor|zip|ref|po|pin|load|order|phone|pickup|pick\s?up|drop\s?off|deliver(?:y|ed)?|pu|del|appt|appointment|eta|by|until)\s*(?:#|no\.?|number)?\s*:?\s*(?:at\s+)?$|#\s*$/i
 // "8100 to low": a judgement of the price, not an ask for it.
 const BARE_JUDGED_TAIL = /^\s*(?:is\s+)?(?:(?:to{1,2}|too|kinda|so)\s+)?(?:low|light|cheap|small)\b/i
+const BARE_PRICE_CUE = /\b(?:all[- ]?in|total|linehaul|do|make it|bump|meet (?:me|us) at|and it'?s yours|can (?:u|you)|could (?:u|you))\b/i
+const BARE_FILLER = /^(?:pls|plz|please)?$/i
+// Money the carrier needs for its own costs is not a price for the load.
+const CARRIER_EXPENSE_TAIL = /^\s*for\s+(?:the\s+)?(?:fuel|tires?|repairs?|maintenance|insurance|parts|lunch|food|payroll|lease|fees?)\b/i
 const BARE_TIME_TAIL = /^\s*(?:central|ct|cst|cdt|est|am|pm|hrs?)\b/i
 // The dispatcher's reply to the broker's "total or linehaul plus fuel?".
 const BASIS_ANSWER_TOTAL = /^\s*(?:(?:it'?s|its|that'?s|thats|the)\s+)?(?:total|all[- ]?in)(?:\s+(?:including|incl\.?|with)\s+fuel)?[.!]?\s*$/i
@@ -311,7 +318,7 @@ export function chatIntent(raw, rateSource = null, { openNegotiation = false, pe
       for (const m of clause.matchAll(pattern)) {
         if (negatedLocally(clause, m)) continue
         const tail = clause.slice(m.index + m[0].length)
-        if (AMOUNT_UNIT_TAIL.test(tail)) continue
+        if (AMOUNT_UNIT_TAIL.test(tail) || CARRIER_EXPENSE_TAIL.test(tail)) continue
         addAmount(m[1], clause)
         if (pattern === ACCEPT_AT) acceptsAmount = true
       }
@@ -320,6 +327,8 @@ export function chatIntent(raw, rateSource = null, { openNegotiation = false, pe
     if (openNegotiation && !BOOK_WORD_RE.test(clause)) {
       for (const m of clause.matchAll(BARE_AMOUNT)) {
         if (negatedLocally(clause, m) || AMOUNT_UNIT_TAIL.test(clause.slice(m.index + m[0].length))
+          || CARRIER_EXPENSE_TAIL.test(clause.slice(m.index + m[0].length))
+          || !(BARE_PRICE_CUE.test(clause) || BARE_FILLER.test(clause.replace(m[0], '').trim()))
           || BARE_TIME_TAIL.test(clause.slice(m.index + m[0].length)) || BARE_JUDGED_TAIL.test(clause.slice(m.index + m[0].length)) || BARE_LABEL_BEFORE.test(clause.slice(0, m.index))) continue
         bareCandidates.push({ token: m[1], clause })
       }

@@ -308,3 +308,21 @@ test('the second push never gives more than the figure just asked', () => {
     assert.ok(decision.state.offer <= Math.max(ask2, first.state.offer), `pushes ${pushes}: ${decision.state.offer}`)
   }
 })
+
+// Review round 1, finding 2 ---------------------------------------------------
+// Kills: reading any in-range number as a price (times, counts, history, invoices and expenses became offers)
+test('numbers that are not a price ask in an open negotiation stay small talk', () => {
+  const notAsks = ['deliver at 2400', 'can you pick up at 2400?', 'is the 4600 load still available?', 'I need 4600 for fuel and tires',
+    'my driver paid 4600 last time', 'paid 4000 for tires', 'I have 3 trucks 4600', 'rate con 4600', 'invoice 4600 paid', 'hello 4600']
+  for (const text of notAsks) {
+    const kind = chatIntent(text, allIn, OPEN).kind
+    assert.ok(!['offer', 'accept_amount'].includes(kind), `${text} -> ${kind}`)
+  }
+})
+
+// Kills: over-tightening the veto (the live price phrases must still be offers)
+test('the live price phrases are still offers after the false-positive veto', () => {
+  const asks = [...PRICE_ONLY_5000, '5k?', '4900?', 'do 4900', 'make it 4,900', 'bump it to 4900', "4900 and it's yours", 'can u do 4900', '4900', '4900 pls']
+  assert.equal(asks.length, 16)
+  for (const text of asks) assert.equal(chatIntent(text, allIn, OPEN).kind, 'offer', text)
+})
