@@ -4,7 +4,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { stopsFor, NAME_FIRST, NAME_SECOND } from '../src/modules/brokerChat/stops.js'
+import { stopsFor, NAME_FIRST, NAME_SECOND, NAME_SECOND_BY_EQUIPMENT } from '../src/modules/brokerChat/stops.js'
+import { EQUIPMENT_KEYS } from '../src/constants/equipment.js'
 
 const posting = (id) => ({ id, originCity: 'Dallas', originState: 'TX', destinationCity: 'Chicago', destinationState: 'IL' })
 
@@ -40,4 +41,28 @@ test('shipper and receiver are never the same company', () => {
 test('no name from a small denylist of real companies', () => {
   const real = /walmart|amazon|target|costco|kroger|home depot|lowe|pepsi|coca|nestle|tyson|sysco|ups|fedex|procter|unilever|kraft|general mills|conagra|dole|del monte|heinz|campbell/i
   for (const w of [...NAME_FIRST, ...NAME_SECOND]) assert.doesNotMatch(w, real, w)
+})
+
+const withEquipment = (id, equipmentType, commodity) => ({ ...posting(id), equipmentType, commodity })
+const namesOf = (equipmentType, commodity) => Array.from({ length: 200 }, (_, i) => {
+  const { shipper, receiver } = stopsFor(withEquipment(`eq-${i}`, equipmentType, commodity))
+  return [shipper.name, receiver.name]
+}).flat()
+
+// Kills: one generic name list -- live: copper tubing flatbed shipped from "... Foods Supply" / "... Cold Storage"
+test('a flatbed load never has a food or cold-storage shipper or receiver', () => {
+  for (const name of namesOf('flatbed', 'Copper tubing')) assert.doesNotMatch(name, /Foods|Cold Storage/, name)
+})
+
+// Kills: the reefer list borrowing building or machinery words
+test('a reefer load never has a building, steel or machinery name', () => {
+  for (const name of namesOf('reefer', 'Frozen chicken')) assert.doesNotMatch(name, /Building Products|Steel|Machinery/, name)
+})
+
+// Kills: an equipment key with no list (new key falls to undefined names)
+test('every equipment key has its own name list, and the combined list covers them', () => {
+  for (const key of EQUIPMENT_KEYS) {
+    assert.ok(NAME_SECOND_BY_EQUIPMENT[key]?.length > 0, key)
+    for (const word of NAME_SECOND_BY_EQUIPMENT[key]) assert.ok(NAME_SECOND.includes(word), word)
+  }
 })

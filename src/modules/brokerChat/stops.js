@@ -18,10 +18,19 @@ export const NAME_FIRST = Object.freeze([
   'Harlow Ridge', 'Brightwater', 'Copper Hollow', 'Eastvale', 'Pinecrest', 'Larkfield', 'Stonebrook', 'Meadowgate',
   'Ironleaf', 'Foxmoor', 'Tallgrass', 'Westmarch', 'Cinder Creek', 'Oakhaven', 'Redfern', 'Silverton Bay',
 ])
-export const NAME_SECOND = Object.freeze([
-  'Distribution', 'Foods Supply', 'Packaging', 'Materials', 'Warehousing', 'Industrial Supply', 'Fulfillment', 'Cold Storage',
-  'Building Products', 'Manufacturing', 'Logistics Center', 'Trading',
-])
+// The second word fits what the posting hauls: a flatbed of copper tubing
+// does not ship from a "Cold Storage". Lists are by equipment key. NOTE: a
+// rate confirmation downloaded again after these lists change shows new names.
+export const NAME_SECOND_BY_EQUIPMENT = Object.freeze({
+  'dry-van': Object.freeze(['Distribution', 'Packaging', 'Warehousing', 'Fulfillment', 'Trading', 'Logistics Center', 'Manufacturing']),
+  reefer: Object.freeze(['Foods Supply', 'Cold Storage', 'Fresh Foods', 'Distribution', 'Logistics Center']),
+  flatbed: Object.freeze(['Building Products', 'Materials', 'Industrial Supply', 'Steel Supply', 'Metals', 'Construction Supply', 'Manufacturing']),
+  'step-deck': Object.freeze(['Equipment', 'Machinery', 'Industrial Supply', 'Construction Supply', 'Manufacturing']),
+  tanker: Object.freeze(['Processing', 'Bulk Terminal', 'Manufacturing', 'Industrial Supply']),
+  'power-only': Object.freeze(['Distribution', 'Logistics Center', 'Warehousing', 'Trading']),
+})
+const DEFAULT_EQUIPMENT = 'dry-van'
+export const NAME_SECOND = Object.freeze([...new Set(Object.values(NAME_SECOND_BY_EQUIPMENT).flat())])
 export const STREETS = Object.freeze([
   'Commerce Dr', 'Industrial Pkwy', 'Distribution Way', 'Freight Ave', 'Railroad St', 'Harbor Rd',
   'Enterprise Blvd', 'Warehouse Ln', 'Depot St', 'Logistics Ct', 'Mill Rd', 'Terminal Dr',
@@ -32,7 +41,7 @@ const pick = (list, key) => list[Math.floor(hash01(key) * list.length)]
 function stop(posting, side, city, state, attempt = 0) {
   const key = `${posting.id}:${side}${attempt ? `:${attempt}` : ''}`
   return {
-    name: `${pick(NAME_FIRST, `${key}:name1`)} ${pick(NAME_SECOND, `${key}:name2`)}`,
+    name: `${pick(NAME_FIRST, `${key}:name1`)} ${pick(NAME_SECOND_BY_EQUIPMENT[posting.equipmentType] ?? NAME_SECOND_BY_EQUIPMENT[DEFAULT_EQUIPMENT], `${key}:name2`)}`,
     street: `${100 + Math.floor(hash01(`${key}:number`) * 9800)} ${pick(STREETS, `${key}:street`)}`,
     city,
     state,
