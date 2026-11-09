@@ -70,6 +70,9 @@ const BARE_TIME_TAIL = /^\s*(?:central|ct|cst|cdt|est|am|pm|hrs?)\b/i
 // The dispatcher's reply to the broker's "total or linehaul plus fuel?".
 const BASIS_ANSWER_TOTAL = /^\s*(?:(?:it'?s|its|that'?s|thats|the)\s+)?(?:total|all[- ]?in)(?:\s+(?:including|incl\.?|with)\s+fuel)?[.!]?\s*$/i
 const BASIS_ANSWER_LINEHAUL = /^\s*(?:(?:it'?s|its|that'?s|thats)\s+)?linehaul(?:\s+plus\s+(?:the\s+)?fuel)?[.!]?\s*$/i
+// A dispatcher's own words that fix the basis of a figure (all-in vs linehaul + fuel).
+const BASIS_HINT_TOTAL = /\b(?:all[- ]?in|total|including fuel|fuel included)\b/i
+const BASIS_HINT_LINEHAUL = /\blinehaul\b|\bplus (?:the )?fuel\b|\+\s*fuel\b/i
 const BASIS_QUESTION = /\btotal\b[^?]*\blinehaul\b[^?]*\?|\blinehaul\b[^?]*\btotal\b[^?]*\?/i
 const HYPOTHETICAL = /\b(?:if|unless|hypothetically|example|suppose|said|quoted|asks?|asking whether|what if|would you accept)\b/i
 const NEGATIVE = /\b(?:not|never|can't|cannot|won't|don't|didn't|do not|isn't|is not|haven't)\b/i
@@ -255,7 +258,7 @@ export function lastAuthorizedEmail(texts) {
   return null
 }
 
-export function chatIntent(raw, rateSource = null, { openNegotiation = false, pendingBasisUsd = null } = {}) {
+export function chatIntent(raw, rateSource = null, { openNegotiation = false, pendingBasisUsd = null, settledBasis = null } = {}) {
   const src = intentText(raw).replace(/(\b(?:can|could)(?:\s+(?:you|u|we|sir))?)\s*(add (?:more|some money))\.\s*(?=[^;!?]*\bfor (?:example|exaple|exapmle|exmaple|exampel)\b)/gi, '$1 $2, ')
   // A mixed price acceptance/email cannot authorize a prohibited handoff.
   if (proposesRebroker(src)) return { kind: 'rebroker' }
@@ -357,8 +360,12 @@ export function chatIntent(raw, rateSource = null, { openNegotiation = false, pe
   if (unique.length === 1) {
     const split = rateSource?.rateBasis === SPLIT_RATE
     const totalSpecified = basisHints.some((hint) => hint.total)
-    const linehaulSpecified = basisHints.some((hint) => hint.linehaul)
-    if (split && totalSpecified === linehaulSpecified) return { kind: 'ambiguous_rate', requestedAmountUsd: unique[0], emails, useOwnEmail }
+    const hintedLinehaul = basisHints.some((hint) => hint.linehaul)
+    // No basis word in this message: the basis settled earlier in the thread
+    // decides. A message naming one basis (or both) is read on its own.
+    const useSettled = split && !totalSpecified && !hintedLinehaul && Boolean(settledBasis)
+    const linehaulSpecified = useSettled ? settledBasis === 'linehaul' : hintedLinehaul
+    if (split && !useSettled && totalSpecified === linehaulSpecified) return { kind: 'ambiguous_rate', requestedAmountUsd: unique[0], emails, useOwnEmail }
     return { kind: acceptsAmount ? 'accept_amount' : 'offer', rateUsd: unique[0] + (split && linehaulSpecified ? rateSource.fuelSurchargeUsd : 0), ...(confirmsOffer ? { confirmsOffer: true } : {}), ...(keyed?.reason ? { reason: keyed.reason } : {}), emails, useOwnEmail }
   }
   if (unique.length > 1) return { kind: 'ambiguous' }
@@ -428,9 +435,9 @@ export function negotiationState(conversation, posting) {
 
 // The newest price the dispatcher asked for, from their earlier messages. The
 // broker never gives more than this, so a later push or walk stops here.
-export function lastCarrierAskUsd(texts, posting) {
+export function lastCarrierAskUsd(texts, posting, settledBasis = null) {
   for (const text of [...(texts ?? [])].reverse()) {
-    const intent = chatIntent(text, posting, { openNegotiation: true })
+    const intent = chatIntent(text, posting, { openNegotiation: true, settledBasis })
     if (['offer', 'accept_amount'].includes(intent.kind) && Number.isSafeInteger(intent.rateUsd)) return intent.rateUsd
   }
   return null
@@ -449,6 +456,33 @@ export function pendingBasisAskUsd(thread, posting) {
   return intent.kind === 'ambiguous_rate' && Number.isSafeInteger(intent.requestedAmountUsd) ? intent.requestedAmountUsd : null
 }
 
+// The basis ('total' | 'linehaul') of a split-rate load that the dispatcher has
+// already settled earlier in the thread, or null. Newest dispatcher message
+// first: an answer to the broker's "total or linehaul plus fuel?" question, or
+// a figure that named exactly one basis. The current message is not read.
+const MONEY_FIGURE = /\d[\d,]{2,}|\d+k\b/i
+export function settledRateBasis(thread, posting) {
+  if (posting?.rateBasis !== SPLIT_RATE) return null
+  const said = (thread ?? []).filter((message) => message.kind !== 'rate_con')
+  if (said.at(-1)?.role === 'dispatcher') said.pop()
+  for (let i = said.length - 1; i >= 0; i -= 1) {
+    const message = said[i]
+    if (message.role !== 'dispatcher') continue
+    const text = message.content ?? ''
+    const before = said[i - 1]
+    if (before?.role === 'broker' && BASIS_QUESTION.test(before.content ?? '')) {
+      if (BASIS_ANSWER_TOTAL.test(text)) return 'total'
+      if (BASIS_ANSWER_LINEHAUL.test(text)) return 'linehaul'
+    }
+    if (MONEY_FIGURE.test(text)) {
+      const total = BASIS_HINT_TOTAL.test(text)
+      const linehaul = BASIS_HINT_LINEHAUL.test(text)
+      if (total !== linehaul) return total ? 'total' : 'linehaul'
+    }
+  }
+  return null
+}
+
 // Plain talk only moves the paper along when this very message gives a
 // trailer, driver or truck detail; "ok" or a terms question keeps the model's answer.
 function givesPaperDetail(text, posting) {
@@ -456,14 +490,14 @@ function givesPaperDetail(text, posting) {
   return said.trailer.type !== null || said.trailer.lengthFt !== null || said.driverName !== null || said.truckNumber !== null
 }
 
-export function negotiate({ conversation, posting, text, booking, truck, effectiveEmail = null, knownEmail = null, now = new Date(), offerVisible = false, pendingBasisUsd = null, lastAskUsd = null }) {
+export function negotiate({ conversation, posting, text, booking, truck, effectiveEmail = null, knownEmail = null, now = new Date(), offerVisible = false, pendingBasisUsd = null, lastAskUsd = null, settledBasis = null }) {
   const previous = negotiationState(conversation, posting)
   const state = { ...previous }
   const pending = previous.pendingClose
   state.pendingClose = null
   const intent = chatIntent(text, posting, {
     openNegotiation: previous.agreed === null && ['negotiating', 'held'].includes(previous.stage) && conversation.status !== 'booked',
-    pendingBasisUsd,
+    pendingBasisUsd, settledBasis,
   })
   const quote = (amount) => quoteText(posting, amount)
   // The server's rate lines, worded in this broker's style and picked per turn.
