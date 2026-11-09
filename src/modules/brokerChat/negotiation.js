@@ -604,6 +604,12 @@ export function negotiationLines(decision) {
     '  Do not agree to another number or create a handshake through prose. Answer any direct operational question first.', '']
 }
 
+// A cap stated as fact ("$4,750 max", "as high as I can go"). Unlike the
+// rate-word patterns below, "right now" and "for now" do not soften it; only
+// a quoted dispatcher ("you said", "your") is not the broker's own claim.
+const CAP_CLAIM = /\b(?:(?:my|our|the|that'?s|thats|is)\s+max(?:imum)?|\d[\d,]*k?\s+max(?:imum)?|max(?:imum)?\s+(?:i|we)\s+can|as high as (?:i|we)(?: can)? go|(?:that'?s|thats|that is)\s+(?:my|our|the)\s+(?:limit|ceiling|top)|top dollar|tapped out|(?:cant|wont)\s+(?:go|pay|move|come)(?: any)? (?:higher|above|up|more))\b/i
+const claimsCap = (clause) => !/\b(?:you said|your)\b/i.test(clause) && CAP_CLAIM.test(clause)
+
 export function negotiationReplyProblem(reply, decision) {
   if (!decision) return null
   const text = asciiPunct(reply)
@@ -613,8 +619,8 @@ export function negotiationReplyProblem(reply, decision) {
   if (clarifiesRequestedBasis(text, decision)) return null
   if (decision.hasRateRoom && decision.state.agreed === null) {
     const claims = text.split(/(?<=[.!?;])\s+|\b(?:but|however)\b/i)
-    if (claims.some((clause) => !clause.includes('?') && !/\b(?:you said|your|not (?:my|a|the|our)|isn't my|is not my|haven't called|didn't say|never said|right now|at the moment|for now)\b/i.test(clause)
-      && /\b(?:final (?:rate|offer|price)|(?:my |the |our )?(?:absolute )?best (?:rate|offer|price)|best (?:i|we) can (?:do|pay|offer)|(?:can(?:not|'t)|won't|will not|not|unable to) (?:go|mov(?:e|ing)|come|pay)(?: any)? (?:higher|above|up)|(?:can(?:not|'t)|won't|will not|not|unable to) (?:increas\w*|improv\w*|rais\w*|bump\w*)|(?:most|highest|top) (?:i|we) can (?:do|pay|offer))\b/i.test(clause))) {
+    if (claims.some((clause) => !clause.includes('?') && (claimsCap(clause) || !/\b(?:you said|your|not (?:my|a|the|our)|isn't my|is not my|haven't called|didn't say|never said|right now|at the moment|for now)\b/i.test(clause)
+      && /\b(?:final (?:rate|offer|price)|(?:my |the |our )?(?:absolute )?best (?:rate|offer|price)|best (?:i|we) can (?:do|pay|offer)|(?:can(?:not|'t)|cant|won't|wont|will not|not|unable to) (?:go|mov(?:e|ing)|come|pay)(?: any)? (?:higher|above|up)|(?:can(?:not|'t)|cant|won't|wont|will not|not|unable to) (?:increas\w*|improv\w*|rais\w*|bump\w*)|(?:most|highest|top) (?:i|we) can (?:do|pay|offer))\b/i.test(clause)))) {
       return 'claimed a permanent final rate while authorized bargaining room remains'
     }
   }

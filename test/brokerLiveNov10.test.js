@@ -2,7 +2,7 @@
 // negotiation misreads. Band numbers follow the 2026-11-10 brief, section A.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { chatIntent, pendingBasisAskUsd, negotiate, lastCarrierAskUsd } from '../src/modules/brokerChat/negotiation.js'
+import { chatIntent, pendingBasisAskUsd, negotiate, lastCarrierAskUsd, negotiationReplyProblem, RATE_MISS_REASON } from '../src/modules/brokerChat/negotiation.js'
 import { ceilingFor, CEILING_STEP_USD } from '../src/modules/brokerChat/ratePolicy.js'
 import { quoteText } from '../src/modules/brokerChat/rateQuote.js'
 import { sendMessage } from '../src/modules/brokerChat/brokerChat.service.js'
@@ -198,4 +198,37 @@ test('through the service, three pushes and a final plain push end at the asked 
   const last = fake.state.messages.filter((m) => m.role === 'broker').at(-1).content
   assert.ok(last.replaceAll(',', '').includes(String(ask)), last)
   assert.doesNotMatch(last, /max/i)
+})
+
+// Band 4 --------------------------------------------------------------------
+const PERMANENT_CAP = 'claimed a permanent final rate while authorized bargaining room remains'
+const usd = (n) => `$${n.toLocaleString('en-US')}`
+
+// Kills: the reply guard only knowing "final / best / can't go higher" (live #468 "No, $4,750 max" with the ceiling near $5,025)
+test('a cap claim is refused while the offer is below the ceiling', () => {
+  const decision = turn('need more money')
+  assert.equal(decision.hasRateRoom, true)
+  const o = usd(decision.state.offer)
+  const claims = [`No, ${o} max`, `${o} is as high as I can go.`, `thats my max ${o}`, `${o} max lmk`,
+    `cant go any higher than ${o}`, `${o}, that's my limit.`, `wont move above ${o}`, `Right now ${o} is my max.`]
+  for (const reply of claims) assert.equal(negotiationReplyProblem(reply, decision), PERMANENT_CAP, reply)
+})
+
+// Kills: applying the cap guard only when the turn carries a server line (the model said "max" on a plain question)
+test('a cap claim is refused on a turn without a rate line, and a new figure still is too', () => {
+  const decision = turn('where does it deliver?')
+  assert.equal(decision.line, null)
+  const o = usd(decision.state.offer)
+  assert.equal(negotiationReplyProblem(`Delivers Dallas, ${o} max on this one.`, decision), PERMANENT_CAP)
+  assert.equal(negotiationReplyProblem(`Delivers Dallas, ${usd(decision.state.offer + 100)} on this one.`, decision), RATE_MISS_REASON)
+})
+
+// Kills: matching the bare word "max" (weight limits, questions, and a true ceiling are not a false cap)
+test('max in other senses, questions, and a true ceiling pass', () => {
+  const decision = turn('need more money')
+  assert.equal(negotiationReplyProblem('Max weight is 45,000 lbs.', decision), null)
+  assert.equal(negotiationReplyProblem("What's your max?", decision), null)
+  const atCeiling = turn('need more money', open({ brokerOfferUsd: ceiling }))
+  assert.equal(atCeiling.hasRateRoom, false)
+  assert.equal(negotiationReplyProblem(`${usd(ceiling)} max.`, atCeiling), null)
 })
