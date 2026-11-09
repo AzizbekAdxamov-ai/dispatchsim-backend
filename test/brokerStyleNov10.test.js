@@ -5,6 +5,10 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { BROKER_STYLES, STYLE_INSTRUCTION, brokerStyle, voiceKey, pickVariant } from '../src/modules/brokerChat/brokerStyle.js'
+import { LINE_VARIANTS, VARIANT_MIN, VARIANT_MAX } from '../src/modules/brokerChat/brokerLines.js'
+import { quoteText } from '../src/modules/brokerChat/rateQuote.js'
+import { trippedBannedWord } from '../src/modules/brokerChat/brokerChat.prompt.js'
+import { CHAT_REPLY_MAX_CHARS } from '../src/constants/chatBudget.js'
 import { buildBrokerContext } from '../src/modules/brokerChat/brokerContext.js'
 import { negotiate, negotiationReplyProblem } from '../src/modules/brokerChat/negotiation.js'
 import { ceilingFor, CEILING_STEP_USD } from '../src/modules/brokerChat/ratePolicy.js'
@@ -69,4 +73,66 @@ test('casual spelling is read by the booking and rate guards', () => {
   const asked = `$${ask.toLocaleString('en-US')}`
   assert.equal(negotiationReplyProblem(`u asked ${asked}, i can do ${offer} rn`, decision), null)
   assert.equal(negotiationReplyProblem(`ur ask of ${asked} is too much, ${offer} is what i got`, decision), null)
+})
+
+// Band 5 --------------------------------------------------------------------
+const VARIANT_KINDS = ['counter', 'meet', 'maxFirst', 'maxAgain', 'walkCounter', 'confirmOffer', 'invalidFigure']
+const ROOM_KINDS = ['counter', 'meet', 'walkCounter', 'confirmOffer']
+const TURN_SAMPLE = 10
+const split = fakePosting({ rateUsd: 5306, rateBasis: 'linehaul-plus-fuel', fuelSurchargeUsd: 1406, distanceMi: 1500 })
+const allIn = fakePosting({ rateUsd: 3500, distanceMi: 1500 })
+const countOf = (text, part) => text.split(part).length - 1
+
+// Kills: a style with too few (stale sameness) or too many variants, or a variant that drops/doubles the quote, asks twice, runs long or says a banned word
+test('every fixed rate line has 4 to 6 variants per style, each with the quote once', () => {
+  for (const posting of [allIn, split]) {
+    const q = quoteText(posting, posting.rateUsd)
+    for (const kind of VARIANT_KINDS) {
+      for (const style of BROKER_STYLES) {
+        const list = LINE_VARIANTS[kind][style]
+        assert.ok(list.length >= VARIANT_MIN && list.length <= VARIANT_MAX, `${kind}/${style}`)
+        for (const variant of list) {
+          const text = variant(q)
+          assert.equal(countOf(text, q), 1, text)
+          assert.ok(countOf(text, '?') <= 1, text)
+          assert.ok(text.length <= CHAT_REPLY_MAX_CHARS, text)
+          assert.equal(trippedBannedWord(text), null, text)
+        }
+      }
+    }
+  }
+})
+
+// Kills: a bargaining-room variant that claims a limit or an agreement (the reply guard would refuse the server's own line)
+test('variants used while there is room pass the reply guard', () => {
+  for (const posting of [allIn, split]) {
+    const decision = negotiate({ conversation: { status: 'open', negotiationStage: 'negotiating', brokerOfferUsd: posting.rateUsd }, posting, text: 'need more money', booking: matched, offerVisible: true })
+    assert.equal(decision.hasRateRoom, true)
+    const q = quoteText(posting, decision.state.offer)
+    for (const kind of ROOM_KINDS) {
+      for (const style of BROKER_STYLES) {
+        for (const variant of LINE_VARIANTS[kind][style]) assert.equal(negotiationReplyProblem(variant(q), decision), null, variant(q))
+      }
+    }
+  }
+})
+
+// Kills: a random pick (a retried turn must say the same thing) or a fixed pick (every turn the same sentence)
+test('the line is stable for one turn and varies across turns', () => {
+  const posting = fakePosting({ brokerId: 'broker-3', rateUsd: 3500, distanceMi: 1500 })
+  const lineAt = (revision) => negotiate({ conversation: { id: 'conv-9', negotiationRevision: revision, status: 'open', negotiationStage: 'negotiating' }, posting, text: 'what is your best', booking: matched, offerVisible: true }).line
+  const lines = Array.from({ length: TURN_SAMPLE }, (_, revision) => lineAt(revision))
+  for (let revision = 0; revision < TURN_SAMPLE; revision += 1) assert.equal(lineAt(revision), lines[revision])
+  assert.ok(new Set(lines).size >= 2, lines.join(' | '))
+})
+
+// Kills: a variant losing the split breakdown (linehaul, fuel and total must all stay in the line)
+test('a split quote keeps its linehaul, fuel and total in every line kind', () => {
+  const decision = negotiate({ conversation: { status: 'open', negotiationStage: 'negotiating' }, posting: split, text: 'what is your best', booking: matched, offerVisible: true })
+  assert.ok(decision.line.includes(quoteText(split, decision.state.offer)), decision.line)
+  const walk = negotiate({ conversation: { status: 'open', negotiationStage: 'negotiating' }, posting: split, text: "I'll pass", booking: matched, offerVisible: true })
+  assert.ok(walk.line.includes(quoteText(split, walk.state.offer)), walk.line)
+  const absurd = negotiate({ conversation: { status: 'open', negotiationStage: 'negotiating' }, posting: split, text: 'can you do 1000 total?', booking: matched, offerVisible: true })
+  assert.ok(absurd.line.includes(quoteText(split, absurd.state.offer)), absurd.line)
+  assert.match(absurd.line, /figure/)
 })

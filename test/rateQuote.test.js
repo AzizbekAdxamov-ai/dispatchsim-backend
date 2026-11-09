@@ -66,7 +66,7 @@ test('a low total that would make linehaul negative is rejected without throwing
   const result = negotiate({ posting: costlyFuel, conversation: {}, booking, text: 'Can you do 1500 total?' })
   assert.equal(result.state.agreed, null)
   assert.equal(result.state.offer, 3058)
-  assert.match(result.line, /cannot do that figure/)
+  assert.match(result.line, /figure/)
 })
 
 test('reply validation binds every component to its label and cannot approve another total', () => {

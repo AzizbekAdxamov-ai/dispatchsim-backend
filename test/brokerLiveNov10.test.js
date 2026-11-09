@@ -5,6 +5,7 @@ import assert from 'node:assert/strict'
 import { chatIntent, pendingBasisAskUsd, negotiate, lastCarrierAskUsd, negotiationReplyProblem, RATE_MISS_REASON } from '../src/modules/brokerChat/negotiation.js'
 import { ceilingFor, CEILING_STEP_USD } from '../src/modules/brokerChat/ratePolicy.js'
 import { quoteText } from '../src/modules/brokerChat/rateQuote.js'
+import { LINE_VARIANTS } from '../src/modules/brokerChat/brokerLines.js'
 import { sendMessage } from '../src/modules/brokerChat/brokerChat.service.js'
 import { makeFakeBrokerRepo, fakePosting, FAKE_IDS } from './helpers/fakeBrokerRepo.js'
 
@@ -167,13 +168,13 @@ test('walking away is answered with the last ask, not the ceiling', () => {
 test('an ask above the ceiling is still capped at the ceiling', () => {
   const decision = turn(`can you do ${ceiling + 500}?`, open({ ratePushCount: 2 }))
   assert.equal(decision.state.offer, ceiling)
-  assert.match(decision.line, /max/i)
+  assert.equal(decision.hasRateRoom, false)
 })
 
 // Kills: a first-rung counter equal to the ask still being phrased as a haggle
 test('a counter that meets the ask offers to book it', () => {
   const decision = turn(`can you do ${ASK_BELOW_CEILING}?`, open({ ratePushCount: 2 }))
-  assert.equal(decision.line, `I can do ${quoteText(room, ASK_BELOW_CEILING)}. Want me to book it?`)
+  assert.ok(LINE_VARIANTS.meet[decision.style].some((variant) => variant(quoteText(room, ASK_BELOW_CEILING)) === decision.line), decision.line)
 })
 
 // Kills: lastCarrierAskUsd reading the first message, a non-ask, or ignoring openNegotiation

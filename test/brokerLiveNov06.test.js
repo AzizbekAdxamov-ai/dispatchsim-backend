@@ -19,7 +19,7 @@ const mcBooking = { mc: { verdict: 'match' }, trailer: { fits: true } }
 test('a regenerated reply that still misquotes is replaced by the server line', async () => {
   // Kills: removing the unusable/second-layer replacement -- the model's
   // misquote would be saved as the broker's message.
-  const decision = negotiate({ conversation: {}, posting: split, text: ASK, booking: mcBooking, offerVisible: true })
+  const decision = negotiate({ conversation: { id: FAKE_IDS.conversation, negotiationRevision: 1 }, posting: split, text: ASK, booking: mcBooking, offerVisible: true })
   assert.ok(decision.line, 'the turn must carry a server line')
   const fake = makeFakeBrokerRepo({ posting: split, lines: ['Example Freight MC-741309.'] })
   let calls = 0

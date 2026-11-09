@@ -5,7 +5,8 @@ import { rateReasons, REASON_WORDS } from './rateTalk.js'
 import { saysBooked, mcQuestion } from './bookingTalk.js'
 import { rateQuote, quoteText, SPLIT_RATE } from './rateQuote.js'
 import { proposesRebroker, ONE_CARRIER_REPLY } from './carrierPolicy.js'
-import { brokerStyle, voiceKey } from './brokerStyle.js'
+import { brokerStyle, voiceKey, pickVariant } from './brokerStyle.js'
+import { LINE_VARIANTS } from './brokerLines.js'
 
 const EMAIL = /\b[a-z0-9._%+-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}\b/gi
 const MONEY = '(?:\\$\\s*)?(\\d+(?:\\.\\d+)?[kK]|(?:\\d{1,3}(?:,\\d{3})+|\\d{3,5})(?:\\.00)?)(?:\\s*\\$)?'
@@ -449,6 +450,10 @@ export function negotiate({ conversation, posting, text, booking, truck, effecti
     pendingBasisUsd,
   })
   const quote = (amount) => quoteText(posting, amount)
+  // The server's rate lines, worded in this broker's style and picked per turn.
+  const style = brokerStyle(posting.brokerId)
+  const key = voiceKey({ brokerId: posting.brokerId, conversationId: conversation.id ?? posting.id, revision: conversation.negotiationRevision ?? 0 })
+  const say = (kind, amount) => pickVariant(LINE_VARIANTS[kind][style], `${key}:${kind}`)(quote(amount))
   let changed = false
   let issuePaper = false
   let invalidatePaper = false
@@ -486,14 +491,14 @@ export function negotiate({ conversation, posting, text, booking, truck, effecti
     // the ceiling; this is the broker's normal first bargaining step.
     state.offer = Math.max(state.offer, firstRungOffer(posting))
     if (state.offer !== previous.offer) changed = true
-    line = `I can offer ${quote(state.offer)}. Does that work for you?`
+    line = say('counter', state.offer)
   } else if (['offer', 'accept_amount', 'push'].includes(intent.kind)) {
     const amount = intent.kind === 'push' ? Math.min(ceilingFor(posting), lastAskUsd ?? Infinity) : intent.rateUsd
     const min = Math.max(100, posting.distanceMi, posting.rateBasis === SPLIT_RATE ? posting.fuelSurchargeUsd + 1 : 0)
     const max = Math.min(20000, posting.distanceMi * 5)
     if (state.agreed !== null && (amount !== state.agreed || intent.kind === 'push')) clear()
     if (amount < min || amount > max) {
-      line = `I cannot do that figure. My offer is ${quote(state.offer)}.`
+      line = say('invalidFigure', state.offer)
     } else if (intent.kind === 'accept_amount' && !intent.confirmsOffer && amount <= ceilingFor(posting)) {
       // A conditional close settles anywhere inside the broker's authorized
       // ceiling, even when it is above the current quote. Above the ceiling it
@@ -530,14 +535,12 @@ export function negotiate({ conversation, posting, text, booking, truck, effecti
         // ladder. Anchor it to the posting so retries never compound it.
         state.offer = Math.max(state.offer, firstRungOffer(posting, amount))
       }
-      if (state.offer >= ceilingFor(posting)) line = previous.offer >= ceilingFor(posting)
-        ? `${quote(state.offer)} is as high as I can go.`
-        : `Best I can do is ${quote(state.offer)}. That's my max.`
-      else if (intent.kind !== 'push' && state.offer === amount) line = `I can do ${quote(amount)}. Want me to book it?`
-      else line = `I can offer ${quote(state.offer)}. Does that work for you?`
+      if (state.offer >= ceilingFor(posting)) line = say(previous.offer >= ceilingFor(posting) ? 'maxAgain' : 'maxFirst', state.offer)
+      else if (intent.kind !== 'push' && state.offer === amount) line = say('meet', amount)
+      else line = say('counter', state.offer)
     }
   } else if (intent.kind === 'accept') {
-    if (!offerVisible) line = `My offer is ${quote(state.offer)}. Can you confirm that rate?`
+    if (!offerVisible) line = say('confirmOffer', state.offer)
     else if (state.agreed === state.offer && ['paper_pending', 'paper_delivered'].includes(state.stage)) line = 'The rate confirmation is already in this thread or on its way.'
     else agree(state.offer)
   } else if (intent.kind === 'walk' && state.agreed !== null) {
@@ -545,7 +548,7 @@ export function negotiate({ conversation, posting, text, booking, truck, effecti
   } else if (intent.kind === 'walk' && state.agreed === null && !state.bestCounterUsed) {
     clear(); state.bestCounterUsed = true
     state.offer = Math.max(state.offer, Math.min(ceilingFor(posting), lastAskUsd ?? Infinity))
-    line = `Before you go, I can do ${quote(state.offer)}. Would that work?`
+    line = say('walkCounter', state.offer)
   } else if (['talk', 'ambiguous'].includes(intent.kind) && state.agreed === null && pending === null
     && new RegExp(MONEY, 'i').test(intentText(text)) && BOOK_WORD_RE.test(intentText(text)) && !NEGATIVE.test(text)) {
     // A figure and a booking word that no rule could place: ask, never "Noted."
@@ -574,8 +577,7 @@ export function negotiate({ conversation, posting, text, booking, truck, effecti
   }
   return { state, intent, changed, issuePaper, invalidatePaper, bookingRequested, line, knownEmail,
     // The broker's own writing style and a per-turn key for picking wording.
-    style: brokerStyle(posting.brokerId),
-    voiceKey: voiceKey({ brokerId: posting.brokerId, conversationId: conversation.id ?? posting.id, revision: conversation.negotiationRevision ?? 0 }),
+    style, voiceKey: key,
     previousOfferUsd: previous.offer,
     // The carrier gave a reason the load's facts do not support: the reply
     // must not repeat it as fact (live #209 "Reloads are weak").
