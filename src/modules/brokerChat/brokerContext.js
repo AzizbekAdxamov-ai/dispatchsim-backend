@@ -10,7 +10,7 @@ import { bookingTurn, negotiationLines } from './negotiation.js'
 import { truckFacts } from './truckTalk.js'
 import { marketClaims } from './rateTalk.js'
 import { PROMPT_REQUEST } from '../../lib/personaBreak.js'
-import { introductionOnly } from './turnTalk.js'
+import { introductionOnly, asksHowAreYou } from './turnTalk.js'
 import { rateQuote, quoteText, SPLIT_RATE } from './rateQuote.js'
 import { ONE_CARRIER_RULE } from './carrierPolicy.js'
 import { chatVoiceInstruction } from '../../lib/chatVoice.js'
@@ -140,7 +140,7 @@ export function turnTask(text, decision) {
   }
   // Only a greeting by itself may end with a greeting. A greeting attached to
   // a load question must not hide that question behind a social reply.
-  if (introductionOnly(text)) return 'Return their greeting warmly and briefly; a short greeting alone is enough. You may introduce yourself using your reference name. They have not identified a load yet: do not name a lane, availability or price. No load pitch or obligatory follow-up question.'
+  if (introductionOnly(text)) return 'Return their greeting warmly and briefly; a short greeting alone is enough. You may introduce yourself using your reference name. They have not identified a load yet: do not name a lane, availability or price. No load pitch or obligatory follow-up question.' + (asksHowAreYou(text) ? ' They also asked how you are: say how you are in a few words.' : '')
   return 'Answer the latest question directly, in context. No obligatory question at the end.'
 }
 

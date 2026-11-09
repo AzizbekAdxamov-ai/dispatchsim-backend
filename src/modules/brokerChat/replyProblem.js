@@ -22,7 +22,7 @@ import { personaBreak } from '../../lib/personaBreak.js'
 import { paperClaimProblem, paperNextLine } from './paperTalk.js'
 import { negotiationReplyProblem, bookingTurn, confirmBookLine } from './negotiation.js'
 import { repeatsRecent } from './repeatGuard.js'
-import { introductionOnly, introductionReply } from './turnTalk.js'
+import { introductionOnly, introductionReply, asksHowAreYou, greetingLead, GREETING_LEAD, GREETS_BACK } from './turnTalk.js'
 import { quoteText } from './rateQuote.js'
 import { proposesRebroker, agreesRebroker, refusesRebroker, ONE_CARRIER_RULE, ONE_CARRIER_REPLY } from './carrierPolicy.js'
 import { inventsEnvironment, NO_ENVIRONMENT_LINE } from '../../lib/environmentClaims.js'
@@ -96,9 +96,13 @@ function answersWrongMcLine(text, booking) {
   return GIVES_MC.test(text ?? '') && ['mismatch', 'unverifiable'].includes(booking?.mc?.verdict) ? WRONG_MC_LINE : null
 }
 
+// The greeting the broker answers a bare hello with: their own style, and how
+// they are when they were asked.
+const greetingFor = (text, negotiation) => introductionReply({ style: negotiation?.style, key: negotiation?.voiceKey, howAreYou: asksHowAreYou(text) })
+
 function discussionReply(text, posting, negotiation) {
   if (negotiation?.line) return negotiation.line
-  if (introductionOnly(text)) return introductionReply()
+  if (introductionOnly(text)) return greetingFor(text, negotiation)
   if (/\b(?:hi|hey|hello|wassap|wassup|what'?s up)\b/i.test(text)) {
     return `Hey! I've got the ${posting.originCity} to ${posting.destinationCity} load here.`
   }
@@ -177,7 +181,15 @@ export function brokerReplyProblem(reply, {
   )) return {
     why: 'pitched a particular load before the dispatcher identified one',
     hint: ' Return only their greeting and optionally your own name. Do not volunteer a lane, availability or price.',
-    unusable: true, safeReply: introductionReply(),
+    unusable: true, safeReply: greetingFor(text, negotiation),
+  }
+  // A greeting that opens a real question is returned in a few words first.
+  // A server line (a rate decision, a booking step) keeps its own wording.
+  const greeted = asciiPunct(String(text ?? '')).trim()
+  if (GREETING_LEAD.test(greeted) && !introductionOnly(text) && !negotiation?.line && !GREETS_BACK.test(reply.split(/(?<=[.!?])\s+/)[0])) return {
+    why: 'skipped their greeting',
+    hint: ' Return their greeting in a few words first, then answer.',
+    unusable: true, safeReply: `${greetingLead({ style: negotiation?.style, key: negotiation?.voiceKey })} ${reply.trim()}`,
   }
   if (negotiation?.intent?.kind === 'cancel' && SAYS_CANCELLED_RE.test(reply) && SAYS_ON_HOLD_RE.test(reply)) return {
     why: 'called a cancelled load both cancelled and on hold',

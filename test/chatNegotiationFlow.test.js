@@ -114,7 +114,7 @@ test('live Toledo transcript counters without identity spam, agreement or docume
     assert.equal(fake.state.conversation.agreedRateUsd, null)
     assert.equal(fake.state.messages.filter((m) => m.kind === 'rate_con').length, 0)
   }
-  assert.match(replies[0], /^Hey!/)
+  assert.match(replies[0], /^(?:hey|hi|hello|good)/i)
   assert.match(replies[1], /still available/)
   assert.match(replies[2], /8,153/)
   // Kills: silently keeping the posted price after pressure.

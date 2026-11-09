@@ -7,6 +7,9 @@ import { ceilingFor, CEILING_STEP_USD } from '../src/modules/brokerChat/ratePoli
 import { quoteText } from '../src/modules/brokerChat/rateQuote.js'
 import { LINE_VARIANTS } from '../src/modules/brokerChat/brokerLines.js'
 import { sendMessage } from '../src/modules/brokerChat/brokerChat.service.js'
+import { buildBrokerContext } from '../src/modules/brokerChat/brokerContext.js'
+import { brokerReplyProblem } from '../src/modules/brokerChat/replyProblem.js'
+import { introductionOnly, asksHowAreYou } from '../src/modules/brokerChat/turnTalk.js'
 import { makeFakeBrokerRepo, fakePosting, FAKE_IDS } from './helpers/fakeBrokerRepo.js'
 
 const POSTED_USD = 4600
@@ -232,4 +235,58 @@ test('max in other senses, questions, and a true ceiling pass', () => {
   const atCeiling = turn('need more money', open({ brokerOfferUsd: ceiling }))
   assert.equal(atCeiling.hasRateRoom, false)
   assert.equal(negotiationReplyProblem(`${usd(ceiling)} max.`, atCeiling), null)
+})
+
+// Band 7 --------------------------------------------------------------------
+const GREETING_WITH_HOW = 'hello brother how r u'
+const GREETING_REPLY_FIRST = /^(?:hey|hi|hello|good)/i
+const GREETING_REPLY_STATE = /doing|good|well/i
+
+// Kills: introductionOnly rejecting every "how are you" (the greeting was then treated as a load question)
+test('a greeting that asks how you are is still only a greeting', () => {
+  for (const text of [GREETING_WITH_HOW, 'hey how are you?', 'good morning, how\u2019s it going', 'hi, how you doing']) {
+    assert.equal(introductionOnly(text), true, text)
+    assert.equal(asksHowAreYou(text), true, text)
+  }
+  for (const text of ['hello brother', 'hey is the Columbus load open, how are you?', 'hi how much for Columbus to Dallas']) {
+    assert.equal(asksHowAreYou(text) && introductionOnly(text), false, text)
+  }
+})
+
+// Kills: dropping the "how are you" tail (live: "hello brother how r u" got "Load ready, respond with your rate.")
+test('a dry load pitch to a greeting is replaced by a greeting that answers how you are', () => {
+  const posting = fakePosting({ originCity: 'Columbus', destinationCity: 'Dallas' })
+  for (const brokerId of ['broker-0', 'broker-1', 'broker-2', 'broker-3', 'broker-4', 'broker-5']) {
+    const ownPosting = { ...posting, brokerId }
+    const negotiation = negotiate({ conversation: {}, posting: ownPosting, text: GREETING_WITH_HOW, booking: matched, offerVisible: true })
+    const problem = brokerReplyProblem('Load ready, respond with your rate.', { posting: ownPosting, text: GREETING_WITH_HOW, negotiation })
+    assert.equal(problem?.why, 'pitched a particular load before the dispatcher identified one', brokerId)
+    assert.match(problem.safeReply, GREETING_REPLY_FIRST, brokerId)
+    assert.match(problem.safeReply, GREETING_REPLY_STATE, brokerId)
+    assert.doesNotMatch(problem.safeReply, /Columbus|Dallas|load|rate|\$/i, brokerId)
+  }
+})
+
+// Kills: dropping the skipped-greeting guard (a reply to "hey, is the Columbus load still open?" that opens cold)
+test('a reply that skips the dispatcher\'s greeting gets one in front', () => {
+  const posting = fakePosting({ originCity: 'Columbus', destinationCity: 'Dallas' })
+  const text = 'hey, is the Columbus load still open?'
+  const negotiation = negotiate({ conversation: {}, posting, text, booking: matched, offerVisible: true })
+  const problem = brokerReplyProblem('Yes, still open.', { posting, text, negotiation })
+  assert.equal(problem?.why, 'skipped their greeting')
+  assert.equal(problem.unusable, true)
+  assert.match(problem.safeReply, GREETING_REPLY_FIRST)
+  assert.match(problem.safeReply, /still open/)
+  assert.equal(brokerReplyProblem("Hey, yes it's still open.", { posting, text, negotiation }), null)
+  // No greeting from the dispatcher: nothing to return.
+  assert.equal(brokerReplyProblem('Yes, still open.', { posting, text: 'is the Columbus load still open?', negotiation }), null)
+})
+
+// Kills: the greeting task not telling the model to answer "how are you"
+test('the prompt for a "how are you" greeting asks for a few words about how the broker is', () => {
+  const posting = fakePosting()
+  const prompt = (text) => buildBrokerContext({ broker: { name: posting.name, contactName: posting.contactName, persona: posting.persona }, posting, said: [text],
+    negotiation: negotiate({ conversation: {}, posting, text, booking: matched, offerVisible: true }) }).systemPrompt
+  assert.match(prompt(GREETING_WITH_HOW), /say how you are in a few words/)
+  assert.doesNotMatch(prompt('hello brother'), /say how you are in a few words/)
 })
