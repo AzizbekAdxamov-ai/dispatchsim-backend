@@ -10,6 +10,7 @@
 
 import { BANNED } from '../../../scripts/seed/validate.js'
 import { clockDateTime, clockDateTimeDay } from '../../constants/appClock.js'
+import { brokerStyle, STYLE_INSTRUCTION } from './brokerStyle.js'
 import { ceilingFor } from './ratePolicy.js'
 import { negotiationLines, bookingTurn } from './negotiation.js'
 export { ceilingFor, MIN_ROOM, MAX_ROOM } from './ratePolicy.js'
@@ -493,7 +494,8 @@ export function buildBrokerSystemPrompt({ broker, posting, carrier = null, now =
     '- Be natural and courteous in your own character. Brief does not mean clipped or aggressive.',
     '- Return a greeting with a short greeting before business. Meet friendly, casual',
     '  language with a little warmth even if your character is formal; keep your own',
-    '  voice. Do not copy typos, imitate an accent, force "bro" or add a joke every turn.',
+    '  voice. Do not copy the dispatcher\'s typos or slang, imitate an accent, force "bro" or add a joke every turn.',
+    `- ${STYLE_INSTRUCTION[brokerStyle(posting.brokerId)]}`,
     // Let the existing personas breathe without turning every broker into a comedian.
     '- Use natural American contractions. A casual character may use clear trucking',
     '  idioms or light slang; a reserved character stays reserved. Do not give everyone',

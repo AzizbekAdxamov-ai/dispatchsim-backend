@@ -5,6 +5,7 @@ import { rateReasons, REASON_WORDS } from './rateTalk.js'
 import { saysBooked, mcQuestion } from './bookingTalk.js'
 import { rateQuote, quoteText, SPLIT_RATE } from './rateQuote.js'
 import { proposesRebroker, ONE_CARRIER_REPLY } from './carrierPolicy.js'
+import { brokerStyle, voiceKey } from './brokerStyle.js'
 
 const EMAIL = /\b[a-z0-9._%+-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}\b/gi
 const MONEY = '(?:\\$\\s*)?(\\d+(?:\\.\\d+)?[kK]|(?:\\d{1,3}(?:,\\d{3})+|\\d{3,5})(?:\\.00)?)(?:\\s*\\$)?'
@@ -572,6 +573,9 @@ export function negotiate({ conversation, posting, text, booking, truck, effecti
     line = `Before I prepare the rate confirmation, can you confirm ${quote(state.offer)}?`
   }
   return { state, intent, changed, issuePaper, invalidatePaper, bookingRequested, line, knownEmail,
+    // The broker's own writing style and a per-turn key for picking wording.
+    style: brokerStyle(posting.brokerId),
+    voiceKey: voiceKey({ brokerId: posting.brokerId, conversationId: conversation.id ?? posting.id, revision: conversation.negotiationRevision ?? 0 }),
     previousOfferUsd: previous.offer,
     // The carrier gave a reason the load's facts do not support: the reply
     // must not repeat it as fact (live #209 "Reloads are weak").
@@ -608,7 +612,7 @@ export function negotiationLines(decision) {
 // rate-word patterns below, "right now" and "for now" do not soften it; only
 // a quoted dispatcher ("you said", "your") is not the broker's own claim.
 const CAP_CLAIM = /\b(?:(?:my|our|the|that'?s|thats|is)\s+max(?:imum)?|\d[\d,]*k?\s+max(?:imum)?|max(?:imum)?\s+(?:i|we)\s+can|as high as (?:i|we)(?: can)? go|(?:that'?s|thats|that is)\s+(?:my|our|the)\s+(?:limit|ceiling|top)|top dollar|tapped out|(?:cant|wont)\s+(?:go|pay|move|come)(?: any)? (?:higher|above|up|more))\b/i
-const claimsCap = (clause) => !/\b(?:you said|your)\b/i.test(clause) && CAP_CLAIM.test(clause)
+const claimsCap = (clause) => !/\b(?:you said|u said|your|ur)\b/i.test(clause) && CAP_CLAIM.test(clause)
 
 export function negotiationReplyProblem(reply, decision) {
   if (!decision) return null
@@ -619,7 +623,7 @@ export function negotiationReplyProblem(reply, decision) {
   if (clarifiesRequestedBasis(text, decision)) return null
   if (decision.hasRateRoom && decision.state.agreed === null) {
     const claims = text.split(/(?<=[.!?;])\s+|\b(?:but|however)\b/i)
-    if (claims.some((clause) => !clause.includes('?') && (claimsCap(clause) || !/\b(?:you said|your|not (?:my|a|the|our)|isn't my|is not my|haven't called|didn't say|never said|right now|at the moment|for now)\b/i.test(clause)
+    if (claims.some((clause) => !clause.includes('?') && (claimsCap(clause) || !/\b(?:you said|u said|your|ur|not (?:my|a|the|our)|isn't my|is not my|haven't called|didn't say|never said|right now|at the moment|for now)\b/i.test(clause)
       && /\b(?:final (?:rate|offer|price)|(?:my |the |our )?(?:absolute )?best (?:rate|offer|price)|best (?:i|we) can (?:do|pay|offer)|(?:can(?:not|'t)|cant|won't|wont|will not|not|unable to) (?:go|mov(?:e|ing)|come|pay)(?: any)? (?:higher|above|up)|(?:can(?:not|'t)|cant|won't|wont|will not|not|unable to) (?:increas\w*|improv\w*|rais\w*|bump\w*)|(?:most|highest|top) (?:i|we) can (?:do|pay|offer))\b/i.test(clause)))) {
       return 'claimed a permanent final rate while authorized bargaining room remains'
     }
@@ -664,10 +668,10 @@ export function negotiationReplyProblem(reply, decision) {
         const sumFigures = [splitQuote.fuelSurchargeUsd, ...allowed, ...allowed.map((total) => total - splitQuote.fuelSurchargeUsd)]
         if (sumFigures.includes(amount)) continue
       } else if (allowed.includes(amount)) continue
-      const attributed = /\byou(?:'re| are| were)\s+(?:looking|asking|aiming|hoping)\s+for\s*$/i.test(before)
-        || /\byou\s+(?:asked(?: for)?|requested|wanted)\s*$/i.test(before)
-        || /\byour\s+(?:(?:requested|asking|target)\s+)?(?:price|rate|ask|request)\s*(?:of|is|:)?\s*$/i.test(before)
-        || (/\byour\s*$/i.test(before) && /^\s*(?:ask|request)\b/i.test(after))
+      const attributed = /\b(?:you|u)(?:'re| are| were)\s+(?:looking|asking|aiming|hoping)\s+for\s*$/i.test(before)
+        || /\b(?:you|u)\s+(?:asked(?: for)?|requested|wanted)\s*$/i.test(before)
+        || /\b(?:your|ur)\s+(?:(?:requested|asking|target)\s+)?(?:price|rate|ask|request)\s*(?:of|is|:)?\s*$/i.test(before)
+        || (/\b(?:your|ur)\s*$/i.test(before) && /^\s*(?:ask|request)\b/i.test(after))
       const committed = /\b(?:pay|offer|meet|match|accept|approve|agree)\b|\b(?:our|my)\s+(?:offer|rate|payment)\s+(?:is|will be)\b/i.test(before)
         || /\b(?:approved|accepted|agreed|confirmed)\b/i.test(after)
         || /^\s*[,;:]?\s*(?:(?:ask|request)\s+)?(?:works|(?:will|would)\s+work|(?:sounds|looks)\s+(?:good|fine)|(?:is|will be)\s+fine|deal)\b/i.test(after)
