@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { cronMayWriteRemote } from '../src/jobs/dailyRefresh.js'
 import { assertLocalHost, parseCliArgs, runRefresh, runPostingRefresh } from '../scripts/refresh-postings.js'
 
 const REMOTE = 'postgres://u:p@ep-x.neon.tech/db'
@@ -34,9 +35,16 @@ test('CLI parse: --allow-remote required to be true', () => {
     { postingOnly: true, allowRemote: true, count: 5 })
 })
 
-test('dailyRefresh passes allowRemote:true to both runners', () => {
-  // Kills: dropping allowRemote from the cron/HTTP path.
+test('cronMayWriteRemote: only on Vercel, never on a local server', () => {
+  // Kills: allowRemote hardcoded true (or Boolean(...) dropped), letting a local server wired to the prod DB write to it from cron.
+  assert.equal(cronMayWriteRemote({}), false)
+  assert.equal(cronMayWriteRemote({ VERCEL: '' }), false)
+  assert.equal(cronMayWriteRemote({ VERCEL: '1' }), true)
+})
+
+test('dailyRefresh passes cronMayWriteRemote() to both runners', () => {
+  // Kills: dropping allowRemote from the cron/HTTP path, or bypassing the Vercel-only check.
   const src = readFileSync(new URL('../src/jobs/dailyRefresh.js', import.meta.url), 'utf8')
-  assert.match(src, /runPostingRefresh\(\{ allowRemote: true \}\)/)
-  assert.match(src, /refresh\(\{ allowRemote: true \}\)/)
+  assert.match(src, /runPostingRefresh\(\{ allowRemote: cronMayWriteRemote\(\) \}\)/)
+  assert.match(src, /refresh\(\{ allowRemote: cronMayWriteRemote\(\) \}\)/)
 })

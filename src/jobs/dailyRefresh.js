@@ -34,12 +34,14 @@ import { POSTING_CONFIG, DEADHEAD_MAX_MI, MIN_NEAR_LOADS } from '../../scripts/s
 
 let running = false
 
+// Remote writes are allowed only on Vercel, where the database is remote by
+// definition and there is no argv to carry --allow-remote. A local server
+// that happens to be wired to the prod DB must NOT let its cron write there.
+export const cronMayWriteRemote = (env = process.env) => Boolean(env.VERCEL)
+
 async function runRefresh(coverageOnly = false) {
   const { runRefresh: refresh, runPostingRefresh } = await import('../../scripts/refresh-postings.js')
-  // allowRemote: true is deliberate. This runs on prod (Vercel cron / the
-  // /ops/refresh endpoint, protected by OPS_TICK_SECRET) where the database
-  // is remote by definition; there is no argv to carry --allow-remote.
-  return coverageOnly ? runPostingRefresh({ allowRemote: true }) : refresh({ allowRemote: true })
+  return coverageOnly ? runPostingRefresh({ allowRemote: cronMayWriteRemote() }) : refresh({ allowRemote: cronMayWriteRemote() })
 }
 
 // How long to wait after a failed run before trying again. The original
