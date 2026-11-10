@@ -62,8 +62,8 @@ const POSTING_COLUMNS = [
 
 // A bounded additive market update: no cleanup, applicants, trucks or edits
 // to existing freight. The ordinary daily refresh below keeps its behavior.
-export async function runPostingRefresh({ count = 12, runner = pool } = {}) {
-  assertLocalHost()
+export async function runPostingRefresh({ count = 12, runner = pool, allowRemote = false } = {}) {
+  assertLocalHost({ allowRemote })
   if (!Number.isInteger(count) || count < 1 || count > 60) throw new RangeError('Posting count must be 1–60')
   const brokerIds = new Map((await runner.query('SELECT id, name FROM brokers')).rows.map((b) => [b.name, b.id]))
   const drivers = await activeTruckLocations(runner)
@@ -137,12 +137,24 @@ function mulberry32(seed) {
   }
 }
 
-// Host guard — refuse to write to non-local databases.
-// Shared between CLI and cron paths.
-function assertLocalHost() {
-  const host = new URL(process.env.DATABASE_URL).hostname
-  if (host !== 'localhost' && host !== '127.0.0.1' && !process.argv.includes('--allow-remote')) {
+// Host guard — refuse to write to non-local databases unless the CALLER
+// opts in. It must not read process.argv: the Vercel cron path (dailyRefresh,
+// behind /ops/refresh) has no argv, so an argv check made every prod run fail.
+// Only the CLI entry point below translates --allow-remote into the option.
+export function assertLocalHost({ allowRemote = false, databaseUrl = process.env.DATABASE_URL } = {}) {
+  const host = new URL(databaseUrl).hostname
+  if (host !== 'localhost' && host !== '127.0.0.1' && !allowRemote) {
     throw new Error(`refuses to write to ${host} without --allow-remote`)
+  }
+}
+
+// CLI argument parsing, kept pure so the --allow-remote contract is testable.
+export function parseCliArgs(argv) {
+  const countArg = argv.find((arg) => arg.startsWith('--count='))
+  return {
+    postingOnly: argv.includes('--postings-only'),
+    allowRemote: argv.includes('--allow-remote'),
+    count: countArg ? Number(countArg.slice(8)) : 12,
   }
 }
 
@@ -150,9 +162,9 @@ function assertLocalHost() {
 // Core refresh logic — exported for dailyRefresh.js
 // ---------------------------------------------------------------------
 
-export async function runRefresh() {
-  // Host guard — runs in BOTH CLI and cron paths
-  assertLocalHost()
+export async function runRefresh({ allowRemote = false } = {}) {
+  // Host guard — runs in BOTH CLI and cron paths; the caller decides allowRemote
+  assertLocalHost({ allowRemote })
 
   // No AI config check, and no AI key needed.
   //
@@ -496,9 +508,8 @@ const isMainModule = process.argv[1] &&
    process.argv[1].endsWith('\\refresh-postings.js'))
 
 if (isMainModule) {
-  const postingOnly = process.argv.includes('--postings-only')
-  const countArg = process.argv.find((arg) => arg.startsWith('--count='))
-  const run = postingOnly ? runPostingRefresh({ count: countArg ? Number(countArg.slice(8)) : 12 }) : runRefresh()
+  const { postingOnly, allowRemote, count } = parseCliArgs(process.argv.slice(2))
+  const run = postingOnly ? runPostingRefresh({ count, allowRemote }) : runRefresh({ allowRemote })
   run
     .then((result) => {
       if (postingOnly) console.log(JSON.stringify(result))
