@@ -1,7 +1,9 @@
 // Business logic for the /fleet/truck-listings endpoints. Combines
 // truckListings.repository.js — no SQL lives here, only shaping.
 
-import { pool } from '../../db/pool.js'
+import { pool, withTransaction } from '../../db/pool.js'
+import config from '../../config.js'
+import { billTruck } from './truckLease.service.js'
 import * as truckListingsRepo from './truckListings.repository.js'
 import { AppError } from '../../lib/errors.js'
 import { findCity } from '../../../scripts/seed/cities.js'
@@ -126,4 +128,17 @@ export async function assignDriver({ truckId, driverId }) {
   } finally {
     client.release()
   }
+}
+
+// Unassign runs in one transaction with the final lease charge, so the rent
+// and the release succeed or fail together. FINANCE=off writes no rent.
+export async function unassignDriver({ driverId }, { enabled = config.financeEnabled, run = withTransaction } = {}) {
+  return run(async (client) => {
+    const result = await truckListingsRepo.unassignDriver(client, {
+      driverId,
+      billLease: enabled ? (c, truck) => billTruck(c, truck, new Date(), { flush: true }) : null,
+    })
+    if (result.error) throw new AppError(result.error)
+    return { ok: true, truckId: result.truckId }
+  })
 }

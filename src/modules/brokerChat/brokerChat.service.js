@@ -11,7 +11,7 @@ import { loadStage, LOAD_STAGES, postBookingDecision, POST_BOOKING_ACTIONS } fro
 import { reportEventFromDispatcher } from '../loadEvents/loadEvents.service.js'
 import { truckFacts } from './truckTalk.js'
 import { bookingFacts, carrierNotVerified } from './bookingTalk.js'
-import { stopsForRow } from './stops.js'
+import { stopsFor, stopsForRow } from './stops.js'
 import { fileURLToPath } from 'node:url'
 import { promptVersionOf } from '../../lib/promptVersion.js'
 import { turnRow, logTurn } from '../chat/turnLog.js'
@@ -21,7 +21,7 @@ import { AppError } from '../../lib/errors.js'
 import { stripSpeakerLabel } from '../../lib/speakerLabel.js'
 import { getCarrier, carrierEmail } from '../carrier/carrier.repository.js'
 import { findById } from '../auth/users.repository.js'
-import { negotiate, lastAuthorizedEmail, pendingBasisAskUsd, lastCarrierAskUsd, RATE_MISS_REASON } from './negotiation.js'
+import { negotiate, lastAuthorizedEmail, pendingBasisAskUsd, settledRateBasis, lastCarrierAskUsd, RATE_MISS_REASON } from './negotiation.js'
 import { varyRepeat } from './repeatGuard.js'
 import { buildBrokerContext } from './brokerContext.js'
 import * as repo from './brokerChat.repository.js'
@@ -275,13 +275,15 @@ export async function sendMessage({ conversationId, userId, text, cancelBooking 
   const brokerSaid = brokerTexts(thread)
   // An agreed status is not proof the delayed document has arrived.
   const delivered = await deps.repo.rateConDelivered(conversationId)
+  const settledBasis = settledRateBasis(thread, posting)
   const decision = negotiate({
     conversation: { ...turnConversation, negotiationStage: delivered ? 'paper_delivered' : turnConversation.negotiationStage },
     posting, text, booking, truck, now,
     effectiveEmail: carrierEmail(carrier, await deps.findById(userId)).effectiveEmail,
     knownEmail: lastAuthorizedEmail(dispatcherTexts(thread).slice(0, -1)),
     pendingBasisUsd: pendingBasisAskUsd(thread, posting),
-    lastAskUsd: lastCarrierAskUsd(dispatcherTexts(thread).slice(0, -1), posting),
+    settledBasis,
+    lastAskUsd: lastCarrierAskUsd(dispatcherTexts(thread).slice(0, -1), posting, settledBasis),
     offerVisible: brokerSaid.some((line) => line.replaceAll(',', '').includes(String(turnConversation.brokerOfferUsd ?? posting.rateUsd))),
   })
   const paper = { status: decision.state.agreed === null ? 'open' : 'agreed', delivered: delivered && !decision.invalidatePaper, stage: decision.state.stage }
@@ -433,6 +435,7 @@ export async function sendMessage({ conversationId, userId, text, cancelBooking 
     conversationId, userId, revision: turnConversation.negotiationRevision, decision, reply: reply.trim() || FALLBACK_REPLY,
     delaySec: replyDelaySec(posting.creditRating), paperDelaySec: replyDelaySec(posting.creditRating),
     paperRate: decision.issuePaper ? rateConAmount(decision.state.agreed, posting.creditRating, { minRate: posting.distanceMi }) : null,
+    paperStops: decision.issuePaper ? stopsFor(posting) : null,
   })
 
   // brokerMessage is deliberately NOT returned. Handing the caller a
@@ -572,5 +575,8 @@ export async function getRateConfirmation({ conversationId, userId }, { deps = D
     carrier: await deps.getCarrier(),
     posting: row,
   })
-  return { ...row, booking: { ...booking, email: row.recipientEmail ?? booking.email }, stops: stopsForRow(row) }
+  // Names are frozen when the paper is issued. A paper issued before that was
+  // stored gets its (unchanged) names written on this first read.
+  const stops = row.rateConStops ?? await deps.repo.freezeRateConStops(conversationId, stopsForRow(row))
+  return { ...row, booking: { ...booking, email: row.recipientEmail ?? booking.email }, stops }
 }

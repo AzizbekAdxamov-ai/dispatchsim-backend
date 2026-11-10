@@ -495,7 +495,7 @@ export function buildBrokerSystemPrompt({ broker, posting, carrier = null, now =
     '- Return a greeting with a short greeting before business. Meet friendly, casual',
     '  language with a little warmth even if your character is formal; keep your own',
     '  voice. Do not copy the dispatcher\'s typos or slang, imitate an accent, force "bro" or add a joke every turn.',
-    `- ${STYLE_INSTRUCTION[brokerStyle(posting.brokerId)]}`,
+    `- ${STYLE_INSTRUCTION[brokerStyle(posting.brokerId, broker.persona)]}`,
     // Let the existing personas breathe without turning every broker into a comedian.
     '- Use natural American contractions. A casual character may use clear trucking',
     '  idioms or light slang; a reserved character stays reserved. Do not give everyone',

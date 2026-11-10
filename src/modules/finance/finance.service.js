@@ -158,6 +158,8 @@ export async function getOverview() {
   // recomputing a second way — see listExpenses below for the shared
   // "current month" window.
   const { expenses, meta: expensesMeta } = await listExpenses()
+  // Lease paid per truck, for the profitability view (same rows as the expenses).
+  const truckLease = expenses.filter((e) => e.category === 'truck_lease').map((e) => ({ truckId: e.truckId, amountUsd: e.amountUsd }))
 
   return {
     totalOutstandingUsd: kpis.totalOutstandingUsd,
@@ -171,6 +173,7 @@ export async function getOverview() {
     agingBuckets: agingBuckets.map((b) => ({ key: b.key, label: b.label, count: b.count, amountUsd: b.amountUsd })),
     cashFlowTrend: buildCashFlowTrend(revenueRows, fuelRows, maintenanceRows),
     loadProfitability,
+    truckLease,
     assumptions: getAssumptions(),
   }
 }
@@ -197,11 +200,20 @@ export async function listSettlements() {
 }
 
 export async function listExpenses() {
-  const [fuelRows, maintenanceRows, kpis] = await Promise.all([
+  const [fuelRows, maintenanceRows, kpis, leaseRows] = await Promise.all([
     financeRepo.listFuelExpenseRows(),
     financeRepo.listMaintenanceExpenseRows(),
     financeRepo.getInvoiceKpis(),
+    financeRepo.listTruckLeaseRows(),
   ])
+
+  const leaseExpenses = leaseRows.map((r) => ({
+    id: `ex-lease-${r.truckId}`,
+    category: 'truck_lease',
+    truckId: r.truckId,
+    description: `Truck lease — ${r.truckId}`,
+    amountUsd: money(r.amountUsd),
+  }))
 
   const fuelExpenses = fuelRows.map((r) => ({
     id: `ex-fuel-${r.truckId}`,
@@ -225,7 +237,7 @@ export async function listExpenses() {
     { id: 'ex-fact-1', category: 'other', truckId: null, description: 'Factoring fee (receivables)', amountUsd: money(kpis.totalOutstandingUsd * FACTORING_RATE) },
   ]
 
-  const expenses = [...fuelExpenses, ...maintenanceExpenses, ...fixedExpenses]
+  const expenses = [...fuelExpenses, ...maintenanceExpenses, ...leaseExpenses, ...fixedExpenses]
   const totalUsd = money(expenses.reduce((sum, e) => sum + e.amountUsd, 0))
 
   const byCategory = {}

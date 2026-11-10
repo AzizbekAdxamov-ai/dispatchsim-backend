@@ -228,6 +228,7 @@ export async function getConversationForPDF(conversationId, userId) {
     `SELECT c.id, c.agreed_rate_usd AS "agreedRateUsd",
             c.rate_con_rate_usd AS "rateConRateUsd", c.status, c.recipient_email AS "recipientEmail",
             c.rate_con_basis AS "rateConBasis", c.rate_con_fuel_surcharge_usd AS "rateConFuelSurchargeUsd",
+            c.rate_con_stops AS "rateConStops",
             c.updated_at AS "updatedAt",
             p.id AS "postingId", p.origin_city AS "originCity",
             p.origin_state AS "originState",
@@ -291,7 +292,24 @@ export async function setRateCon(conversationId, rateConRateUsd, source = {}) {
   return result.rows[0] ?? null
 }
 
+// Stores the shipper and receiver for a paper issued before names were frozen.
+// Only fills an empty column, so two readers racing keep the first names;
+// returns the stored stops either way.
+export async function freezeRateConStops(conversationId, stops) {
+  const result = await query(
+    `UPDATE broker_conversations SET rate_con_stops = $2::jsonb
+      WHERE id = $1 AND rate_con_stops IS NULL
+      RETURNING rate_con_stops AS "rateConStops"`,
+    [conversationId, JSON.stringify(stops)],
+  )
+  if (result.rows[0]) return result.rows[0].rateConStops
+  const stored = await query('SELECT rate_con_stops AS "rateConStops" FROM broker_conversations WHERE id = $1', [conversationId])
+  return stored.rows[0]?.rateConStops ?? null
+}
+
 // A re-negotiation invalidates the paper that was already on its way.
+// rate_con_stops is NOT cleared here or in completeChatTurn: one posting has
+// one shipper and receiver, so a re-issued paper carries the same names.
 // Returns how many rate confirmations were withdrawn.
 export async function clearRateCon(conversationId) {
   await query('UPDATE broker_conversations SET rate_con_rate_usd = NULL, rate_con_basis = NULL, rate_con_fuel_surcharge_usd = NULL WHERE id = $1', [conversationId])
@@ -356,7 +374,7 @@ export async function beginChatTurn(conversationId, userId, text) {
   })
 }
 
-export async function completeChatTurn({ conversationId, userId, revision, decision, reply, delaySec, paperDelaySec, paperRate }) {
+export async function completeChatTurn({ conversationId, userId, revision, decision, reply, delaySec, paperDelaySec, paperRate, paperStops = null }) {
   return withTransaction(async (client) => {
     const conversation = await lockedConversation(client, conversationId, userId)
     if (conversation.negotiationRevision !== revision) return false
@@ -370,9 +388,11 @@ export async function completeChatTurn({ conversationId, userId, revision, decis
       rate_con_basis = CASE WHEN $9 THEN $12::text WHEN $11 THEN NULL ELSE rate_con_basis END,
       rate_con_fuel_surcharge_usd = CASE WHEN $9 THEN $13::integer WHEN $11 THEN NULL ELSE rate_con_fuel_surcharge_usd END,
       pending_close_usd = $14::integer,
+      rate_con_stops = CASE WHEN $9 THEN COALESCE(rate_con_stops, $15::jsonb) ELSE rate_con_stops END,
       updated_at = now() WHERE id = $1 AND user_id = $2`,
     [conversationId, userId, s.offer, s.agreed, s.stage, s.recipient, s.pushes, s.bestCounterUsed, decision.issuePaper, paperRate, decision.invalidatePaper,
-      paperQuote?.rateBasis ?? null, paperQuote?.fuelSurchargeUsd ?? null, s.pendingClose ?? null])
+      paperQuote?.rateBasis ?? null, paperQuote?.fuelSurchargeUsd ?? null, s.pendingClose ?? null,
+      paperStops ? JSON.stringify(paperStops) : null])
     await client.query(`INSERT INTO broker_messages (conversation_id, role, content, deliver_at)
       VALUES ($1, 'broker', $2, now() + make_interval(secs => $3))`, [conversationId, reply, delaySec])
     if (decision.issuePaper) {

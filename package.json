@@ -19,6 +19,7 @@
     "generate:seed": "node scripts/generate-seed.js",
     "broker:unblock": "node scripts/broker-unblock.js",
     "clear:fleet": "node scripts/clear-fleet.js",
+    "provision:trucks": "node scripts/provision-trucks.js",
     "reset:company": "node scripts/reset-company.js",
     "copy:drivers-prod": "node scripts/copy-drivers-to-prod.js",
     "backfill:driver-profiles": "node scripts/backfill-hired-driver-profiles.js",

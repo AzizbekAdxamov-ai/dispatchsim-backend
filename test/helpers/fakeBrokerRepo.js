@@ -108,7 +108,7 @@ export function makeFakeBrokerRepo({
       const dispatcherMessage = await repo.addMessage(id, 'dispatcher', text)
       return { conversation: before, dispatcherMessage }
     },
-    async completeChatTurn({ revision, decision, reply, delaySec, paperDelaySec, paperRate }) {
+    async completeChatTurn({ revision, decision, reply, delaySec, paperDelaySec, paperRate, paperStops = null }) {
       if (conversation.negotiationRevision !== revision) return false
       const s = decision.state
       if (decision.invalidatePaper) await repo.clearRateCon()
@@ -119,6 +119,7 @@ export function makeFakeBrokerRepo({
       await repo.addMessage(conversation.id, 'broker', reply, { delaySec })
       if (decision.issuePaper && !messages.some((m) => m.kind === 'rate_con')) {
         conversation.rateConRateUsd = paperRate
+        conversation.rateConStops ??= paperStops
         conversation.rateConBasis = decision.rateQuote?.rateBasis ?? 'all-in'
         conversation.rateConFuelSurchargeUsd = decision.rateQuote?.fuelSurchargeUsd ?? 0
         await repo.addMessage(conversation.id, 'broker', 'Rate confirmation attached.', { kind: 'rate_con', delaySec: delaySec + paperDelaySec })
@@ -184,6 +185,10 @@ export function makeFakeBrokerRepo({
       conversation.status = 'booked'
       return publicRow()
     },
+    async freezeRateConStops(id, stops) {
+      conversation.rateConStops ??= stops
+      return conversation.rateConStops
+    },
     async getConversationForPDF(id, uid) {
       if (id !== conversation.id || uid !== conversation.userId) return null
       return {
@@ -191,6 +196,7 @@ export function makeFakeBrokerRepo({
         rateConRateUsd: conversation.rateConRateUsd, status: conversation.status,
         rateConBasis: conversation.rateConBasis, rateConFuelSurchargeUsd: conversation.rateConFuelSurchargeUsd,
         recipientEmail: conversation.recipientEmail,
+        rateConStops: conversation.rateConStops ?? null,
         updatedAt: conversation.updatedAt,
         postingId: posting.id,
         originCity: posting.originCity, originState: posting.originState,

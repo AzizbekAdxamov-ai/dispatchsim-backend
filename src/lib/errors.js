@@ -84,6 +84,8 @@ export const ERROR_CODES = {
   // test/errorCodes.test.js now reads every code the source throws.
   TRUCK_NOT_IDLE:         { status: 409, message: 'This truck is not idle — it is working or in the shop' },
   DRIVER_HAS_TRUCK:       { status: 409, message: 'This driver already has a truck assigned' },
+  DRIVER_HAS_NO_TRUCK:    { status: 409, message: 'This driver has no truck to unassign' },
+  TRUCK_HAS_ACTIVE_LOAD:  { status: 409, message: 'This truck is on a load — it can be unassigned once the load is delivered' },
   NOT_AGREED_YET:         { status: 409, message: 'No agreement on file — agree on a rate first' },
   ALREADY_BOOKED:         { status: 409, message: 'This rate confirmation has already been accepted' },
   // The MC the dispatcher gave the broker is missing or is not ours: no agreement

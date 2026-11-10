@@ -109,7 +109,7 @@ test('chat-eval passes the same booking verdict to prompt and reply check', () =
   assert.match(src, /brokerEvalContext\(\{ posting, carrier, text: line, now \}\)/)
   assert.match(src, /brokerReplyProblem\(r, checkFacts\)/)
   const posting = { originCity: 'Dallas', originState: 'TX', destinationCity: 'Chicago', destinationState: 'IL',
-    equipmentType: 'dry-van', rateUsd: 3000, distanceMi: 970, pickupAt: '2026-10-30T12:00:00Z', deliveryAt: '2026-11-01T12:00:00Z' }
+    equipmentType: 'dry-van', persona: 'Plain.', rateUsd: 3000, distanceMi: 970, pickupAt: '2026-10-30T12:00:00Z', deliveryAt: '2026-11-01T12:00:00Z' }
   for (const [text, expected] of [['Hello', null], ['My MC is 741309', 'match'], ['My MC is 999999', 'mismatch']]) {
     const context = brokerEvalContext({ posting, carrier: { name: 'Example Freight', mcNumber: 'MC-741309' }, text,
       now: new Date('2026-10-28T12:00:00Z') })

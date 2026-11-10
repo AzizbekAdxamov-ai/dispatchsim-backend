@@ -98,7 +98,7 @@ export async function insertTruck(client, listing) {
 export async function assignDriver(client, { truckId, driverId }) {
   // 1. Check truck is idle and has no driver
   const truckResult = await client.query(
-    `SELECT id, status, driver_id FROM trucks WHERE id = $1 FOR UPDATE`,
+    `SELECT id, status, driver_id, is_leased FROM trucks WHERE id = $1 FOR UPDATE`,
     [truckId],
   )
   const truck = truckResult.rows[0]
@@ -114,12 +114,50 @@ export async function assignDriver(client, { truckId, driverId }) {
   if (driverResult.rows.length > 0) return { error: 'DRIVER_HAS_TRUCK' }
 
   // 3. Assign
+  // The truck goes to where the driver is now (it does not stay in the lot
+  // it was parked at), and a leased truck's rent starts from this moment.
   await client.query(
-    `UPDATE trucks SET driver_id = $1, status = 'active', updated_at = now() WHERE id = $2`,
+    `UPDATE trucks t
+        SET driver_id = d.id, status = 'active', updated_at = now(),
+            current_location = COALESCE(NULLIF(btrim(d.current_location), ''),
+              CASE WHEN d.current_city IS NOT NULL AND d.current_state IS NOT NULL
+                   THEN d.current_city || ', ' || d.current_state END, t.current_location),
+            location_city = COALESCE(d.current_city, t.location_city),
+            location_state = COALESCE(d.current_state, t.location_state),
+            lease_billed_through = CASE WHEN t.is_leased THEN now() END,
+            lease_accrued_usd = 0
+       FROM drivers d
+      WHERE d.id = $1 AND t.id = $2`,
     [driverId, truckId],
   )
 
   return { ok: true }
+}
+
+// Takes the driver off their truck. Refused while a load is still moving on
+// it. A leased truck's rent up to now is written first (billTruck, flush),
+// then the watermark is cleared so a parked truck costs nothing. The status
+// goes back to idle by the trucks_park_on_release trigger (053).
+export async function unassignDriver(client, { driverId, billLease = null }) {
+  const found = await client.query(
+    `SELECT id, trailer_type, is_leased, lease_billed_through, lease_accrued_usd
+       FROM trucks WHERE driver_id = $1 FOR UPDATE`,
+    [driverId],
+  )
+  const truck = found.rows[0]
+  if (!truck) return { error: 'DRIVER_HAS_NO_TRUCK' }
+  const active = await client.query(
+    `SELECT 1 FROM loads
+      WHERE (driver_id = $1 OR truck_id = $2) AND status NOT IN ('done', 'cancelled', 'neutral') LIMIT 1`,
+    [driverId, truck.id],
+  )
+  if (active.rows.length > 0) return { error: 'TRUCK_HAS_ACTIVE_LOAD' }
+  if (billLease && truck.is_leased && truck.lease_billed_through) await billLease(client, truck)
+  await client.query(
+    `UPDATE trucks SET driver_id = NULL, lease_billed_through = NULL, lease_accrued_usd = 0, updated_at = now() WHERE id = $1`,
+    [truck.id],
+  )
+  return { ok: true, truckId: truck.id }
 }
 
 export async function countOpenListings() {

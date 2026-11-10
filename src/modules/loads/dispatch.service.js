@@ -30,6 +30,7 @@ import { TERM_DAYS } from '../../constants/paymentTerms.js'
 import { FUEL_PRICE_PER_GAL, AVG_MPG, MONTHLY_INSURANCE } from '../finance/finance.constants.js'
 import { settlementFor, SETTLEMENT_TERM_SIM_DAYS } from '../../constants/driverPay.js'
 import * as payrollRepo from '../payroll/payroll.repository.js'
+import { chargeTruckLeases } from '../fleet/truckLease.service.js'
 import * as availabilityService from '../availability/availability.service.js'
 import { REASONS } from '../../constants/availabilityReasons.js'
 import { postRefusal } from '../driverChat/driverChat.refusalPost.js'
@@ -1357,6 +1358,8 @@ export async function runTick() {
   const stopsSettled = (await settle('stops', settleArrivedStops)) ?? []
   const interest = await settle('interest', chargeInterest)
   const insurance = await settle('insurance', chargeInsurance)
+  // Weekly rent on leased trucks that have a driver (operational sim clock).
+  const lease = await settle('lease', chargeTruckLeases)
   // Events are rolled AFTER delivery, not before. A load that has already
   // arrived should not meet a blizzard on the tick that delivers it, and
   // deliverArrivedLoads skips loads with an open event anyway -- rolling
@@ -1368,5 +1371,5 @@ export async function runTick() {
   // After delivery (releaseDriver) so a driver who just finished is read
   // off their log, not left on whatever the release wrote.
   const hosSynced = (await settle('hos', syncDriverHos)) ?? []
-  return { delivered, paid, stopsSettled, interest, insurance, events, late, hosSynced }
+  return { delivered, paid, stopsSettled, interest, insurance, lease, events, late, hosSynced }
 }
