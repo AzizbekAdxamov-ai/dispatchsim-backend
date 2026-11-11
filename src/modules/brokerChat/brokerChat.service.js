@@ -325,7 +325,7 @@ export async function sendMessage({ conversationId, userId, text, cancelBooking 
   // Everything brokerReplyProblem needs to judge the reply, for the first
   // reply and the regenerated one alike.
   const checkFacts = {
-    truck, booking, posting, now, text, said, brokerSaid, paper, negotiation: decision, bookedHere: BOOKED_STATUSES.includes(conversation.status),
+    truck, booking, posting, now, text, said, brokerSaid, paper, negotiation: decision, bookedHere: BOOKED_STATUSES.includes(conversation.status), systemPrompt,
   }
 
   let reply

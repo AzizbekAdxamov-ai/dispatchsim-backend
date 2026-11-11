@@ -17,3 +17,8 @@ export const PDF_LIMIT_PER_MINUTE = 20
 
 // Largest page a list endpoint may be asked for (truck listings).
 export const MAX_PAGE = 100
+
+// A prompt line this long, repeated verbatim in a reply, is the model
+// reading its instructions aloud; shorter lines ("Keep it short.") can
+// appear in ordinary speech by chance.
+export const PROMPT_LEAK_MIN_CHARS = 50
