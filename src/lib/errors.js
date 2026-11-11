@@ -11,6 +11,10 @@ export const ERROR_CODES = {
   USER_NOT_FOUND:      { status: 404, message: 'User not found' },
   RATE_LIMITED:        { status: 429, message: 'Too many attempts, try again later' },
   ROUTE_NOT_FOUND:     { status: 404, message: 'Route not found' },
+  // express.json() failures: the client's fault, not ours (Express 5 raises
+  // them with these codes in err.type).
+  INVALID_JSON:        { status: 400, message: 'Request body is not valid JSON' },
+  PAYLOAD_TOO_LARGE:   { status: 413, message: 'Request body is too large' },
   INTERNAL_ERROR:      { status: 500, message: 'Something went wrong' },
   // Authenticated, but not an administrator — trying to reach /admin/*.
   FORBIDDEN:           { status: 403, message: 'You do not have access to this area' },

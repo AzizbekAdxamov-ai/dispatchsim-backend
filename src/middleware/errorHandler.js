@@ -66,6 +66,10 @@ export function errorHandler(err, req, res, next) {
       message: issue.message,
     }))
     appError = new AppError('VALIDATION_ERROR', details)
+  } else if (err?.type === 'entity.parse.failed') {
+    appError = new AppError('INVALID_JSON')
+  } else if (err?.type === 'entity.too.large') {
+    appError = new AppError('PAYLOAD_TOO_LARGE')
   } else if (isEmailUniqueViolation(err)) {
     appError = new AppError('EMAIL_TAKEN')
   } else {
