@@ -19,13 +19,17 @@ import jwt from 'jsonwebtoken'
 import config from '../config.js'
 import { AppError } from './errors.js'
 
+// Pinned on both sides: a verifier that accepts whatever the token header
+// names lets an attacker pick the algorithm.
+const JWT_ALGORITHM = 'HS256'
+
 export function sign({ id }) {
-  return jwt.sign({ sub: id }, config.jwtSecret, { expiresIn: config.jwtExpiresIn })
+  return jwt.sign({ sub: id }, config.jwtSecret, { algorithm: JWT_ALGORITHM, expiresIn: config.jwtExpiresIn })
 }
 
 export function verify(token) {
   try {
-    return jwt.verify(token, config.jwtSecret)
+    return jwt.verify(token, config.jwtSecret, { algorithms: [JWT_ALGORITHM] })
   } catch (err) {
     if (err.name === 'TokenExpiredError') {
       throw new AppError('TOKEN_EXPIRED')

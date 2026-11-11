@@ -3,10 +3,10 @@
 // is already behind requireAuth + requireRole('fleet-manager') (see fleet.routes.js).
 
 import * as truckListingsService from './truckListings.service.js'
-import { assignDriverSchema } from './fleet.schemas.js'
+import { assignDriverSchema, listingsQuerySchema } from './fleet.schemas.js'
 
 export async function listOpenListings(req, res) {
-  const limit = Number(req.query.limit) || 100
+  const { limit } = listingsQuerySchema.parse(req.query)
   const result = await truckListingsService.listOpenListings({ limit })
   res.status(200).json(result)
 }

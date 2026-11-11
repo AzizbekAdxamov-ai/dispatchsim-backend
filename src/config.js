@@ -45,6 +45,17 @@ if (defaultRole !== null && !ROLE_KEYS.includes(defaultRole)) {
   errors.push(`DEFAULT_ROLE must be one of: ${ROLE_KEYS.join(', ')} (or left blank)`)
 }
 
+// REQUIRE_INVITE=on closes open registration: POST /auth/register must carry
+// an invite code (INVITE_REQUIRED otherwise). Off is the default and changes
+// nothing. Like FINANCE, a typo is a configuration error, not a quiet 'off'
+// that would leave registration open on a deployment meant to be closed.
+const rawRequireInvite = process.env.REQUIRE_INVITE
+const requireInviteSetting = rawRequireInvite && rawRequireInvite.trim() !== '' ? rawRequireInvite.trim().toLowerCase() : 'off'
+if (requireInviteSetting !== 'on' && requireInviteSetting !== 'off') {
+  errors.push(`REQUIRE_INVITE must be 'on' or 'off' (or left blank, which means off) (got: ${rawRequireInvite})`)
+}
+const requireInvite = requireInviteSetting === 'on'
+
 // The money model, on one switch.
 //
 // Credit-line interest, the fleet insurance premium, and every refusal
@@ -222,6 +233,7 @@ export default {
   corsOrigin,
   isProd,
   defaultRole,
+  requireInvite,
   financeEnabled,
   chatFastReplies: fast === 'on',
   chatRequestsPerDay,

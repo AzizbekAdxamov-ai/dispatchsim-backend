@@ -4,6 +4,7 @@
 
 import express from 'express'
 import cors from 'cors'
+import helmet from 'helmet'
 import config from './config.js'
 import authRoutes from './modules/auth/auth.routes.js'
 import adminRoutes from './modules/admin/admin.routes.js'
@@ -27,6 +28,7 @@ import documentsRoutes from './modules/documents/documents.routes.js'
 import facilitiesRoutes from './modules/facilities/facilities.routes.js'
 import complianceRoutes from './modules/compliance/compliance.routes.js'
 import tripsRoutes from './modules/trips/trips.routes.js'
+import { opsLimiter, globalLimiter } from './middleware/rateLimit.js'
 import { notFound } from './middleware/notFound.js'
 import { errorHandler } from './middleware/errorHandler.js'
 
@@ -36,6 +38,19 @@ const app = express()
 // the app). Needed for req.ip / X-Forwarded-For to be read correctly, which
 // express-rate-limit relies on to key limits per real client IP.
 app.set('trust proxy', 1)
+app.disable('x-powered-by')
+
+// Headers for a JSON API that is never rendered as a page: nothing may load
+// from it or frame it. CORP is cross-origin because the frontend lives on
+// another domain and fetches JSON and PDFs from here; helmet's default
+// (same-origin) would make the browser refuse those responses.
+app.use(helmet({
+  contentSecurityPolicy: {
+    useDefaults: false,
+    directives: { defaultSrc: ["'none'"], frameAncestors: ["'none'"] },
+  },
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
+}))
 
 // `credentials` is intentionally omitted: the API is authenticated with a
 // Bearer token in the Authorization header, not cookies, so there is no
@@ -65,6 +80,10 @@ app.use(cors({
 // function call in the same process -- there is no internal HTTP surface
 // and no separate bot process to authenticate.
 
+// Flood ceiling for everything but /health and /ops. After cors so a 429
+// still carries the CORS headers the browser needs to read it.
+app.use(globalLimiter)
+
 app.use(express.json({ limit: '100kb' }))
 
 // Unauthenticated, unrated liveness check for load balancers/uptime checks.
@@ -87,7 +106,7 @@ app.use('/load-board', loadBoardRoutes)
 app.use('/broker-chat', brokerChatRoutes)
 app.use('/broker-check', brokerCheckRoutes)
 app.use('/cash', cashRoutes)
-app.use('/ops', opsRoutes)
+app.use('/ops', opsLimiter, opsRoutes)
 app.use('/hr', hrRoutes)
 app.use('/tracking', trackingRoutes)
 app.use('/documents', documentsRoutes)

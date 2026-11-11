@@ -42,8 +42,19 @@ const CODES_WITH_PUBLIC_DETAILS = new Set([
   'CARRIER_NOT_VERIFIED',
 ])
 
+// What goes to the server log. Never the error object itself: a pg error
+// carries `detail` ("Key (email)=(a@b.c) already exists") and sometimes the
+// bound parameters, and an AppError's details can echo user input. Only the
+// fields that say WHAT failed are kept; the stack is a development aid.
+function sanitizedForLog(err) {
+  if (err instanceof AppError) return { name: err.name, code: err.code, status: err.status }
+  const entry = { name: err?.name, code: err?.code, constraint: err?.constraint, message: err?.message }
+  if (!config.isProd && err?.stack) entry.stack = err.stack
+  return entry
+}
+
 export function errorHandler(err, req, res, next) {
-  console.error(err)
+  console.error(sanitizedForLog(err))
 
   let appError
 
@@ -55,6 +66,10 @@ export function errorHandler(err, req, res, next) {
       message: issue.message,
     }))
     appError = new AppError('VALIDATION_ERROR', details)
+  } else if (err?.type === 'entity.parse.failed') {
+    appError = new AppError('INVALID_JSON')
+  } else if (err?.type === 'entity.too.large') {
+    appError = new AppError('PAYLOAD_TOO_LARGE')
   } else if (isEmailUniqueViolation(err)) {
     appError = new AppError('EMAIL_TAKEN')
   } else {

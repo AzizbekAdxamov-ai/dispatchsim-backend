@@ -3,6 +3,9 @@
 
 import rateLimit from 'express-rate-limit'
 import { AppError } from '../lib/errors.js'
+import {
+  ONE_MINUTE_MS, OPS_LIMIT_PER_MINUTE, GLOBAL_LIMIT_PER_MINUTE, PDF_LIMIT_PER_MINUTE,
+} from '../constants/security.js'
 
 export const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -65,4 +68,37 @@ export const chatLimiter = rateLimit({
   max: 12,
   standardHeaders: true,
   legacyHeaders: false,
+})
+
+// /ops/*: the scheduler calls these about once a day, so 30/minute per IP
+// never touches it and still caps anyone guessing the secret.
+export const opsLimiter = rateLimit({
+  windowMs: ONE_MINUTE_MS,
+  limit: OPS_LIMIT_PER_MINUTE,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  handler: (req, res, next) => next(new AppError('RATE_LIMITED')),
+})
+
+// Every route except /health (load-balancer probes) and /ops (own limiter).
+// Mounted in app.js before the routers; the sensitive routes keep their
+// stricter limiters on top of this one.
+const GLOBAL_LIMIT_SKIPPED = ['/health', '/ops']
+export const globalLimiter = rateLimit({
+  windowMs: ONE_MINUTE_MS,
+  limit: GLOBAL_LIMIT_PER_MINUTE,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  skip: (req) => GLOBAL_LIMIT_SKIPPED.some((p) => req.path === p || req.path.startsWith(`${p}/`)),
+  handler: (req, res, next) => next(new AppError('RATE_LIMITED')),
+})
+
+// PDF routes build a document in memory per request. Mounted BEFORE auth on
+// those routes so unauthenticated hammering is throttled too.
+export const pdfLimiter = rateLimit({
+  windowMs: ONE_MINUTE_MS,
+  limit: PDF_LIMIT_PER_MINUTE,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  handler: (req, res, next) => next(new AppError('RATE_LIMITED')),
 })
