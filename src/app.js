@@ -4,6 +4,7 @@
 
 import express from 'express'
 import cors from 'cors'
+import helmet from 'helmet'
 import config from './config.js'
 import authRoutes from './modules/auth/auth.routes.js'
 import adminRoutes from './modules/admin/admin.routes.js'
@@ -36,6 +37,19 @@ const app = express()
 // the app). Needed for req.ip / X-Forwarded-For to be read correctly, which
 // express-rate-limit relies on to key limits per real client IP.
 app.set('trust proxy', 1)
+app.disable('x-powered-by')
+
+// Headers for a JSON API that is never rendered as a page: nothing may load
+// from it or frame it. CORP is cross-origin because the frontend lives on
+// another domain and fetches JSON and PDFs from here; helmet's default
+// (same-origin) would make the browser refuse those responses.
+app.use(helmet({
+  contentSecurityPolicy: {
+    useDefaults: false,
+    directives: { defaultSrc: ["'none'"], frameAncestors: ["'none'"] },
+  },
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
+}))
 
 // `credentials` is intentionally omitted: the API is authenticated with a
 // Bearer token in the Authorization header, not cookies, so there is no
