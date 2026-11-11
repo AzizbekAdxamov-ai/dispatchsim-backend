@@ -1,6 +1,7 @@
 // Zod validation schemas for the /fleet/* endpoints.
 
 import { z } from 'zod'
+import { MAX_PAGE } from '../../constants/security.js'
 
 // Matches migration 006's `trucks_plate_format` CHECK.
 export const truckIdSchema = z.string().regex(/^[A-Z]{2}-[0-9]{4}-[A-Z]{2}$/)
@@ -42,3 +43,9 @@ export const dvirIdSchema = z.string().trim().regex(/^[0-9]{1,19}$/, 'id must be
 export const dvirCertifySchema = z.object({
   driverId: z.string().trim().min(1).max(32),
 }).strict()
+
+// GET /fleet/truck-listings?limit= . Bounded so a caller cannot ask the
+// database for the whole table; omitted means the largest allowed page.
+export const listingsQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(MAX_PAGE).default(MAX_PAGE),
+})
