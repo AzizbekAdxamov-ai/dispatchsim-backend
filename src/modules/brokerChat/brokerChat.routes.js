@@ -6,10 +6,13 @@
 import { Router } from 'express'
 import { requireAuth } from '../../middleware/requireAuth.js'
 import { requireRole } from '../../middleware/requireRole.js'
-import { chatLimiter, bookLimiter } from '../../middleware/rateLimit.js'
+import { chatLimiter, bookLimiter, pdfLimiter } from '../../middleware/rateLimit.js'
 import * as controller from './brokerChat.controller.js'
 
 const router = Router()
+
+// Before auth, like the documents routes: see rateLimit.js pdfLimiter.
+router.use('/:id/rate-confirmation.pdf', pdfLimiter)
 
 router.use(requireAuth, requireRole('dispatcher'))
 

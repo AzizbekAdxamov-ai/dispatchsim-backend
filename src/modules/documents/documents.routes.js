@@ -7,10 +7,13 @@
 import { Router } from 'express'
 import { requireAuth } from '../../middleware/requireAuth.js'
 import { requireRole } from '../../middleware/requireRole.js'
+import { pdfLimiter } from '../../middleware/rateLimit.js'
 import * as controller from './documents.controller.js'
 
 const router = Router()
 
+// Every route here is a PDF. Limiter first: see rateLimit.js pdfLimiter.
+router.use(pdfLimiter)
 router.use(requireAuth, requireRole())
 
 router.get('/loads/:loadId/bol.pdf', controller.bolPdf)

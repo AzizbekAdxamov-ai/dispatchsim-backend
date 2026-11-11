@@ -28,7 +28,7 @@ import documentsRoutes from './modules/documents/documents.routes.js'
 import facilitiesRoutes from './modules/facilities/facilities.routes.js'
 import complianceRoutes from './modules/compliance/compliance.routes.js'
 import tripsRoutes from './modules/trips/trips.routes.js'
-import { opsLimiter } from './middleware/rateLimit.js'
+import { opsLimiter, globalLimiter } from './middleware/rateLimit.js'
 import { notFound } from './middleware/notFound.js'
 import { errorHandler } from './middleware/errorHandler.js'
 
@@ -79,6 +79,10 @@ app.use(cors({
 // The bot process (src/bot, `npm run bot`) reaches the chat logic as a
 // function call in the same process -- there is no internal HTTP surface
 // and no separate bot process to authenticate.
+
+// Flood ceiling for everything but /health and /ops. After cors so a 429
+// still carries the CORS headers the browser needs to read it.
+app.use(globalLimiter)
 
 app.use(express.json({ limit: '100kb' }))
 
