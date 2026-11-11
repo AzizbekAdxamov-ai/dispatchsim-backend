@@ -16,10 +16,12 @@
 import { Router } from 'express'
 import { runTick } from '../loads/dispatch.service.js'
 import { refreshIfNeeded, OUTCOME } from '../../jobs/dailyRefresh.js'
-import config from '../../config.js'
-import { AppError } from '../../lib/errors.js'
+import { requireOpsSecret } from '../../middleware/opsSecret.js'
 
 const router = Router()
+
+// Secret check (constant time, both header shapes) lives in the middleware.
+router.use(requireOpsSecret)
 
 // GET as well as POST. Vercel's scheduler issues an HTTP **GET** to the
 // path named in vercel.json -- confirmed in their docs, not assumed -- so
@@ -31,19 +33,10 @@ const router = Router()
 // configured the endpoint refuses rather than running unauthenticated --
 // an open tick endpoint would let anyone drive the company's clock.
 //
-// Two header shapes are accepted: `x-ops-secret` for an external
-// scheduler, and `Authorization: Bearer <secret>`, which is what Vercel
-// sends when CRON_SECRET is set on the project. Set both env vars to the
-// same value and either path works.
+// Auth: see middleware/opsSecret.js. Set OPS_TICK_SECRET and CRON_SECRET to
+// the same value and either header shape works.
 async function handleTick(req, res, next) {
   try {
-    const expected = config.opsTickSecret
-    if (!expected) throw new AppError('TICK_NOT_CONFIGURED')
-    const bearer = (req.get('authorization') || '').replace(/^Bearer\s+/i, '')
-    if (req.get('x-ops-secret') !== expected && bearer !== expected) {
-      throw new AppError('UNAUTHORIZED')
-    }
-
     const result = await runTick()
     res.status(200).json({
       delivered: result.delivered.length,
@@ -79,13 +72,6 @@ async function handleTick(req, res, next) {
 // scheduler at it and not think about it again.
 async function handleRefresh(req, res, next) {
   try {
-    const expected = config.opsTickSecret
-    if (!expected) throw new AppError('TICK_NOT_CONFIGURED')
-    const bearer = (req.get('authorization') || '').replace(/^Bearer\s+/i, '')
-    if (req.get('x-ops-secret') !== expected && bearer !== expected) {
-      throw new AppError('UNAUTHORIZED')
-    }
-
     const outcome = await refreshIfNeeded('http')
     // The outcome, not a boolean. "refreshed: false" covers three
     // different situations and only one of them is worth looking into.

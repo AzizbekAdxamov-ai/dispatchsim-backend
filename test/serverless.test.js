@@ -95,14 +95,17 @@ test('neither endpoint runs without a secret', () => {
   // gone: the bot folded into this project on 2026-09-29 and carries its
   // own replies -- an outbox for an HTTP scheduler to drain no longer
   // exists.)
+  //
+  // The secret check moved out of the handlers into middleware/opsSecret.js
+  // (constant-time compare). The rule is now: the router applies it before
+  // any route, and the middleware keeps both refusals.
   const routes = src('src/modules/ops/ops.routes.js')
-  const handlers = routes.split(/async function handle/).slice(1)
-  assert.equal(handlers.length, 2, `${handlers.length} ta handler topildi, 2 ta kutilgandi`)
-  for (const h of handlers) {
-    assert.match(h, /if \(!expected\) throw new AppError\('TICK_NOT_CONFIGURED'\)/,
-      'sirsiz ishlayapti')
-    assert.match(h, /throw new AppError\('UNAUTHORIZED'\)/, 'sirni tekshirmayapti')
-  }
+  const guard = src('src/middleware/opsSecret.js')
+  const useAt = routes.indexOf('router.use(requireOpsSecret)')
+  assert.ok(useAt > -1, 'router requireOpsSecret ishlatmayapti')
+  assert.ok(useAt < routes.indexOf("router.get('/tick'"), 'guard routelardan keyin turibdi')
+  assert.match(guard, /if \(!expected\) return next\(new AppError\('TICK_NOT_CONFIGURED'\)\)/, 'sirsiz ishlayapti')
+  assert.match(guard, /new AppError\('UNAUTHORIZED'\)/, 'sirni tekshirmayapti')
 })
 
 test('every scheduler endpoint has a scheduler somewhere, and it is written down', () => {

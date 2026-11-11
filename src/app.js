@@ -28,6 +28,7 @@ import documentsRoutes from './modules/documents/documents.routes.js'
 import facilitiesRoutes from './modules/facilities/facilities.routes.js'
 import complianceRoutes from './modules/compliance/compliance.routes.js'
 import tripsRoutes from './modules/trips/trips.routes.js'
+import { opsLimiter } from './middleware/rateLimit.js'
 import { notFound } from './middleware/notFound.js'
 import { errorHandler } from './middleware/errorHandler.js'
 
@@ -101,7 +102,7 @@ app.use('/load-board', loadBoardRoutes)
 app.use('/broker-chat', brokerChatRoutes)
 app.use('/broker-check', brokerCheckRoutes)
 app.use('/cash', cashRoutes)
-app.use('/ops', opsRoutes)
+app.use('/ops', opsLimiter, opsRoutes)
 app.use('/hr', hrRoutes)
 app.use('/tracking', trackingRoutes)
 app.use('/documents', documentsRoutes)

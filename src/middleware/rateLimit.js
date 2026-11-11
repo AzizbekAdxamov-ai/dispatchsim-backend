@@ -3,6 +3,7 @@
 
 import rateLimit from 'express-rate-limit'
 import { AppError } from '../lib/errors.js'
+import { ONE_MINUTE_MS, OPS_LIMIT_PER_MINUTE } from '../constants/security.js'
 
 export const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -65,4 +66,14 @@ export const chatLimiter = rateLimit({
   max: 12,
   standardHeaders: true,
   legacyHeaders: false,
+})
+
+// /ops/*: the scheduler calls these about once a day, so 30/minute per IP
+// never touches it and still caps anyone guessing the secret.
+export const opsLimiter = rateLimit({
+  windowMs: ONE_MINUTE_MS,
+  limit: OPS_LIMIT_PER_MINUTE,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  handler: (req, res, next) => next(new AppError('RATE_LIMITED')),
 })
