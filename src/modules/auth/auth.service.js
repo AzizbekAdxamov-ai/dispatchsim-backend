@@ -44,6 +44,11 @@ export function toPublicUser(row) {
 // invalid invite code or a duplicate email — nothing from this call is
 // persisted.
 export async function register(input) {
+  // Before the transaction opens: a closed registration writes nothing.
+  if (config.requireInvite && !input.invite) {
+    throw new AppError('INVITE_REQUIRED')
+  }
+
   const finalRow = await withTransaction(async (client) => {
     let inviteRoles = null
     let inviteCodeId = null

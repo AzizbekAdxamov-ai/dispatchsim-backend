@@ -36,6 +36,8 @@ export const ERROR_CODES = {
   // error itself never becomes a probe for which of those states a code is
   // in.
   INVITE_INVALID:      { status: 400, message: 'This invite code is invalid or has expired' },
+  // REQUIRE_INVITE=on and the register request carried no invite code.
+  INVITE_REQUIRED:     { status: 403, message: 'Registration requires an invite code. Ask your administrator for an invite link.' },
   // PATCH /admin/invites/:id targeted an id that doesn't exist.
   INVITE_NOT_FOUND:    { status: 404, message: 'Invite code not found' },
   // Random code generation collided with an existing code on every attempt
