@@ -12,6 +12,7 @@
 
 import { z } from 'zod'
 import { ROLE_KEYS } from '../../constants/roles.js'
+import { PASSWORD_MIN_LENGTH, PASSWORD_MAX_LENGTH } from '../../constants/password.js'
 
 export const registerSchema = z
   .object({
@@ -21,7 +22,7 @@ export const registerSchema = z
     // 72 is bcrypt's own input-length limit — bytes beyond that are ignored
     // by the underlying algorithm, so anything longer is rejected up front
     // instead of being silently truncated.
-    password: z.string().min(8).max(72),
+    password: z.string().min(PASSWORD_MIN_LENGTH).max(PASSWORD_MAX_LENGTH),
     // Optional invite code. Normalized the same way the DB stores it
     // (upper-cased) so a code pasted in any case still matches. Length
     // bounds mirror invite_codes_code_len in migration 004, so an
@@ -50,5 +51,14 @@ export const loginSchema = z
 export const activeRoleSchema = z
   .object({
     activeRole: z.enum(ROLE_KEYS),
+  })
+  .strict()
+
+// POST /auth/password body. The current password is only compared, so it gets
+// no minimum beyond "not empty" (same reasoning as loginSchema).
+export const changePasswordSchema = z
+  .object({
+    currentPassword: z.string().min(1).max(PASSWORD_MAX_LENGTH),
+    newPassword: z.string().min(PASSWORD_MIN_LENGTH).max(PASSWORD_MAX_LENGTH),
   })
   .strict()

@@ -19,7 +19,7 @@ const BLOCK_LENGTH = 8
 // rest — undermining the entropy this code's security relies on.
 const REJECTION_THRESHOLD = ALPHABET.length * Math.floor(256 / ALPHABET.length)
 
-function randomBlock(length) {
+export function randomBlock(length) {
   let result = ''
   while (result.length < length) {
     const bytes = crypto.randomBytes(length)

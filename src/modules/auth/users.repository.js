@@ -49,6 +49,7 @@ const USER_COLUMNS = `
   u.id, u.email, u.name, u.company,
   u.active_role AS "activeRole", u.is_admin AS "isAdmin",
   u.created_at  AS "createdAt",
+  u.password_must_change AS "mustChangePassword",
   COALESCE(r.roles, '{}') AS roles
 `
 
@@ -85,6 +86,29 @@ export async function findByEmail(email, client) {
      ${USER_ROLES_JOIN}
      WHERE u.email = $1`,
     [email],
+  )
+  return result.rows[0] ?? null
+}
+
+// The only function that returns a hash for a known id. Used to check the
+// current password before a change; never forward the result to a client.
+export async function findPasswordHashById(id, client) {
+  const result = await run(client)(
+    'SELECT password_hash AS "passwordHash" FROM users WHERE id = $1',
+    [id],
+  )
+  return result.rows[0] ?? null
+}
+
+// Writes a new password hash and the must-change flag together: true after an
+// administrator reset (temporary password), false after the user picks their own.
+export async function setPasswordHash({ id, passwordHash, mustChange }, client) {
+  const result = await run(client)(
+    `UPDATE users
+     SET password_hash = $2, password_must_change = $3, updated_at = now()
+     WHERE id = $1
+     RETURNING id`,
+    [id, passwordHash, mustChange],
   )
   return result.rows[0] ?? null
 }

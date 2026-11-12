@@ -33,3 +33,7 @@ export function getAssumptions() {
     factoringRate: FACTORING_RATE,
   }
 }
+
+// A second payment reminder on the same invoice waits this long, in the
+// finance calendar's simulated days (FINANCE_REAL_SEC_PER_SIM_DAY real seconds each).
+export const INVOICE_REMINDER_COOLDOWN_SIM_DAYS = 1

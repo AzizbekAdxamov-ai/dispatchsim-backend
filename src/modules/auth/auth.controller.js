@@ -7,7 +7,7 @@
 // (unlike Express 4), so a thrown ZodError from `schema.parse(...)` or an
 // AppError from the service reaches errorHandler without any try/catch here.
 
-import { registerSchema, loginSchema, activeRoleSchema } from './auth.schemas.js'
+import { registerSchema, loginSchema, activeRoleSchema, changePasswordSchema } from './auth.schemas.js'
 import * as authService from './auth.service.js'
 
 export async function register(req, res) {
@@ -31,4 +31,11 @@ export async function setActiveRole(req, res) {
   const { activeRole } = activeRoleSchema.parse(req.body)
   const user = await authService.setActiveRole(req.auth.userId, activeRole)
   res.status(200).json(user)
+}
+
+export async function changePassword(req, res) {
+  const input = changePasswordSchema.parse(req.body)
+  const { user } = await authService.changePassword(req.auth.userId, input)
+  res.set('Cache-Control', 'no-store')
+  res.status(200).json({ message: 'Password updated.', user })
 }

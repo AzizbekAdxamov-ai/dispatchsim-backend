@@ -42,6 +42,8 @@ export const INVOICE_CTE = `
       l.rate_basis AS "rateBasis", l.fuel_surcharge_usd AS "fuelSurchargeUsd",
       l.payment_terms AS "paymentTerms", l.booked_at AS "bookedAt",
       l.delivered_at AS "deliveredAt", l.invoice_paid_at AS "invoicePaidAt",
+      -- Records only (migration 076): nothing here reads them to decide payment.
+      l.invoice_sent_at AS "invoiceSentAt", l.invoice_reminded_at AS "invoiceRemindedAt",
       -- invoice_due_at is what the TICK will actually pay against, on the
       -- finance calendar (2 real minutes per day). This
       -- used to recompute the date here as delivered_at + interval '30
@@ -108,7 +110,7 @@ export async function listInvoiceRows({ status, search, limit, offset }) {
   const result = await query(
     `${INVOICE_CTE}
      SELECT "loadId", broker, "rateUsd", "rateBasis", "fuelSurchargeUsd", accessorials, "paymentTerms",
-       "bookedAt", "deliveredAt", "invoicePaidAt", "dueAt", status, "daysPastDue"
+       "bookedAt", "deliveredAt", "invoicePaidAt", "invoiceSentAt", "invoiceRemindedAt", "dueAt", status, "daysPastDue"
      FROM invoice_status
      ${whereClause}
      ORDER BY "bookedAt" DESC
@@ -139,7 +141,7 @@ export async function getInvoiceRowByLoadId(loadId) {
   const result = await query(
     `${INVOICE_CTE}
      SELECT "loadId", broker, "rateUsd", "rateBasis", "fuelSurchargeUsd", accessorials, "paymentTerms",
-       "bookedAt", "deliveredAt", "invoicePaidAt", "dueAt", status, "daysPastDue"
+       "bookedAt", "deliveredAt", "invoicePaidAt", "invoiceSentAt", "invoiceRemindedAt", "dueAt", status, "daysPastDue"
      FROM invoice_status
      WHERE "loadId" = $1`,
     [loadId],

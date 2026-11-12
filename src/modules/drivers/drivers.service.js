@@ -7,6 +7,7 @@
 
 import * as driversRepo from './drivers.repository.js'
 import * as loadsRepo from '../loads/loads.repository.js'
+import * as payrollService from '../payroll/payroll.service.js'
 import { AppError } from '../../lib/errors.js'
 import { computeProgress } from '../../lib/loadTimeline.js'
 import { fuelPercent } from '../driverChat/driverChat.prompt.js'
@@ -71,12 +72,18 @@ export async function getDriverById(id) {
   }
 
   const recentLoads = await loadsRepo.listLoadsByDriverId(id, { limit: 10 })
+  const standing = await payrollService.driverStanding(null, id)
 
   return {
     ...withWhereNow(withTelegramFlag(withTruckFuelPercent(withCurrentLoadProgress(driver)))),
     recentLoads,
+    // A driver who quit can no longer be called or messaged from the app.
+    employment: { hasLeft: standing.stage === DRIVER_LEFT_STAGE },
   }
 }
+
+// payroll stage meaning the driver has quit over unpaid wages.
+const DRIVER_LEFT_STAGE = 'quits'
 
 // Why a driverless truck cannot be taken, in the words the page shows.
 // A fact about the truck, not advice: the dispatcher decides what to do

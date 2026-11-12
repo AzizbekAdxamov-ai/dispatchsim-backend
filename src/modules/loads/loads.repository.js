@@ -689,3 +689,32 @@ export async function getLoadDriver(client, loadId) {
   )
   return result.rows[0]?.driverId ?? null
 }
+
+// Marks the invoice as sent to the broker. A record only: invoice_due_at and
+// invoice_paid_at are never written here, so payment timing is unchanged.
+// Zero rows when the load is not delivered, was cancelled, or was already sent.
+export async function markInvoiceSent(loadId, client = null) {
+  const runner = client ?? { query }
+  const result = await runner.query(
+    `UPDATE loads SET invoice_sent_at = now()
+      WHERE id = $1 AND delivered_at IS NOT NULL AND status <> 'cancelled'
+        AND invoice_sent_at IS NULL
+      RETURNING id`,
+    [loadId],
+  )
+  return result.rows[0] ?? null
+}
+
+// Marks that a payment reminder was posted. Same rule as markInvoiceSent:
+// a record, never a payment-timing change. Zero rows when the invoice was
+// never sent or is already paid.
+export async function markInvoiceReminded(loadId, client = null) {
+  const runner = client ?? { query }
+  const result = await runner.query(
+    `UPDATE loads SET invoice_reminded_at = now()
+      WHERE id = $1 AND invoice_sent_at IS NOT NULL AND invoice_paid_at IS NULL
+      RETURNING id`,
+    [loadId],
+  )
+  return result.rows[0] ?? null
+}

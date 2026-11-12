@@ -34,6 +34,8 @@ export function toPublicUser(row) {
     // if a caller ever passes in a row from a query that omitted the
     // column, and never anything but a strict boolean either way.
     isAdmin: row.isAdmin === true,
+    // True after an administrator reset: the web app sends the user to Settings.
+    mustChangePassword: row.mustChangePassword === true,
   }
 }
 
@@ -149,4 +151,26 @@ export async function setActiveRole(userId, activeRole) {
     throw new AppError('ROLE_NOT_GRANTED')
   }
   return me(userId)
+}
+
+// Changes the caller's own password (POST /auth/password). A wrong current
+// password is CURRENT_PASSWORD_WRONG (400, not 401: the web client signs the
+// user out on any authenticated 401). Clears the must-change flag.
+// `client` is optional: tests pass a rolled-back connection.
+export async function changePassword(userId, { currentPassword, newPassword }, client) {
+  const stored = await usersRepo.findPasswordHashById(userId, client)
+  if (!stored) {
+    throw new AppError('USER_NOT_FOUND')
+  }
+  const matches = await password.verify(currentPassword, stored.passwordHash)
+  if (!matches) {
+    throw new AppError('CURRENT_PASSWORD_WRONG')
+  }
+  if (currentPassword === newPassword) {
+    throw new AppError('PASSWORD_UNCHANGED')
+  }
+  const passwordHash = await password.hash(newPassword)
+  await usersRepo.setPasswordHash({ id: userId, passwordHash, mustChange: false }, client)
+  const row = await usersRepo.findById(userId, client)
+  return { user: toPublicUser(row) }
 }

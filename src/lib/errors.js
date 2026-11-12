@@ -150,6 +150,15 @@ export const ERROR_CODES = {
   // 048 seeds the carrier row; its absence means an un-migrated database,
   // not a company that chose to have no name.
   CARRIER_NOT_SET:     { status: 500, message: 'The carrier row is missing — run the migrations' },
+  // POST /auth/password: 400 (not 401) because the web client signs the user out on any authenticated 401.
+  CURRENT_PASSWORD_WRONG: { status: 400, message: 'Current password is incorrect' },
+  PASSWORD_UNCHANGED:     { status: 400, message: 'New password must be different from the current one' },
+  CANNOT_RESET_OWN_PASSWORD: { status: 409, message: 'Use Settings to change your own password' },
+  // Invoice send / reminder (finance).
+  INVOICE_NOT_DELIVERED:  { status: 409, message: 'This load has not been delivered yet' },
+  INVOICE_NOT_SENT:       { status: 409, message: 'Send the invoice first' },
+  INVOICE_NOT_OVERDUE:    { status: 409, message: 'This invoice is not past due' },
+  INVOICE_REMINDED_RECENTLY: { status: 409, message: 'A reminder already went out today' },
   TELEGRAM_NOT_LINKED: { status: 404, message: 'No Telegram chat is linked to this account' },
 }
 
