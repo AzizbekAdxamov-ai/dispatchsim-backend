@@ -91,7 +91,12 @@ test('a carrier reason the load does not support is flagged for the reply guard'
 test('a close made before the MC checked out is agreed once the MC does', () => {
   // The close must sit inside the ceiling: above it the figure is only an ask (band 4).
   const closeAt = ceilingFor(posting)
-  const close = turn(`if you can do ${closeAt} I will book it`, open(), { booking: unmatched })
+  // Owner decision 2026-11-16: conditional close is an offer, so "if you can do X I will book it" no longer
+  // closes; a plain "book it at X" is the close that waits for the MC.
+  const conditional = turn(`if you can do ${closeAt} I will book it`, open(), { booking: unmatched })
+  assert.equal(conditional.state.pendingClose, null)
+  assert.equal(conditional.state.agreed, null)
+  const close = turn(`book it at ${closeAt}`, open(), { booking: unmatched })
   assert.equal(close.state.agreed, null)
   assert.equal(close.state.pendingClose, closeAt)
   assert.ok(negotiationLines(close).join('\n').includes(`conditional close at $${closeAt.toLocaleString('en-US')} is accepted on price`))

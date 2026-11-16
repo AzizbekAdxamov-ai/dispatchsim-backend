@@ -273,6 +273,10 @@ function namesFigure(text) {
   })
 }
 
+// "if you can do / if you do / make it" before a figure, and the promise to book that follows the figure.
+const CONDITIONAL_ASK = /\b(if (?:you|u) (?:can )?(?:do|make it)|make it)\s+(?=\$?\s*[\d,.]+k?\b)/i
+const BOOKING_PROMISE = /[\s,;]*(?:(?:and|then)\s+)?\b(?:(?:we|i)(?:'ll| will| would)\s+(?:book|take|cover)\b|book it\b|(?:we|you)(?:'ve| have)? (?:got )?a deal\b).*$/i
+
 export function chatIntent(raw, rateSource = null, { openNegotiation = false, pendingBasisUsd = null, settledBasis = null, contactName = null, affirmAccepts = false } = {}) {
   const src = intentText(raw).replace(/(\b(?:can|could)(?:\s+(?:you|u|we|sir))?)\s*(add (?:more|some money))\.\s*(?=[^;!?]*\bfor (?:example|exaple|exapmle|exmaple|exampel)\b)/gi, '$1 $2, ')
   // A mixed price acceptance/email cannot authorize a prohibited handoff.
@@ -286,7 +290,17 @@ export function chatIntent(raw, rateSource = null, { openNegotiation = false, pe
   const amountSrc = src.replace(/\$?\d+\.\d{1,2}\s*(?:\/\s*mi\b|(?:a|per)\s+mile\b)/gi, ' ')
     .replace(/(?<![\d,])\$?[0-9]\.[0-9]{1,2}\b/g, ' ')
   if (keyed?.kind === 'close_at' && /\b(?:might|maybe|probably)\b/i.test(src)) return { kind: 'talk' }
-  const closeMatch = amountSrc.match(/\b(?:if (?:you|u) can do|i can (?:cover|take) (?:it|this|the load)?(?:\s+right now)?\s+at)\s+\$?\s*([\d,.]+k?)\b/i)
+  // Owner decision 2026-11-16: a conditional close ("if you can do $4,000 we'll
+  // book it") is the dispatcher's counter, not a handshake. It is read as the
+  // plain ask "can you do $4,000", so the ladder runs and nothing is agreed.
+  if (!NEGATIVE.test(src)) {
+    const conditional = CONDITIONAL_ASK.exec(src)
+    if (conditional && (/^if/i.test(conditional[1]) || BOOKING_PROMISE.test(src))) {
+      const asked = src.replace(BOOKING_PROMISE, '').replace(CONDITIONAL_ASK, 'can you do ')
+      return chatIntent(asked, rateSource, { openNegotiation, pendingBasisUsd, settledBasis, contactName, affirmAccepts })
+    }
+  }
+  const closeMatch = amountSrc.match(/\bi can (?:cover|take) (?:it|this|the load)?(?:\s+right now)?\s+at\s+\$?\s*([\d,.]+k?)\b/i)
   if (closeMatch) return { kind: 'accept_amount', rateUsd: amountValue(closeMatch[1]) }
   if (keyed?.reason === 'market') {
     const marketAmount = amountSrc.match(/\$?\s*([\d]+(?:\.\d+)?k?)\b/i)

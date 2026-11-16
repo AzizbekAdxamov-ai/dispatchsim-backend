@@ -15,6 +15,8 @@ const AFFIRM_LEADS = new Set(['yes', 'yeah', 'yep', 'yup', 'ok', 'okay', 'sure',
 const SOUNDS_GOOD = 'sounds good'
 const LEAD_RE = new RegExp(`^(${LEAD_WORDS.join('|')})\\b[\\s,!.:;-]*`, 'i')
 const TRAILING_PUNCT = /[\s.!,;:]+$/
+// One capitalised word at the very end, with or without a comma before it.
+const TRAILING_VOCATIVE = /[\s,]+[A-Z][a-z]+$/
 
 // The one list of phrases that settle on the broker's own quote.
 // Full-match against a clause with its lead and vocative removed.
@@ -77,7 +79,12 @@ export function stripLead(segment, contactName = null) {
     const vocative = named ?? capitalised
     if (vocative) rest = rest.slice(vocative[0].length)
   }
-  return { core: bare(), hadLead: leads.length > 0, leads }
+  // A vocative after the answer ("book it Dana", "let's book it, Dana.") is
+  // dropped only when what is left is a full accepting phrase.
+  const closing = TRAILING_VOCATIVE.exec(bare())
+  const answer = closing ? bare().slice(0, closing.index) : null
+  const core = answer && ACCEPT_CORE.test(answer) ? answer : bare()
+  return { core, hadLead: leads.length > 0, leads }
 }
 
 const isQuestion = (segment, core) => /\?\s*$/.test(segment) || QUESTION_START.test(core)

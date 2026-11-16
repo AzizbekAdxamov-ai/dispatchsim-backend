@@ -1,7 +1,7 @@
 // A posting held for one conversation once the price is agreed (migration 077).
 // Pure rules only; the SQL that writes the hold is in brokerChat.repository.js.
 
-// Pending owner approval (06-Pending-Approval/2026-11-15-broker-deal-ibora.md)
+// Owner approved 2026-11-16
 export const HOLD_MINUTES = 15
 // Minutes before the end of the hold at which the broker warns once.
 export const EXPIRY_WARNING_MINUTES = 5

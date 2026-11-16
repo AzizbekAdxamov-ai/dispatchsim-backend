@@ -5,7 +5,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { chatIntent, negotiate, confirmBookLine } from '../src/modules/brokerChat/negotiation.js'
-import { readClauses, classifySegment } from '../src/modules/brokerChat/clauseReading.js'
+import { readClauses, classifySegment, stripLead } from '../src/modules/brokerChat/clauseReading.js'
 import { fakePosting } from './helpers/fakeBrokerRepo.js'
 
 const QUOTE_USD = 3750
@@ -99,18 +99,54 @@ test('an acceptance settles the quote on the table', () => {
   }
 })
 
+// Owner decision 2026-11-16: conditional close is an offer (was accept_amount): the ladder runs, nothing is agreed.
+const CONDITIONAL_OFFERS = Object.freeze([
+  "if you can do $4,000 we'll book it", "if you can do 4k we'll book it", "if you do $4,000 all-in I'll book it",
+  "make it 4k and we'll book it", 'If you can do $4,000 we have a deal', 'if you can do $4,000, book it',
+])
+// Kills: routing the conditional close back to accept_amount (the broker would agree at 4000 inside the ceiling)
+test('a conditional booking promise tied to the dispatcher figure is an offer', () => {
+  for (const text of CONDITIONAL_OFFERS) {
+    for (const openNegotiation of MODES) {
+      const intent = intentOf(text, { openNegotiation })
+      assert.equal(intent.kind, 'offer', text)
+      assert.equal(intent.rateUsd, ASK_USD, text)
+    }
+    const decision = turn(text)
+    assert.equal(decision.state.agreed, null, text)
+    assert.ok(decision.state.offer < ASK_USD, text)
+  }
+  // The dispatcher's own "I can cover it at X" is still a settlement.
+  assert.equal(intentOf('i can cover it at 4000').kind, 'accept_amount')
+})
+
+const VOCATIVE_ACCEPTS = Object.freeze(['book it Dana', 'Perfect, book it Dana', "let's book it, Dana", "Yes, let's book it Dana.", 'book it, Dana'])
+// Kills: not stripping a trailing vocative in stripLead ("book it Dana" fell to talk)
+test('a trailing vocative does not hide an acceptance', () => {
+  for (const text of VOCATIVE_ACCEPTS) {
+    for (const openNegotiation of MODES) assert.equal(intentOf(text, { openNegotiation }).kind, 'accept', text)
+  }
+  assert.equal(turn('book it Dana').state.agreed, QUOTE_USD)
+})
+
+// Kills: stripping a trailing capitalised word from any clause (the destination would be read away)
+test('a trailing name is dropped only from a complete acceptance', () => {
+  assert.notEqual(intentOf('book it at Dallas').kind, 'accept')
+  assert.equal(stripLead('book it at Dallas').core, 'book it at Dallas')
+  assert.notEqual(intentOf("don't book it Dana").kind, 'accept')
+  assert.equal(classifySegment("don't book it Dana"), 'negation')
+})
+
 const REFUSALS = Object.freeze([
   "not yet, don't book it", "don't book it yet", "if the rate were 4000 let's book it", 'not sure, hold off',
-  'no deal at $4,000', "if it were $4,000 we'd have a deal", "if you can do 4k we'll book it",
+  'no deal at $4,000', "if it were $4,000 we'd have a deal", "if you can do $4,000 I'm not booking it",
   "if the rate were 4000, let's book it", "unless Dana confirms, let's book it",
 ])
-// "if you can do 4k we'll book it" is a conditional close by an older rule on purpose.
-const NAMES_A_FIGURE = /^if you can do/
 // Kills: ignoring the hypothetical veto when classifying clauses (the comma-split "let's book it" alone reads as an acceptance)
 test('a refusal or a hypothetical is never an acceptance and never an offer', () => {
   for (const text of REFUSALS) {
     for (const openNegotiation of MODES) assert.notEqual(intentOf(text, { openNegotiation }).kind, 'accept', text)
-    if (!NAMES_A_FIGURE.test(text)) assert.ok(!['offer', 'accept_amount'].includes(intentOf(text, { openNegotiation: true }).kind), text)
+    assert.ok(!['offer', 'accept_amount'].includes(intentOf(text, { openNegotiation: true }).kind), text)
   }
 })
 

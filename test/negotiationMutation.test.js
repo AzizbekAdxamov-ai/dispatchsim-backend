@@ -7,7 +7,7 @@ import { chatIntent } from '../src/modules/brokerChat/negotiation.js'
 const mutants = {
   narrowBookIt: (text) => /^ok book it$/i.test(text) ? { kind: 'accept' } : { kind: 'talk' },
   noStreetNormalization: (text) => /\bwhat do you have in it\b/i.test(text) ? { kind: 'ask_room' } : { kind: 'talk' },
-  noKiloAmount: (text) => /\bif you can do \$?\d+\b/i.test(text) ? { kind: 'close_at' } : { kind: 'talk' },
+  noKiloAmount: (text) => /\bcover it at \$?\d+\b/i.test(text) ? { kind: 'close_at' } : { kind: 'talk' },
 }
 
 test('book-it loop mutation is killed by apostrophe-free acceptance', () => {
@@ -25,7 +25,7 @@ test('street wording mutation is killed by room intent coverage', () => {
 })
 
 test('3.6k close mutation is killed by amount normalization', () => {
-  const input = 'if u can do 3.6k ill take it now'
+  const input = 'i can cover it at 3.6k'
   assert.equal(chatIntent(input).kind, 'accept_amount')
   // Kills: treating k amounts as unrecognized text.
   assert.notDeepEqual(chatIntent(input), mutants.noKiloAmount(input))
