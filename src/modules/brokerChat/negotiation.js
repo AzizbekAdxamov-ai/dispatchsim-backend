@@ -671,7 +671,7 @@ export function negotiationLines(decision) {
     `  Carrier intent: ${decision.intent.kind}${decision.intent.rateUsd ? `; requested price ${money(decision.intent.rateUsd)}` : ''}.`,
     `  Booking requested: ${decision.bookingRequested ? 'yes' : 'no'}. Document authorized this turn: ${decision.issuePaper ? 'yes' : 'no'}.`,
     ...(decision.state.agreed === null ? ['  No handshake exists; a requested price is not an accepted deal.'] : []),
-    ...(decision.hasRateRoom && decision.state.agreed === null ? ['  Describe this turn as a current quote. A later financial decision remains separate; make no claim about future movement.'] : []),
+    ...(decision.hasRateRoom && decision.state.agreed === null ? ['  Describe this turn as a current quote. A later financial decision remains separate; make no claim about future movement. Do not call the quote final, firm, the max or "the offer".'] : []),
     ...(['offer', 'push', 'accept_amount'].includes(decision.intent.kind) && !decision.bookingRequested
       ? ['  Answer their bargaining request with the current authorized offer; do not present their requested price as accepted.'] : []),
     ...(decision.state.stage === 'awaiting_email' ? ['  Rate is agreed. Ask which email to send the rate con to, in plain desk words; never say "authorized" or "recipient".'] : []),
@@ -701,7 +701,7 @@ export function negotiationReplyProblem(reply, decision) {
   if (decision.hasRateRoom && decision.state.agreed === null) {
     const claims = text.split(/(?<=[.!?;])\s+|\b(?:but|however)\b/i)
     if (claims.some((clause) => !clause.includes('?') && (claimsCap(clause) || !/\b(?:you said|u said|your|ur|not (?:my|a|the|our)|isn't my|is not my|haven't called|didn't say|never said|right now|at the moment|for now)\b/i.test(clause)
-      && /\b(?:final (?:rate|offer|price)|(?:my |the |our )?(?:absolute )?best (?:rate|offer|price)|best (?:i|we) can (?:do|pay|offer)|(?:can(?:not|'t)|cant|won't|wont|will not|not|unable to) (?:go|mov(?:e|ing)|come|pay)(?: any)? (?:higher|above|up)|(?:can(?:not|'t)|cant|won't|wont|will not|not|unable to) (?:increas\w*|improv\w*|rais\w*|bump\w*)|(?:most|highest|top) (?:i|we) can (?:do|pay|offer))\b/i.test(clause)))) {
+      && /\b(?:final (?:rate|offer|price)|(?:my |the |our )?(?:absolute )?best (?:rate|offer|price)|best (?:i|we) can (?:do|pay|offer)|(?:can(?:not|'t)|cant|won't|wont|will not|not|unable to) (?:go|mov(?:e|ing)|come|pay)(?: any)? (?:higher|above|up)|(?:can(?:not|'t)|cant|won't|wont|will not|not|unable to) (?:increas\w*|improv\w*|rais\w*|bump\w*)|(?:most|highest|top) (?:i|we) can (?:do|pay|offer)|that'?s (?:the|my|our) (?:offer|number|rate|price)|final(?! (?:stop|destination|delivery|drop|mile|appointment))|that'?s all (?:i|we) (?:can|got)|take it or leave it|(?:firm|non-?negotiable)(?! (?:appointment|pickup|delivery|time|window)))\b/i.test(clause)))) {
       return 'claimed a permanent final rate while authorized bargaining room remains'
     }
   }

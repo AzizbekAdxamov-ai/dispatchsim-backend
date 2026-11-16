@@ -21,7 +21,7 @@ import { weightChangeAgreed, weightHoldLine } from './weightTalk.js'
 import { personaBreak } from '../../lib/personaBreak.js'
 import { paperClaimProblem, paperNextLine } from './paperTalk.js'
 import { negotiationReplyProblem, bookingTurn, confirmBookLine } from './negotiation.js'
-import { repeatsRecent } from './repeatGuard.js'
+import { repeatsRecent, repeatedSentences } from './repeatGuard.js'
 import { introductionOnly, introductionReply, asksHowAreYou, greetingLead, GREETING_LEAD, GREETS_BACK } from './turnTalk.js'
 import { quoteText } from './rateQuote.js'
 import { proposesRebroker, agreesRebroker, refusesRebroker, ONE_CARRIER_RULE, ONE_CARRIER_REPLY } from './carrierPolicy.js'
@@ -377,6 +377,12 @@ export function brokerReplyProblem(reply, {
   if (negotiation && /\bC[SD]T\b/.test(reply)) return {
     why: 'used an ambiguous Central time abbreviation', hint: ' Say Central Time, as the appointments are written.',
     unusable: true, safeReply: reply.replace(/\bC[SD]T\b/g, 'Central Time'),
+  }
+  // A sentence said again word for word, even inside a reply that is otherwise new.
+  if (reply !== negotiation?.line && repeatedSentences(reply, brokerSaid).length > 0) return {
+    why: 'repeated a sentence from your last reply',
+    hint: ' Do not repeat any sentence from your last reply; say something new.',
+    unusable: false,
   }
   // Last: the same answer twice in a row. One regeneration is enough; the
   // service then puts a short lead-in on whatever is still a repeat.

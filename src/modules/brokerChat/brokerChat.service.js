@@ -22,7 +22,7 @@ import { stripSpeakerLabel } from '../../lib/speakerLabel.js'
 import { getCarrier, carrierEmail } from '../carrier/carrier.repository.js'
 import { findById } from '../auth/users.repository.js'
 import { negotiate, lastAuthorizedEmail, pendingBasisAskUsd, settledRateBasis, lastCarrierAskUsd, RATE_MISS_REASON } from './negotiation.js'
-import { varyRepeat } from './repeatGuard.js'
+import { varyRepeat, dropStaleRepeatLead, dropRepeatedSentences } from './repeatGuard.js'
 import { buildBrokerContext } from './brokerContext.js'
 import * as repo from './brokerChat.repository.js'
 import { talkFacts } from '../../constants/freightTerms.js'
@@ -383,6 +383,8 @@ export async function sendMessage({ conversationId, userId, text, cancelBooking 
     }
     // Whatever is still the same answer as a moment ago (a fixed line, or a
     // regeneration that did not change) goes out with a spoken lead-in.
+    // Model text only: the server's own line is fixed wording and stays as is.
+    if (reply !== decision?.line) reply = dropRepeatedSentences(dropStaleRepeatLead(reply, brokerSaid), brokerSaid)
     reply = varyRepeat(reply, brokerSaid)
   } catch (err) {
     failure = err.message
