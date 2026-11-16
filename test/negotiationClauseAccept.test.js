@@ -10,6 +10,7 @@ import { fakePosting } from './helpers/fakeBrokerRepo.js'
 
 const QUOTE_USD = 3750
 const ASK_USD = 4000
+const LONE_FIGURE_USD = 3700
 const POSTED_USD = 3600
 const CONTACT = 'Dana Whitfield'
 const posting = fakePosting({ rateUsd: POSTED_USD, distanceMi: 1500, contactName: CONTACT })
@@ -146,8 +147,37 @@ test('a bare yes is not an acceptance on its own', () => {
 
 // Kills: dropping the figure-plus-acceptance rule -- a figure beside a clear acceptance is only an offer
 test('an acceptance beside a lone figure confirms that figure', () => {
-  const intent = intentOf("I need $3,700 all-in. Let's book it.", { openNegotiation: true })
+  const intent = intentOf(`I need $${LONE_FIGURE_USD.toLocaleString('en-US')} all-in. Let's book it.`, { openNegotiation: true })
   assert.equal(intent.kind, 'accept_amount')
   assert.equal(intent.confirmsOffer, true)
-  assert.equal(intent.rateUsd, 3700)
+  assert.equal(intent.rateUsd, LONE_FIGURE_USD)
+})
+
+const OTHER_ASK_USD = 3900
+const MC_NUMBER = 123456
+const LEADING_CLOSES = Object.freeze([
+  "ok cool, $3,900 and it's a deal", 'ok $4000 and we have a deal', 'sure, $4,200 and we have a deal',
+  "ok cool, 4k and it's a deal", 'yes $3,900 and we have a deal', "great, $3,900 and it's a deal",
+  "$3,900 and it's a deal",
+])
+// Kills: neutralText keeping the lead word beside the figure (BARE_FILLER fails, the figure is dropped and the close books the quote)
+test('a lead word before a figure and a close never books the quote', () => {
+  for (const text of LEADING_CLOSES) {
+    assert.equal(intentOf(text, { openNegotiation: true }).kind, 'offer', text)
+    for (const openNegotiation of MODES) assert.notEqual(intentOf(text, { openNegotiation }).kind, 'accept', `${text} (open=${openNegotiation})`)
+    assert.equal(turn(text).state.agreed, null, text)
+  }
+})
+
+// Kills: dropping the figure guard -- a closed-negotiation "$X and we have a deal" booked the quote on the table
+test('a close beside an unplaced figure is talk, not an acceptance', () => {
+  assert.equal(intentOf(`$${OTHER_ASK_USD} and we have a deal`, { openNegotiation: false }).kind, 'talk')
+  assert.equal(intentOf('Ok we have a deal', { openNegotiation: false }).kind, 'accept')
+})
+
+// Kills: not splitting a trailing detail clause off the acceptance
+test('an acceptance followed by an MC detail is still an acceptance', () => {
+  for (const openNegotiation of MODES) {
+    assert.equal(intentOf(`Thanks! book it, MC is ${MC_NUMBER}`, { openNegotiation }).kind, 'accept')
+  }
 })

@@ -256,6 +256,12 @@ export function lastAuthorizedEmail(texts) {
   return null
 }
 
+// Any amount-like figure that is not a labelled id (MC, truck) or a unit.
+function namesFigure(text) {
+  return [...text.replace(EMAIL, ' ').matchAll(BARE_AMOUNT)].some((m) => !BARE_LABEL_BEFORE.test(text.slice(0, m.index))
+    && !AMOUNT_UNIT_TAIL.test(text.slice(m.index + m[0].length)))
+}
+
 export function chatIntent(raw, rateSource = null, { openNegotiation = false, pendingBasisUsd = null, settledBasis = null, contactName = null, affirmAccepts = false } = {}) {
   const src = intentText(raw).replace(/(\b(?:can|could)(?:\s+(?:you|u|we|sir))?)\s*(add (?:more|some money))\.\s*(?=[^;!?]*\bfor (?:example|exaple|exapmle|exmaple|exampel)\b)/gi, '$1 $2, ')
   // A mixed price acceptance/email cannot authorize a prohibited handoff.
@@ -386,7 +392,9 @@ export function chatIntent(raw, rateSource = null, { openNegotiation = false, pe
     }
   }
   // Permit an explicit acceptance followed by an email instruction, but no conditional price.
-  if (reading.accepts || reading.closes) return { kind: 'accept', emails, useOwnEmail }
+  // A close phrase beside a figure no rule could place is price talk, never a
+  // handshake on the quote on the table ("ok $3,900 and we have a deal").
+  if (reading.accepts || (reading.closes && !namesFigure(amountSrc))) return { kind: 'accept', emails, useOwnEmail }
   if (emails.length === 1 || useOwnEmail) return { kind: 'email', emails, useOwnEmail }
   if (WALK.test(src)) return { kind: 'walk' }
   if (MORE.test(src) || REJECT_PRICE.test(src) || keyed?.kind === 'push') return { kind: 'push', ...(keyed?.reason ? { reason: keyed.reason } : {}) }

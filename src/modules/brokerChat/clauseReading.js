@@ -42,7 +42,9 @@ const QUESTION_START = /^(?:what|where|when|who|whom|how|why|which|do|does|did|c
 // Split points inside a sentence: only before a closing or accepting phrase,
 // so the commas other rules lean on ("can't cover that, can u do 8975") stay.
 const CLOSE_OR_ACCEPT_START = "(?:and\\s+)?(?:we(?:'ve| have| got)|it'?s|it is|that'?s|you(?:'ve| have)? got|let'?s|book|send|deal|(?:we|i)(?:'ll| will) take)\\b"
-const COMMA_BEFORE_CLOSE = new RegExp(`,\\s*(?=${CLOSE_OR_ACCEPT_START})`, 'i')
+// A detail added after the answer ("book it, MC is 123456") is a clause of its own.
+const DETAIL_START = "(?:(?:my|our|the)\\s+)?(?:mc|dot|driver|truck|trailer|e-?mail|phone|number|name)\\b"
+const COMMA_BEFORE_CLOSE = new RegExp(`,\\s*(?=${CLOSE_OR_ACCEPT_START}|${DETAIL_START})`, 'i')
 const AND_BEFORE_CLOSE = /\s+and\s+(?=(?:we(?:'ve| have)|it'?s|it is|that'?s|you(?:'ve)? got)\b[^.]*\bdeal\b)/i
 const SENTENCE_BREAK = /(?<=[.!?;])\s+|\n+/
 
@@ -110,7 +112,8 @@ export function readClauses(raw, { contactName = null, affirmAccepts = false } =
     vetoed,
     accepts: !vetoed && (count('accept') > 0 || affirmed),
     closes: !vetoed && count('close') > 0,
-    neutralText: segments.filter((segment) => NEUTRAL_KINDS.has(segment.kind)).map((segment) => segment.text).join('. '),
+    // Leads removed, so "ok cool, $3,900" is just the figure.
+    neutralText: segments.filter((segment) => NEUTRAL_KINDS.has(segment.kind)).map((segment) => stripLead(segment.text, contactName).core).filter(Boolean).join('. '),
     // The text of the segments that stand alone (leads removed), for amount phrases.
     cores: segments.map((segment) => stripLead(segment.text, contactName).core).filter(Boolean),
   }
