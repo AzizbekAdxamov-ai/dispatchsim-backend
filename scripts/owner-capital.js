@@ -3,6 +3,7 @@
 //   node scripts/owner-capital.js 141649              # dry run (default)
 //   node scripts/owner-capital.js 141649 --confirm    # writes
 //   --allow-remote                                    # needed for a non-local database
+//   --force-duplicate                                 # allow a second row within 10 minutes of the last
 //
 // The dry run does the real insert inside a transaction and rolls it back,
 // so "after" is what the database itself computes, not a guess. Nothing
@@ -22,7 +23,7 @@ import { solvency } from '../src/modules/cash/solvency.service.js'
 import { hostOf, remoteRefusal } from './cliGuards.js'
 import {
   OWNER_CAPITAL_KIND, OWNER_CAPITAL_DESCRIPTION, TARGET_BALANCE_USD,
-  parseOwnerCapitalArgs, suggestedContributionUsd,
+  parseOwnerCapitalArgs, suggestedContributionUsd, isRecentDuplicate, DUPLICATE_WINDOW_MINUTES,
 } from './ownerCapitalPlan.js'
 
 const usd = (n) => `${n < 0 ? '-' : ''}$${Math.abs(n).toLocaleString('en-US')}`
@@ -47,6 +48,22 @@ const client = await pool.connect()
 try {
   console.log(`\n${args.confirm ? 'WRITE' : 'DRY RUN'} - ${host}\n`)
   await client.query('BEGIN')
+
+  // The last contribution, read before ours is inserted. Only a write is
+  // refused; the dry run just says so.
+  const { rows: [last] } = await client.query(
+    `SELECT max(occurred_at) AS "lastAt", now() AS "now"
+       FROM cash_ledger WHERE kind = $1 AND description = $2`,
+    [OWNER_CAPITAL_KIND, OWNER_CAPITAL_DESCRIPTION],
+  )
+  const duplicate = isRecentDuplicate(last.lastAt, last.now)
+  if (duplicate) {
+    const note = `an owner capital row was written in the last ${DUPLICATE_WINDOW_MINUTES} minutes (${new Date(last.lastAt).toISOString()})`
+    if (args.confirm && !args.forceDuplicate) {
+      throw new Error(`${note}; refusing a double insert. Add --force-duplicate if this is intended`)
+    }
+    console.log(`  warning: ${note}`)
+  }
 
   const before = await solvency(client)
   const row = await receive(client, {

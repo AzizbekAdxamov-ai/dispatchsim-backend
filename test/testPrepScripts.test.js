@@ -7,7 +7,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   parseOwnerCapitalArgs, validateAmount, suggestedContributionUsd,
-  OWNER_CAPITAL_MAX_USD, TARGET_BALANCE_USD,
+  OWNER_CAPITAL_MAX_USD, TARGET_BALANCE_USD, isRecentDuplicate, DUPLICATE_WINDOW_MINUTES,
 } from '../scripts/ownerCapitalPlan.js'
 import {
   parseRaiseEventArgs, mapEventKind, refusalReason, previewOptions,
@@ -52,10 +52,10 @@ test('suggestedContributionUsd brings the balance to the target and never below 
 // Kills: --confirm defaulting to true (a dry run that writes), and flags being
 // dropped or swallowing the amount.
 test('parseOwnerCapitalArgs defaults to a dry run and reads both flags', () => {
-  assert.deepEqual(parseOwnerCapitalArgs(['100']), { amountUsd: 100, confirm: false, allowRemote: false })
+  assert.deepEqual(parseOwnerCapitalArgs(['100']), { amountUsd: 100, confirm: false, allowRemote: false, forceDuplicate: false })
   assert.deepEqual(
     parseOwnerCapitalArgs(['--confirm', '100', '--allow-remote']),
-    { amountUsd: 100, confirm: true, allowRemote: true },
+    { amountUsd: 100, confirm: true, allowRemote: true, forceDuplicate: false },
   )
 })
 
@@ -151,4 +151,24 @@ test('previewOptions shifts the ETA by the option hours on the sim clock', () =>
   assert.equal(wait.etaShiftSec * MS_PER_SECOND, expectedMs)
   const reroute = options.find((o) => o.key === 'reroute')
   assert.ok(reroute.costUsd > 0 && reroute.extraMiles > 0)
+})
+
+// ---- owner-capital duplicate guard ----
+
+const DUPLICATE_BASE = '2026-11-16T12:00:00Z'
+const minutesAfter = (m) => new Date(new Date(DUPLICATE_BASE).getTime() + m * 60000)
+
+// Kills: no guard, a boundary off by one, or a missing previous row being
+// read as a duplicate (the very first contribution would be refused).
+test('isRecentDuplicate is true only inside the window', () => {
+  assert.equal(isRecentDuplicate(null, minutesAfter(1)), false)
+  assert.equal(isRecentDuplicate(DUPLICATE_BASE, minutesAfter(DUPLICATE_WINDOW_MINUTES - 1)), true)
+  assert.equal(isRecentDuplicate(DUPLICATE_BASE, minutesAfter(DUPLICATE_WINDOW_MINUTES)), false)
+  assert.equal(isRecentDuplicate(DUPLICATE_BASE, minutesAfter(DUPLICATE_WINDOW_MINUTES + 1)), false)
+})
+
+// Kills: --force-duplicate not parsed (the override unusable) or on by default.
+test('parseOwnerCapitalArgs reads --force-duplicate, off by default', () => {
+  assert.equal(parseOwnerCapitalArgs(['100']).forceDuplicate, false)
+  assert.equal(parseOwnerCapitalArgs(['100', '--force-duplicate']).forceDuplicate, true)
 })

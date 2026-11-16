@@ -52,6 +52,13 @@ const childEnv = isDualDatabase ? { ...process.env } : { ...process.env, DATABAS
 // buyruq shu yerda to'xtaydi, ichida emas.
 const DESTRUCTIVE = new Set(['reset:company', 'clear:fleet', 'seed', 'cleanup:legacy'])
 
+// Bu skriptlar standart holatda faqat ko'rsatadi (dry run) va FAQAT
+// --confirm bilan bazaga YOZADI. Yozish ma'lumot o'chirmaydi, lekin pul qatori
+// yoki yo'l hodisasi qo'shadi, shuning uchun --confirm berilganda xuddi
+// DESTRUCTIVE kabi host nomi talab qilinadi. Dry run erkin qoladi.
+const WRITES_WHEN_CONFIRMED = new Set(['owner-capital', 'raise-event'])
+const CONFIRM_FLAG = '--confirm'
+
 const host = (() => {
   try { return new URL(url).hostname } catch { return '(o\'qib bo\'lmadi)' }
 })()
@@ -80,10 +87,13 @@ if (!command) {
 // va process.execPath bilan ishga tushiramiz — ya'ni AYNAN shu node.
 const nodeScript = command.match(/^node\s+(?:--[\w-]+(?:=\S+)?\s+)*(\S+)(.*)$/)
 
-if (DESTRUCTIVE.has(script)) {
+const writesNow = WRITES_WHEN_CONFIRMED.has(script) && process.argv.includes(CONFIRM_FLAG)
+if (DESTRUCTIVE.has(script) || writesNow) {
   const confirmed = process.argv.includes(`--confirm-host=${host}`)
   if (!confirmed) {
-    console.error(`\n"${script}" ma'lumot o'chiradi.\n`)
+    console.error(writesNow
+      ? `\n"${script}" bazaga YOZADI (--confirm berilgan).\n`
+      : `\n"${script}" ma'lumot o'chiradi.\n`)
     console.error(`  baza: ${host}`)
     console.error('')
     console.error('Davom etish uchun host nomini buyruqqa yozing:')
@@ -93,7 +103,7 @@ if (DESTRUCTIVE.has(script)) {
     console.error('javob berish, noto\'g\'ri terminalda ham xuddi shunday oson.')
     process.exit(1)
   }
-  console.error(`\n  ${host} — MA'LUMOT O'CHIRILADI\n`)
+  console.error(writesNow ? `\n  ${host} — BAZAGA YOZILADI\n` : `\n  ${host} — MA'LUMOT O'CHIRILADI\n`)
 }
 
 console.log(`\n  baza  : ${host}`)

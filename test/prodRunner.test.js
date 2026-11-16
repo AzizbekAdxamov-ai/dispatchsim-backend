@@ -11,6 +11,8 @@ const EXIT_FAILURE = 1
 const SCRIPT_COMMANDS = {
   'copy:drivers-prod': 'node scripts/copy-drivers-to-prod.js',
   'mig:status': 'node scripts/mig-status.js',
+  'owner-capital': 'node scripts/owner-capital.js',
+  'raise-event': 'node scripts/raise-event.js',
   'reset:company': 'node scripts/reset-company.js',
 }
 
@@ -78,4 +80,27 @@ test('destructive commands still require the exact production hostname', () => {
   const [[, args, options]] = approved.calls
   assert.equal(options.env.DATABASE_URL, PROD_URL)
   assert.deepEqual(Array.from(args), ['scripts/reset-company.js', '--allow-remote'])
+})
+
+test('writing scripts need the production hostname only when --confirm is given', () => {
+  for (const script of ['owner-capital', 'raise-event']) {
+    // Kills: the dry run being blocked (it only reads and must stay free).
+    const dry = invoke(script, ['100'])
+    assert.equal(dry.calls.length, 1, `${script} dry run`)
+    assert.equal(dry.exitCode, undefined)
+
+    // Kills: --confirm reaching production without the host being typed.
+    const refused = invoke(script, ['100', '--confirm'])
+    assert.deepEqual(refused.calls, [], `${script} --confirm without host`)
+    assert.equal(refused.exitCode, EXIT_FAILURE)
+
+    // Kills: a wrong host being accepted instead of the exact one.
+    const wrong = invoke(script, ['100', '--confirm', '--confirm-host=other.example'])
+    assert.deepEqual(wrong.calls, [])
+
+    // Kills: the host flag leaking into the script, or --confirm being dropped.
+    const approved = invoke(script, ['100', '--confirm', '--confirm-host=prod.example'])
+    const [[, args]] = approved.calls
+    assert.deepEqual(Array.from(args), [`scripts/${script}.js`, '100', '--confirm', '--allow-remote'])
+  }
 })

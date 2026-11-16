@@ -12,7 +12,14 @@ export const OWNER_CAPITAL_MAX_USD = 500000
 // just enough to unlock the credit line.
 export const TARGET_BALANCE_USD = 50000
 
+// A second contribution inside this window is almost surely the same command
+// run twice. Real top-ups are minutes apart at the very least; --force-duplicate
+// overrides it on purpose.
+export const DUPLICATE_WINDOW_MINUTES = 10
+
+const MS_PER_MINUTE = 60000
 const FLAG_CONFIRM = '--confirm'
+const FLAG_FORCE_DUPLICATE = '--force-duplicate'
 const FLAG_ALLOW_REMOTE = '--allow-remote'
 const FLAG_COMPANY = '--company'
 const WHOLE_DOLLARS = /^\d+$/
@@ -35,13 +42,22 @@ export function suggestedContributionUsd(balanceUsd, targetUsd = TARGET_BALANCE_
   return Math.max(0, targetUsd - balanceUsd)
 }
 
+// True when the last owner-capital row is newer than the window. Both times
+// come from the database (occurred_at, now()) so the two clocks agree.
+export function isRecentDuplicate(lastAt, now, windowMinutes = DUPLICATE_WINDOW_MINUTES) {
+  if (!lastAt) return false
+  return new Date(now).getTime() - new Date(lastAt).getTime() < windowMinutes * MS_PER_MINUTE
+}
+
 export function parseOwnerCapitalArgs(argv) {
   let confirm = false
+  let forceDuplicate = false
   let allowRemote = false
   const positional = []
   for (const arg of argv) {
     if (arg === FLAG_CONFIRM) confirm = true
     else if (arg === FLAG_ALLOW_REMOTE) allowRemote = true
+    else if (arg === FLAG_FORCE_DUPLICATE) forceDuplicate = true
     else if (arg === FLAG_COMPANY || arg.startsWith(`${FLAG_COMPANY}=`)) {
       return { error: 'there is one company and one ledger; --company does not exist' }
     } else if (arg.startsWith('--')) return { error: `unknown option ${arg}` }
@@ -50,5 +66,5 @@ export function parseOwnerCapitalArgs(argv) {
   if (positional.length > 1) return { error: `expected one amount, got ${positional.length}` }
   const amount = validateAmount(positional[0])
   if (amount.error) return { error: amount.error }
-  return { amountUsd: amount.amountUsd, confirm, allowRemote }
+  return { amountUsd: amount.amountUsd, confirm, allowRemote, forceDuplicate }
 }
