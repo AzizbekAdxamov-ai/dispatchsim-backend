@@ -19,7 +19,19 @@ export async function listInvoices(req, res) {
 
 export async function getInvoice(req, res) {
   const id = invoiceIdSchema.parse(req.params.id)
-  const invoice = await financeService.getInvoiceById(id)
+  const invoice = await financeService.getInvoiceById(id, req.auth.userId)
+  res.status(200).json(invoice)
+}
+
+export async function sendInvoice(req, res) {
+  const id = invoiceIdSchema.parse(req.params.id)
+  const invoice = await financeService.sendInvoice(id)
+  res.status(200).json(invoice)
+}
+
+export async function remindInvoice(req, res) {
+  const id = invoiceIdSchema.parse(req.params.id)
+  const invoice = await financeService.sendInvoiceReminder(id, req.auth.userId)
   res.status(200).json(invoice)
 }
 

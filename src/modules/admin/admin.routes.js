@@ -5,14 +5,18 @@
 // below, so a new route added here later can't accidentally be left
 // unprotected.
 //
-// Deliberately no DELETE route anywhere here: this API never deletes a
-// user account or an invite code through the admin console. Removing a
-// user's access is done by clearing roles/isAdmin via PATCH, and a spent
+// Deliberately no DELETE route for invite codes: this API never deletes an
+// invite code through the admin console (users can be deleted, see below).
+// Removing a user's access is done by clearing roles/isAdmin via PATCH, and a spent
 // or retired invite code is deactivated (`isActive: false`) via PATCH, not
 // destroyed — an invite row must survive so user_roles.invite_code_id keeps
 // pointing at something real.
+//
+// POST /users/:id/reset-password replaces a user's password with a one-time
+// temporary one (a write, rate-limited like login).
 
 import { Router } from 'express'
+import { authLimiter } from '../../middleware/rateLimit.js'
 import { requireAuth } from '../../middleware/requireAuth.js'
 import { requireAdmin } from '../../middleware/requireAdmin.js'
 import * as adminController from './admin.controller.js'
@@ -31,6 +35,7 @@ router.get('/users', adminController.listUsers)
 // becomes a real bug if a method ever changes.
 router.post('/users/bulk-roles', adminController.bulkAssignRoles)
 router.patch('/users/:id', adminController.updateUser)
+router.post('/users/:id/reset-password', authLimiter, adminController.resetPassword)
 router.delete('/users/:id', adminController.deleteUser)
 
 router.get('/invites', adminController.listInvites)

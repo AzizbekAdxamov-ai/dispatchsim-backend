@@ -91,3 +91,13 @@ export async function updateInvite(req, res) {
   const invite = await invitesService.updateInvite(id, body)
   res.status(200).json(invite)
 }
+
+export async function resetPassword(req, res) {
+  const targetId = userIdSchema.parse(req.params.id)
+  const result = await adminService.resetUserPassword({
+    actorId: req.auth.userId,
+    targetId,
+  })
+  res.set('Cache-Control', 'no-store')
+  res.status(200).json(result)
+}

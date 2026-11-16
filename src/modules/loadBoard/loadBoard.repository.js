@@ -109,6 +109,7 @@ const BASE_CTE_FLEET = `
     WHERE p.status = 'open'
       AND p.posted_at <= now()
       AND p.expires_at > now()
+      AND (p.held_until IS NULL OR p.held_until <= now())
   )
 `
 
@@ -124,6 +125,7 @@ const BASE_CTE_POINT = (latPh, lonPh) => `
     WHERE p.status = 'open'
       AND p.posted_at <= now()
       AND p.expires_at > now()
+      AND (p.held_until IS NULL OR p.held_until <= now())
   )
 `
 
@@ -423,6 +425,9 @@ export function listCities() {
 // Booking (write) functions
 // ---------------------------------------------------------------------
 
+// The posting's hold (077) belongs to a conversation of user $2.
+const HELD_BY_USER_SQL = `p.held_by_conversation_id IN (SELECT id FROM broker_conversations WHERE user_id = $2)`
+
 // Atomic conditional UPDATE — the race-condition gate. Uses the same
 // optimistic-locking pattern as invites.repository.js's redeem().
 // Returns the booked row on success, null on 0-row UPDATE.
@@ -432,11 +437,18 @@ export async function bookPostingAtomically(client, postingId, userId) {
        SET status = 'booked',
            booked_by_user_id = $2,
            booked_at = now(),
+           held_by_conversation_id = NULL,
+           held_until = NULL,
            updated_at = now()
      WHERE p.id = $1
        AND p.status = 'open'
        AND p.posted_at <= now()
-       AND p.expires_at > now()
+       -- Open, or kept past its posted expiry by this user's own hold (077);
+       -- a posting held for someone else's conversation is not bookable.
+       AND (
+         (p.expires_at > now() AND (p.held_until IS NULL OR p.held_until <= now() OR ${HELD_BY_USER_SQL}))
+         OR (p.held_until > now() AND ${HELD_BY_USER_SQL})
+       )
      RETURNING ${POSTING_COLUMNS}, p.rate_usd AS "rateUsd", p.rate_basis AS "rateBasis", p.fuel_surcharge_usd AS "fuelSurchargeUsd"`,
     [postingId, userId],
   )
@@ -459,7 +471,9 @@ export async function getPostingForIdempotent(client, postingId, userId) {
     `SELECT ${POSTING_COLUMNS},
            booked_by_user_id AS "bookedByUserId",
            booked_load_id AS "bookedLoadId",
-           booked_at AS "bookedAt"
+           booked_at AS "bookedAt",
+           held_until AS "heldUntil",
+           (SELECT c.user_id FROM broker_conversations c WHERE c.id = p.held_by_conversation_id) AS "heldByUserId"
      FROM load_postings p WHERE p.id = $1`,
     [postingId],
   )

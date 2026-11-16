@@ -7,7 +7,10 @@ import * as payrollService from '../payroll/payroll.service.js'
 import * as loadsRepo from '../loads/loads.repository.js'
 import { AppError } from '../../lib/errors.js'
 import { money } from '../../lib/money.js'
+import * as brokerChatRepo from '../brokerChat/brokerChat.repository.js'
 import { rateQuote, SPLIT_RATE } from '../brokerChat/rateQuote.js'
+import { reminderText } from './invoiceReminder.js'
+import { FINANCE_REAL_MS_PER_SIM_DAY } from '../../constants/simClock.js'
 import {
   AVG_MPG,
   FUEL_PRICE_PER_GAL,
@@ -15,6 +18,7 @@ import {
   FACTORING_RATE,
   MONTHLY_INSURANCE,
   getAssumptions,
+  INVOICE_REMINDER_COOLDOWN_SIM_DAYS,
 } from './finance.constants.js'
 
 function accessorialsTotalUsd(accessorials) {
@@ -40,6 +44,8 @@ export function buildInvoice(row) {
     status: row.status,
     issuedAt: row.deliveredAt,
     dueAt: row.dueAt,
+    sentAt: row.invoiceSentAt ?? null,
+    remindedAt: row.invoiceRemindedAt ?? null,
     daysPastDue: row.daysPastDue,
     lineItems: [
       ...(quote.rateBasis === SPLIT_RATE ? [
@@ -65,7 +71,7 @@ export async function listInvoices({ status, search, page, limit }) {
 // last '-'-separated segment, which is safe to split on because
 // loads_id_format (migration 007) guarantees a load id is pure digits and
 // can never itself contain a hyphen.
-export async function getInvoiceById(id) {
+export async function getInvoiceById(id, userId) {
   const loadId = id.split('-').at(-1)
   const [row, load] = await Promise.all([
     financeRepo.getInvoiceRowByLoadId(loadId),
@@ -76,7 +82,84 @@ export async function getInvoiceById(id) {
     throw new AppError('LOAD_NOT_FOUND')
   }
 
-  return { ...buildInvoice(row), load }
+  // Only the dispatcher who booked the load has a broker thread to chase in.
+  const canRemindBroker = userId ? Boolean(await loadsRepo.brokerThreadForLoad(loadId, userId)) : false
+
+  return { ...buildInvoice(row), load, canRemindBroker }
+}
+
+function loadIdOf(invoiceId) {
+  return invoiceId.split('-').at(-1)
+}
+
+async function requireInvoiceRow(loadId) {
+  const row = await financeRepo.getInvoiceRowByLoadId(loadId)
+  if (!row) {
+    throw new AppError('LOAD_NOT_FOUND')
+  }
+  return row
+}
+
+// Records that the invoice went to the broker. A mark only: when the broker
+// pays is still decided by invoice_due_at and the tick.
+export async function sendInvoice(id) {
+  const loadId = loadIdOf(id)
+  const row = await requireInvoiceRow(loadId)
+  if (row.status === 'draft') {
+    throw new AppError('INVOICE_NOT_DELIVERED')
+  }
+  if (row.invoiceSentAt) {
+    return buildInvoice(row)
+  }
+  await loadsRepo.markInvoiceSent(loadId)
+  return buildInvoice(await requireInvoiceRow(loadId))
+}
+
+const REMINDER_COOLDOWN_MS = INVOICE_REMINDER_COOLDOWN_SIM_DAYS * FINANCE_REAL_MS_PER_SIM_DAY
+
+// Posts a follow-up line to the broker thread for an overdue, sent invoice.
+// Writes the dispatcher's message only: it deliberately does not go through
+// brokerChat.service.sendMessage, so no AI reply is scheduled.
+const REMINDER_DEPS = {
+  getRow: (loadId) => financeRepo.getInvoiceRowByLoadId(loadId),
+  openConversation: (loadId, userId) => brokerChatRepo.openLoadConversation(loadId, userId),
+  addMessage: (conversationId, role, text) => brokerChatRepo.addMessage(conversationId, role, text),
+  markReminded: (loadId) => loadsRepo.markInvoiceReminded(loadId),
+}
+
+// Why a reminder cannot go out for this invoice row, as an error code, or
+// null when it can. Pure, so the rules are testable without a database.
+export function reminderBlock(row, now = Date.now()) {
+  if (row.status !== 'overdue') return 'INVOICE_NOT_OVERDUE'
+  if (!row.invoiceSentAt) return 'INVOICE_NOT_SENT'
+  if (row.invoiceRemindedAt && now - new Date(row.invoiceRemindedAt).getTime() < REMINDER_COOLDOWN_MS) {
+    return 'INVOICE_REMINDED_RECENTLY'
+  }
+  return null
+}
+
+export async function sendInvoiceReminder(id, userId, { deps = REMINDER_DEPS } = {}) {
+  const loadId = loadIdOf(id)
+  const row = await deps.getRow(loadId)
+  if (!row) {
+    throw new AppError('LOAD_NOT_FOUND')
+  }
+  const blocked = reminderBlock(row)
+  if (blocked) {
+    throw new AppError(blocked)
+  }
+  const conversation = await deps.openConversation(loadId, userId)
+  if (!conversation) {
+    throw new AppError('LOAD_HAS_NO_BROKER_THREAD')
+  }
+  const invoice = buildInvoice(row)
+  await deps.addMessage(
+    conversation.id,
+    'dispatcher',
+    reminderText({ invoiceId: invoice.id, loadId, daysPastDue: row.daysPastDue }),
+  )
+  await deps.markReminded(loadId)
+  return buildInvoice(await deps.getRow(loadId))
 }
 
 function buildProfitability(row) {

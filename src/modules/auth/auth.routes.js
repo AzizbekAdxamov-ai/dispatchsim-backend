@@ -17,5 +17,7 @@ router.get('/me', requireAuth, authController.me)
 // deferred users_active_role_fk), so there is no credential/secret here for
 // a limiter to protect.
 router.patch('/active-role', requireAuth, authController.setActiveRole)
+// Rate-limited like login: it checks a password, so it can be used to guess one.
+router.post('/password', authLimiter, requireAuth, authController.changePassword)
 
 export default router

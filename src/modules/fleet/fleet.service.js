@@ -6,6 +6,7 @@ import * as trucksRepo from './trucks.repository.js'
 import * as maintenanceRepo from './maintenance.repository.js'
 import * as metricsRepo from './metrics.repository.js'
 import { AppError } from '../../lib/errors.js'
+import * as payrollService from '../payroll/payroll.service.js'
 import { withDelta } from '../../lib/delta.js'
 import { FUEL_PRICE_PER_GAL, FIXED_COST_PER_MILE } from '../finance/finance.constants.js'
 import { withTransaction } from '../../db/pool.js'
@@ -122,6 +123,9 @@ function buildCostBreakdown({ weeklyFuelGallons, weeklyDistanceMi, weeklyMainten
   ]
 }
 
+// payroll stage meaning the driver has quit over unpaid wages.
+const DRIVER_LEFT_STAGE = 'quits'
+
 export async function getTruckById(id) {
   const truck = await trucksRepo.getTruckById(id)
   if (!truck) {
@@ -154,7 +158,14 @@ export async function getTruckById(id) {
     weeklyMaintenanceUsd: weeklyCost.currentUsd,
   })
 
-  return { ...truck, metrics, costBreakdown, fuelTrend, distanceTrend }
+  // A driver who quit can no longer be called or messaged from the truck page.
+  let driver = truck.driver
+  if (driver) {
+    const standing = await payrollService.driverStanding(null, driver.id)
+    driver = { ...driver, hasLeft: standing.stage === DRIVER_LEFT_STAGE }
+  }
+
+  return { ...truck, driver, metrics, costBreakdown, fuelTrend, distanceTrend }
 }
 
 export async function listMaintenance({ limit }) {

@@ -51,9 +51,10 @@ test('old MC-spam history cannot prescribe the next reply or override the author
   const load = fakePosting({ id: '4cbdd03f-96f8-4e20-b2f4-14557092473a', originCity: 'Toledo', originState: 'OH',
     destinationCity: 'Yakima', destinationState: 'WA', rateUsd: 8153, distanceMi: 2180, weightLbs: 26200 })
   const fake = makeFakeBrokerRepo({ posting: load })
+  // The last seeded message must not start with "I": the opener guard would put a lead-in before the model's "I can offer ...".
   for (const content of ['May I have your MC number?', 'Our best is $8,153 all-in. Please provide your MC.',
-    'Could you share your MC number, please?', 'The posted rate is my best offer. May I have your MC?',
-    'I need your company and MC to continue.']) await fake.repo.addMessage(ids.conversationId, 'broker', content)
+    'I need your company and MC to continue.', 'The posted rate is my best offer. May I have your MC?',
+    'Could you share your MC number, please?']) await fake.repo.addMessage(ids.conversationId, 'broker', content)
   const originalHistory = fake.state.messages.map((m) => ({ ...m }))
   const first = negotiate({ conversation: {}, posting: load, text: 'Come on, can you do $8,700 all-in?', booking: { mc: { verdict: null } } })
   const second = negotiate({ conversation: { brokerOfferUsd: first.state.offer, ratePushCount: first.state.pushes }, posting: load, text: 'Come on, can you do $8,700 all-in?', booking: { mc: { verdict: null } } })

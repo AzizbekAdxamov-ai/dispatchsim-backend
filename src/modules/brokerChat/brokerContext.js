@@ -14,12 +14,19 @@ import { introductionOnly, asksHowAreYou } from './turnTalk.js'
 import { rateQuote, quoteText, SPLIT_RATE } from './rateQuote.js'
 import { ONE_CARRIER_RULE } from './carrierPolicy.js'
 import { chatVoiceInstruction } from '../../lib/chatVoice.js'
-import { brokerStyle, STYLE_INSTRUCTION } from './brokerStyle.js'
+import { brokerStyle, STYLE_INSTRUCTION, openerRegister } from './brokerStyle.js'
 
 const speech = (thread, role) => thread.filter((m) => m.role === role && m.kind !== 'rate_con').map((m) => String(m.content ?? ''))
 
 // Bounded prior claims help avoid contradictions, but are not voice examples
 // or financial authority. Exclude recurring identity/paper collection failures.
+// How a reply begins (also enforced in openerGuard.js, which fixes what the model still gets wrong).
+const OPENER_RULE = 'Never open with "hey" or "yep". Do not start with the same word as your last reply.'
+const OPENER_INSTRUCTION = Object.freeze({
+  formal: `${OPENER_RULE} You are a well-established broker: courteous, complete sentences.`,
+  short: `${OPENER_RULE} Keep it short and to the point.`,
+})
+
 export function recentBrokerReplies(thread = [], { count = 3, maxChars = 400 } = {}) {
   const kept = speech(thread, 'broker')
     .filter((text) => text.length > 0 && !mcQuestion(text) && !asksPaperDetails(text))
@@ -246,6 +253,7 @@ export function buildBrokerContext({ broker, posting, carrier = null, now = new 
     ONE_CARRIER_RULE,
     chatVoiceInstruction(broker.persona),
     STYLE_INSTRUCTION[brokerStyle(posting.brokerId, broker.persona)],
+    OPENER_INSTRUCTION[openerRegister(posting.creditRating)],
     `CURRENT TASK: ${turnTask(latest, negotiation)}`,
     ['offer', 'push', 'accept_amount', 'walk'].includes(negotiation.intent.kind) && !towardBooking && negotiation.state.stage !== 'held'
       ? 'Put the direct answer in your first sentence: a present-tense first-person quote of the authorized amount. Describe your current position rather than an ability maximum. If acknowledging an unverified empty distance, explicitly attribute it to what the carrier said, separately from your quote; do not present it as your route verification or reason for extra payment. Then stop. All factual, safety, agreement and document constraints above still apply.'

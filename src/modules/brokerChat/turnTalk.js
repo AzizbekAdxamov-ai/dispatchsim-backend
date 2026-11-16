@@ -1,5 +1,5 @@
 import { asciiPunct } from '../../lib/plainText.js'
-import { pickVariant } from './brokerStyle.js'
+import { pickVariant, openerRegister } from './brokerStyle.js'
 
 // An introduction is social context, not identification of a particular load.
 // Keep the same boundary in the prompt, guard and deterministic fallback.
@@ -23,22 +23,22 @@ export function asksHowAreYou(raw) {
   return HOW_ARE_YOU_TAIL.test(asciiPunct(String(raw ?? '')).trim())
 }
 
-const DEFAULT_GREETING = 'Hey! Good to hear from you.'
+const DEFAULT_GREETING = 'Hi, good to hear from you.'
 
 // Wording for a broker answering a bare greeting, in each writing style. None
 // of them names a lane, a price or the word "load": they only greet back (and
 // say how they are, when asked).
 const GREETING_VARIANTS = Object.freeze({
   casual: Object.freeze([
-    (asked) => (asked ? 'hey! doing good, u?' : 'hey! good to hear from u.'),
+    (asked) => (asked ? 'hi! doing good, u?' : 'hi! good to hear from u.'),
     (asked) => (asked ? 'hi! all good here, u?' : 'hi! whats up.'),
-    (asked) => (asked ? 'hey there, doing well, u?' : 'hey there!'),
+    (asked) => (asked ? 'hi there, doing well, u?' : 'hi there!'),
     (asked) => (asked ? 'hello! good, thx, u?' : 'hello! good to hear from u.'),
   ]),
   neutral: Object.freeze([
-    (asked) => (asked ? 'Hey! Doing good, thanks. You?' : DEFAULT_GREETING),
+    (asked) => (asked ? 'Hi! Doing good, thanks. You?' : DEFAULT_GREETING),
     (asked) => (asked ? 'Hi! All good here, how about you?' : 'Hi! Good to hear from you.'),
-    (asked) => (asked ? 'Hey there, doing well. And you?' : 'Hey there!'),
+    (asked) => (asked ? 'Hi there, doing well. And you?' : 'Hi there!'),
     (asked) => (asked ? 'Hello! Good, thanks. You?' : 'Hello! Good to hear from you.'),
   ]),
   formal: Object.freeze([
@@ -51,16 +51,21 @@ const GREETING_VARIANTS = Object.freeze({
 
 // A few words that greet back, to put in front of an answer that skipped it.
 const GREETING_LEADS = Object.freeze({
-  casual: Object.freeze(['hey!', 'hi!', 'hey there!']),
-  neutral: Object.freeze(['Hey!', 'Hi!', 'Hello!']),
+  casual: Object.freeze(['hi!', 'hello!', 'hi there!']),
+  neutral: Object.freeze(['Hi!', 'Hello!', 'Hi there!']),
   formal: Object.freeze(['Hello!', 'Good day!', 'Hi!']),
 })
 
-export function introductionReply({ style = null, key = '', howAreYou = false } = {}) {
-  if (!GREETING_VARIANTS[style]) return DEFAULT_GREETING
-  return pickVariant(GREETING_VARIANTS[style], `${key}:greeting`)(howAreYou)
+// A broker rated A or B greets in the formal register whatever their usual style.
+const greetingStyle = (style, creditRating) => (creditRating != null && openerRegister(creditRating) === 'formal' ? 'formal' : style)
+
+export function introductionReply({ style = null, key = '', howAreYou = false, creditRating = null } = {}) {
+  const used = greetingStyle(style, creditRating)
+  if (!GREETING_VARIANTS[used]) return DEFAULT_GREETING
+  return pickVariant(GREETING_VARIANTS[used], `${key}:greeting`)(howAreYou)
 }
 
-export function greetingLead({ style = null, key = '' } = {}) {
-  return GREETING_LEADS[style] ? pickVariant(GREETING_LEADS[style], `${key}:lead`) : GREETING_LEADS.neutral[0]
+export function greetingLead({ style = null, key = '', creditRating = null } = {}) {
+  const used = greetingStyle(style, creditRating)
+  return GREETING_LEADS[used] ? pickVariant(GREETING_LEADS[used], `${key}:lead`) : GREETING_LEADS.neutral[0]
 }

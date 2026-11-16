@@ -7,6 +7,7 @@ import { rateQuote, quoteText, SPLIT_RATE } from './rateQuote.js'
 import { proposesRebroker, ONE_CARRIER_REPLY } from './carrierPolicy.js'
 import { brokerStyle, voiceKey, pickVariant } from './brokerStyle.js'
 import { LINE_VARIANTS } from './brokerLines.js'
+import { HYPOTHETICAL, NEGATIVE, readClauses, stripLead } from './clauseReading.js'
 
 const EMAIL = /\b[a-z0-9._%+-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}\b/gi
 const MONEY = '(?:\\$\\s*)?(\\d+(?:\\.\\d+)?[kK]|(?:\\d{1,3}(?:,\\d{3})+|\\d{3,5})(?:\\.00)?)(?:\\s*\\$)?'
@@ -33,7 +34,6 @@ const EMAIL_INSTRUCTION = new RegExp(
   String.raw`(?:[,;]\s*|\s+)(?:and\s+)?(?:please\s+)?(?:(?:send|email|put)(?:\s+(?:it|the\s+(?:rate\s*con(?:firmation)?|rc|paperwork)))?(?:\s+(?:to|on))?|(?:my|our)\s+e-?mail\s*(?:is|:)|e-?mail\s*(?:is|:)?|rc\s+to)\s+${EMAIL.source}`,
   'gi')
 export const confirmBookLine = (quoted) => `${quoted} - we good to book?`
-const ACCEPT = /^(?:(?:ok(?:ay)?|yes|great|thanks)[,!. ]+)*(?:i(?:'ll| will)|we(?:'ll| will)) take (?:it|this|the load)[.!]?\s*$|^(?:(?:ok(?:ay)?|yes)[,!. ]+)*(?:deal|agreed|book it|lets? do it|it'?s fine|that'?s fine|send (?:the )?(?:rc|rate con)|confirmed|sounds good|(?:that(?: rate)?|the rate|your rate|your offer) works(?: for (?:me|us))?|i accept(?: your (?:rate|offer))?)[.!]?\s*$/i
 const NATURAL_ACCEPT = /^(?:ok(?:ay)?\s+)?(?:let'?s book it|let'?s do it|the rate works(?:\s+we can book it)?|works for me|that works|it'?s fine|that'?s fine|deal|send (?:the )?(?:rc|rate con)|confirmed|sounds good(?:,?\s+book it)?|we(?:'ll| will) take it|i(?:'ll| will) take it)[.!]?$/i
 const HOLD = /\b(?:hold (?:off|up)|on hold|not ready|don't (?:book|send|issue|confirm)|do not (?:book|send|issue|confirm)|not (?:book|confirm|accept)(?:ing|ed)? yet|before (?:we|i) (?:book|confirm)|let me (?:check|confirm|verify)|gotta check (?:with )?(?:my|our|the) driver|wait for (?:my|our) confirmation|release (?:it|this|the load))\b/i
 const WALK = /\b(?:i(?:'ll| will) pass|we(?:'ll| will) pass|pass on (?:it|this)|walk away|find another (?:truck|carrier))\b/i
@@ -74,8 +74,6 @@ const BASIS_ANSWER_LINEHAUL = /^\s*(?:(?:it'?s|its|that'?s|thats)\s+)?linehaul(?
 const BASIS_HINT_TOTAL = /\b(?:all[- ]?in|total|including fuel|fuel included)\b/i
 const BASIS_HINT_LINEHAUL = /\blinehaul\b|\bplus (?:the )?fuel\b|\+\s*fuel\b/i
 const BASIS_QUESTION = /\btotal\b[^?]*\blinehaul\b[^?]*\?|\blinehaul\b[^?]*\btotal\b[^?]*\?/i
-const HYPOTHETICAL = /\b(?:if|unless|hypothetically|example|suppose|said|quoted|asks?|asking whether|what if|would you accept)\b/i
-const NEGATIVE = /\b(?:not|never|can't|cannot|won't|don't|didn't|do not|isn't|is not|haven't)\b/i
 // The reason negotiationReplyProblem gives for any misquoted price; the service keys its server-line fallback on it.
 export const RATE_MISS_REASON = 'offered a rate other than the authoritative decision'
 const amountValue = (token) => {
@@ -258,7 +256,28 @@ export function lastAuthorizedEmail(texts) {
   return null
 }
 
-export function chatIntent(raw, rateSource = null, { openNegotiation = false, pendingBasisUsd = null, settledBasis = null } = {}) {
+// A detail the dispatcher reads out ("my MC is 123456", "truck 4521", "phone
+// 555-123-4567") is not a price, with or without "is" after its keyword. A
+// figure written with a "$" is always a price, whatever precedes it.
+const DETAIL_LABEL_BEFORE = /\b(?:mc|dot|truck|trailer|phone|number)\s*(?:#|no\.?|number)?\s*(?:is|are|:|=)?\s*$/i
+const PHONE_SHAPE = /\(?\b\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}\b|\b\d{10}\b/g
+
+// Any amount-like figure that is not a labelled id (MC, truck), a phone number or a unit.
+function namesFigure(text) {
+  const cleaned = text.replace(EMAIL, ' ').replace(PHONE_SHAPE, ' ')
+  return [...cleaned.matchAll(BARE_AMOUNT)].some((m) => {
+    const before = cleaned.slice(0, m.index)
+    return !BARE_LABEL_BEFORE.test(before)
+      && !(!m[0].includes('$') && DETAIL_LABEL_BEFORE.test(before))
+      && !AMOUNT_UNIT_TAIL.test(cleaned.slice(m.index + m[0].length))
+  })
+}
+
+// "if you can do / if you do / make it" before a figure, and the promise to book that follows the figure.
+const CONDITIONAL_ASK = /\b(if (?:you|u) (?:can )?(?:do|make it)|make it)\s+(?=\$?\s*[\d,.]+k?\b)/i
+const BOOKING_PROMISE = /[\s,;]*(?:(?:and|then)\s+)?\b(?:(?:we|i)(?:'ll| will| would)\s+(?:book|take|cover)\b|book it\b|(?:we|you)(?:'ve| have)? (?:got )?a deal\b).*$/i
+
+export function chatIntent(raw, rateSource = null, { openNegotiation = false, pendingBasisUsd = null, settledBasis = null, contactName = null, affirmAccepts = false } = {}) {
   const src = intentText(raw).replace(/(\b(?:can|could)(?:\s+(?:you|u|we|sir))?)\s*(add (?:more|some money))\.\s*(?=[^;!?]*\bfor (?:example|exaple|exapmle|exmaple|exampel)\b)/gi, '$1 $2, ')
   // A mixed price acceptance/email cannot authorize a prohibited handoff.
   if (proposesRebroker(src)) return { kind: 'rebroker' }
@@ -271,7 +290,17 @@ export function chatIntent(raw, rateSource = null, { openNegotiation = false, pe
   const amountSrc = src.replace(/\$?\d+\.\d{1,2}\s*(?:\/\s*mi\b|(?:a|per)\s+mile\b)/gi, ' ')
     .replace(/(?<![\d,])\$?[0-9]\.[0-9]{1,2}\b/g, ' ')
   if (keyed?.kind === 'close_at' && /\b(?:might|maybe|probably)\b/i.test(src)) return { kind: 'talk' }
-  const closeMatch = amountSrc.match(/\b(?:if (?:you|u) can do|i can (?:cover|take) (?:it|this|the load)?(?:\s+right now)?\s+at)\s+\$?\s*([\d,.]+k?)\b/i)
+  // Owner decision 2026-11-16: a conditional close ("if you can do $4,000 we'll
+  // book it") is the dispatcher's counter, not a handshake. It is read as the
+  // plain ask "can you do $4,000", so the ladder runs and nothing is agreed.
+  if (!NEGATIVE.test(src)) {
+    const conditional = CONDITIONAL_ASK.exec(src)
+    if (conditional && (/^if/i.test(conditional[1]) || BOOKING_PROMISE.test(src))) {
+      const asked = src.replace(BOOKING_PROMISE, '').replace(CONDITIONAL_ASK, 'can you do ')
+      return chatIntent(asked, rateSource, { openNegotiation, pendingBasisUsd, settledBasis, contactName, affirmAccepts })
+    }
+  }
+  const closeMatch = amountSrc.match(/\bi can (?:cover|take) (?:it|this|the load)?(?:\s+right now)?\s+at\s+\$?\s*([\d,.]+k?)\b/i)
   if (closeMatch) return { kind: 'accept_amount', rateUsd: amountValue(closeMatch[1]) }
   if (keyed?.reason === 'market') {
     const marketAmount = amountSrc.match(/\$?\s*([\d]+(?:\.\d+)?k?)\b/i)
@@ -290,6 +319,7 @@ export function chatIntent(raw, rateSource = null, { openNegotiation = false, pe
   if (activeClauses.some((clause) => active(clause, [...clause.matchAll(new RegExp(HOLD.source, 'gi')),
     ...clause.matchAll(/\b(?:reject|decline) (?:your |the )?(?:rate|offer|load)\b/gi)]) || /^\s*(?:stop|hold|wait)[.!]?\s*$/i.test(clause))) return { kind: 'hold' }
   const { emails, useOwnEmail } = authorizedRecipient(src)
+  const reading = readClauses(src, { contactName, affirmAccepts })
   // Quotes, negated intentions and conditional examples are never a handshake.
   const clauses = amountSrc.replace(QUOTED, ' ').replace(EMAIL_INSTRUCTION, ' ').replace(EMAIL, ' ').split(/[;!?\n]|\.(?!\d)/)
   const amounts = []
@@ -326,24 +356,32 @@ export function chatIntent(raw, rateSource = null, { openNegotiation = false, pe
         if (pattern === ACCEPT_AT) acceptsAmount = true
       }
     }
-    // A booking word beside a bare figure is the unplaced-close case further down.
-    if (openNegotiation && !BOOK_WORD_RE.test(clause)) {
-      for (const m of clause.matchAll(BARE_AMOUNT)) {
-        if (negatedLocally(clause, m) || AMOUNT_UNIT_TAIL.test(clause.slice(m.index + m[0].length))
-          || CARRIER_EXPENSE_TAIL.test(clause.slice(m.index + m[0].length))
-          || !(BARE_PRICE_CUE.test(clause) || BARE_FILLER.test(clause.replace(m[0], '').trim()))
-          || BARE_TIME_TAIL.test(clause.slice(m.index + m[0].length)) || BARE_JUDGED_TAIL.test(clause.slice(m.index + m[0].length)) || BARE_LABEL_BEFORE.test(clause.slice(0, m.index))) continue
-        bareCandidates.push({ token: m[1], clause })
+    // A booking word beside a bare figure used to hide the figure. Read the
+    // clause's own parts instead: the figure still counts once the closing or
+    // accepting phrase around it ("... and we have a deal") is set aside.
+    const bareText = BOOK_WORD_RE.test(clause) ? readClauses(clause, { contactName }).neutralText : clause
+    if (openNegotiation && !BOOK_WORD_RE.test(bareText)) {
+      for (const m of bareText.matchAll(BARE_AMOUNT)) {
+        if (negatedLocally(bareText, m) || AMOUNT_UNIT_TAIL.test(bareText.slice(m.index + m[0].length))
+          || CARRIER_EXPENSE_TAIL.test(bareText.slice(m.index + m[0].length))
+          || !(BARE_PRICE_CUE.test(bareText) || BARE_FILLER.test(bareText.replace(m[0], '').trim()))
+          || BARE_TIME_TAIL.test(bareText.slice(m.index + m[0].length)) || BARE_JUDGED_TAIL.test(bareText.slice(m.index + m[0].length)) || BARE_LABEL_BEFORE.test(bareText.slice(0, m.index))) continue
+        bareCandidates.push({ token: m[1], clause: bareText })
       }
     }
     // An amount-first or "let's" phrase has no verb to carry its own negation,
-    // so a negation anywhere in the clause still voids it.
-    const first = NEGATIVE.test(clause) ? null : AMOUNT_FIRST.exec(clause)
-    if (first) { addAmount(first[1], clause); acceptsAmount = true }
-    const book = NEGATIVE.test(clause) ? null : AMOUNT_BOOK.exec(clause.replace(TRAILING_SEPARATORS, ''))
-    if (book) { addAmount(book[1], clause); acceptsAmount = true; confirmsOffer = true }
-    const lets = NEGATIVE.test(clause) ? null : LETS_OFFER.exec(clause)
-    if (lets) addAmount(lets[1], clause)
+    // so a negation anywhere in the clause still voids it. It is tried on the
+    // whole clause and on each part with its lead ("Sounds good Dana,") removed.
+    const candidates = new Set([clause, ...readClauses(clause, { contactName }).segments.map((segment) => stripLead(segment.text, contactName).core)])
+    for (const candidate of candidates) {
+      if (NEGATIVE.test(candidate)) continue
+      const first = AMOUNT_FIRST.exec(candidate)
+      if (first) { addAmount(first[1], clause); acceptsAmount = true }
+      const book = AMOUNT_BOOK.exec(candidate.replace(TRAILING_SEPARATORS, ''))
+      if (book) { addAmount(book[1], clause); acceptsAmount = true; confirmsOffer = true }
+      const lets = LETS_OFFER.exec(candidate)
+      if (lets) addAmount(lets[1], clause)
+    }
   }
   if (amounts.length === 0 && openNegotiation && Number.isFinite(rateSource?.rateUsd)) {
     const near = bareCandidates.filter(({ token }) => {
@@ -357,6 +395,8 @@ export function chatIntent(raw, rateSource = null, { openNegotiation = false, pe
   const explicitMoney = [...amountSrc.replace(EMAIL, '').matchAll(/(?<!\w)(?:\$\s*(\d[\d,]*(?:\.\d+)?k?)|(\d+(?:\.\d+)?k)|(\d[\d,]*)\s*\$)(?!\w)/gi)]
     .map((m) => amountValue(m[1] ?? m[2] ?? m[3]))
   if (unique.length > 0 && new Set(explicitMoney).size > 1) return { kind: 'ambiguous' }
+  // A clear acceptance beside a lone figure confirms that figure, like "3500 book it".
+  if (unique.length === 1 && reading.accepts && !acceptsAmount) { acceptsAmount = true; confirmsOffer = true }
   if (unique.length === 1) {
     const split = rateSource?.rateBasis === SPLIT_RATE
     const totalSpecified = basisHints.some((hint) => hint.total)
@@ -377,8 +417,9 @@ export function chatIntent(raw, rateSource = null, { openNegotiation = false, pe
     }
   }
   // Permit an explicit acceptance followed by an email instruction, but no conditional price.
-  const acceptance = src.split(/(?<=[.!])\s+/)[0]
-  if (!NEGATIVE.test(acceptance) && !HYPOTHETICAL.test(acceptance) && ACCEPT.test(acceptance)) return { kind: 'accept', emails, useOwnEmail }
+  // A close phrase beside a figure no rule could place is price talk, never a
+  // handshake on the quote on the table ("ok $3,900 and we have a deal").
+  if (reading.accepts || (reading.closes && !namesFigure(amountSrc))) return { kind: 'accept', emails, useOwnEmail }
   if (emails.length === 1 || useOwnEmail) return { kind: 'email', emails, useOwnEmail }
   if (WALK.test(src)) return { kind: 'walk' }
   if (MORE.test(src) || REJECT_PRICE.test(src) || keyed?.kind === 'push') return { kind: 'push', ...(keyed?.reason ? { reason: keyed.reason } : {}) }
@@ -490,7 +531,17 @@ function givesPaperDetail(text, posting) {
   return said.trailer.type !== null || said.trailer.lengthFt !== null || said.driverName !== null || said.truckNumber !== null
 }
 
-export function negotiate({ conversation, posting, text, booking, truck, effectiveEmail = null, knownEmail = null, now = new Date(), offerVisible = false, pendingBasisUsd = null, lastAskUsd = null, settledBasis = null }) {
+// The broker's last line asked the dispatcher to confirm: it ended in a
+// question and either named the quote on the table or asked about booking.
+// Only then is a bare "yes" an acceptance.
+const BOOK_QUESTION = /\bbook\b/i
+function answersBookQuestion(lastBrokerLine, previous) {
+  if (previous.agreed !== null || typeof lastBrokerLine !== 'string' || !/\?\s*$/.test(lastBrokerLine)) return false
+  const quoted = [...lastBrokerLine.matchAll(REPLY_MONEY)].map((match) => amountValue(match[1] ?? match[2]))
+  return quoted.includes(previous.offer) || BOOK_QUESTION.test(lastBrokerLine)
+}
+
+export function negotiate({ conversation, posting, text, booking, truck, effectiveEmail = null, knownEmail = null, now = new Date(), offerVisible = false, pendingBasisUsd = null, lastAskUsd = null, settledBasis = null, lastBrokerLine = null }) {
   const previous = negotiationState(conversation, posting)
   const state = { ...previous }
   const pending = previous.pendingClose
@@ -498,6 +549,8 @@ export function negotiate({ conversation, posting, text, booking, truck, effecti
   const intent = chatIntent(text, posting, {
     openNegotiation: previous.agreed === null && ['negotiating', 'held'].includes(previous.stage) && conversation.status !== 'booked',
     pendingBasisUsd, settledBasis,
+    contactName: posting.contactName,
+    affirmAccepts: answersBookQuestion(lastBrokerLine, previous),
   })
   const quote = (amount) => quoteText(posting, amount)
   // The server's rate lines, worded in this broker's style and picked per turn.
@@ -651,7 +704,7 @@ export function negotiationLines(decision) {
     `  Carrier intent: ${decision.intent.kind}${decision.intent.rateUsd ? `; requested price ${money(decision.intent.rateUsd)}` : ''}.`,
     `  Booking requested: ${decision.bookingRequested ? 'yes' : 'no'}. Document authorized this turn: ${decision.issuePaper ? 'yes' : 'no'}.`,
     ...(decision.state.agreed === null ? ['  No handshake exists; a requested price is not an accepted deal.'] : []),
-    ...(decision.hasRateRoom && decision.state.agreed === null ? ['  Describe this turn as a current quote. A later financial decision remains separate; make no claim about future movement.'] : []),
+    ...(decision.hasRateRoom && decision.state.agreed === null ? ['  Describe this turn as a current quote. A later financial decision remains separate; make no claim about future movement. Do not call the quote final, firm, the max or "the offer".'] : []),
     ...(['offer', 'push', 'accept_amount'].includes(decision.intent.kind) && !decision.bookingRequested
       ? ['  Answer their bargaining request with the current authorized offer; do not present their requested price as accepted.'] : []),
     ...(decision.state.stage === 'awaiting_email' ? ['  Rate is agreed. Ask which email to send the rate con to, in plain desk words; never say "authorized" or "recipient".'] : []),
@@ -671,6 +724,15 @@ export function negotiationLines(decision) {
 const CAP_CLAIM = /\b(?:(?:my|our|the|that'?s|thats|is)\s+max(?:imum)?(?!\s+(?:weight|payload|load|capacity|hours?|miles|speed|length|height)\b)|\d[\d,]*k?\s+max(?:imum)?(?!\s+(?:weight|payload|load|capacity|hours?|miles|speed|length|height)\b)|best (?:i|we) can (?:do|pay|offer)|max(?:imum)?\s+(?:i|we)\s+can|as high as (?:i|we)(?: can)? go|(?:that'?s|thats|that is)\s+(?:my|our|the)\s+(?:limit|ceiling|top)|top dollar|tapped out|(?:cant|wont)\s+(?:go|pay|move|come)(?: any)? (?:higher|above|up|more))\b/i
 const claimsCap = (clause) => !/\b(?:you said|u said|your|ur)\b/i.test(clause) && CAP_CLAIM.test(clause)
 
+// "final" and "firm" are price claims only next to a price: "send me the final
+// BOL", "the final answer on weight is 42,000" and "firm on the MC requirement"
+// say nothing about the rate. "that's final" closing a clause is a price claim
+// by itself (the figure is in the clause before it).
+const FINAL_WORD = /\b(?:final(?! (?:stop|destination|delivery|drop|mile|appointment))|(?:firm|non-?negotiable)(?! (?:appointment|pickup|delivery|time|window)))\b/i
+const PRICE_CONTEXT = /\$\s?\d|\b(?:rate(?! ?con)|price|offer|number|quote|figure|all-in|linehaul|pay(?:ing)?|dollars?)\b/i
+const FINAL_CLOSING = /\b(?:that'?s|it'?s|this is) (?:my |our |the )?final\W*$/i
+const claimsFinalPrice = (clause) => FINAL_CLOSING.test(clause) || (FINAL_WORD.test(clause) && PRICE_CONTEXT.test(clause))
+
 export function negotiationReplyProblem(reply, decision) {
   if (!decision) return null
   const text = asciiPunct(reply)
@@ -681,7 +743,7 @@ export function negotiationReplyProblem(reply, decision) {
   if (decision.hasRateRoom && decision.state.agreed === null) {
     const claims = text.split(/(?<=[.!?;])\s+|\b(?:but|however)\b/i)
     if (claims.some((clause) => !clause.includes('?') && (claimsCap(clause) || !/\b(?:you said|u said|your|ur|not (?:my|a|the|our)|isn't my|is not my|haven't called|didn't say|never said|right now|at the moment|for now)\b/i.test(clause)
-      && /\b(?:final (?:rate|offer|price)|(?:my |the |our )?(?:absolute )?best (?:rate|offer|price)|best (?:i|we) can (?:do|pay|offer)|(?:can(?:not|'t)|cant|won't|wont|will not|not|unable to) (?:go|mov(?:e|ing)|come|pay)(?: any)? (?:higher|above|up)|(?:can(?:not|'t)|cant|won't|wont|will not|not|unable to) (?:increas\w*|improv\w*|rais\w*|bump\w*)|(?:most|highest|top) (?:i|we) can (?:do|pay|offer))\b/i.test(clause)))) {
+      && (/\b(?:final (?:rate|offer|price)|(?:my |the |our )?(?:absolute )?best (?:rate|offer|price)|best (?:i|we) can (?:do|pay|offer)|(?:can(?:not|'t)|cant|won't|wont|will not|not|unable to) (?:go|mov(?:e|ing)|come|pay)(?: any)? (?:higher|above|up)|(?:can(?:not|'t)|cant|won't|wont|will not|not|unable to) (?:increas\w*|improv\w*|rais\w*|bump\w*)|(?:most|highest|top) (?:i|we) can (?:do|pay|offer)|that'?s (?:the|my|our) (?:offer|number|rate|price)|that'?s all (?:i|we) (?:can|got)|take it or leave it)\b/i.test(clause) || claimsFinalPrice(clause))))) {
       return 'claimed a permanent final rate while authorized bargaining room remains'
     }
   }

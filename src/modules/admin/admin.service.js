@@ -10,6 +10,8 @@ import { toPublicUser } from '../auth/auth.service.js'
 import { withTransaction } from '../../db/pool.js'
 import { AppError } from '../../lib/errors.js'
 import { pickActiveRole } from '../../constants/roles.js'
+import * as password from '../../lib/password.js'
+import { generateTemporaryPassword } from '../../lib/tempPassword.js'
 
 export async function listUsers({ filter, search, page, limit }) {
   const offset = (page - 1) * limit
@@ -186,4 +188,22 @@ export async function bulkAssignRoles({ actorId, userIds, mode, roles }) {
     results,
     summary: { requested: userIds.length, updated, skipped: userIds.length - updated },
   }
+}
+
+// Replaces a user's password with a one-time temporary one and flags the account
+// so they are asked to pick their own at next login. The plain password is
+// returned to the calling admin once and is never logged or stored.
+// `client` is optional: tests pass a rolled-back connection.
+export async function resetUserPassword({ actorId, targetId }, client) {
+  if (targetId === actorId) {
+    throw new AppError('CANNOT_RESET_OWN_PASSWORD')
+  }
+  const target = await usersRepo.findById(targetId, client)
+  if (!target) {
+    throw new AppError('USER_NOT_FOUND')
+  }
+  const temporaryPassword = generateTemporaryPassword()
+  const passwordHash = await password.hash(temporaryPassword)
+  await usersRepo.setPasswordHash({ id: targetId, passwordHash, mustChange: true }, client)
+  return { temporaryPassword }
 }

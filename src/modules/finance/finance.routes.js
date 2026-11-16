@@ -13,6 +13,8 @@ router.use(requireAuth, requireRole('finance'))
 router.get('/overview', financeController.getOverview)
 router.get('/invoices', financeController.listInvoices)
 router.get('/invoices/:id', financeController.getInvoice)
+router.post('/invoices/:id/send', financeController.sendInvoice)
+router.post('/invoices/:id/remind', financeController.remindInvoice)
 router.get('/settlements', financeController.listSettlements)
 router.get('/expenses', financeController.listExpenses)
 

@@ -13,7 +13,7 @@ import { trippedBannedWord, leaksReasoning } from './brokerChat.prompt.js'
 import { tooLongForChat, CHAT_REPLY_MAX_CHARS } from '../../constants/chatBudget.js'
 import { ignoresUnreachable } from '../../lib/cannotMake.js'
 import { lumperPayerWrong, paymentTermsClaimed, PAYMENT_TERMS_LINE } from './termsTalk.js'
-import { saysBooked, confirmsUnknownBooking, mcQuestion, asksPaperDetails, NO_BOOKING_LINE } from './bookingTalk.js'
+import { saysBooked, confirmsUnknownBooking, mcQuestion, asksPaperDetails, paperAskOutOfOrder, PAPER_ASK_LINE, NO_BOOKING_LINE } from './bookingTalk.js'
 import {
   dollars, rateReasons, rateReasonLabels, unsupportedRateReasons, raiseWithoutReason, holdRateLine,
 } from './rateTalk.js'
@@ -21,7 +21,7 @@ import { weightChangeAgreed, weightHoldLine } from './weightTalk.js'
 import { personaBreak } from '../../lib/personaBreak.js'
 import { paperClaimProblem, paperNextLine } from './paperTalk.js'
 import { negotiationReplyProblem, bookingTurn, confirmBookLine } from './negotiation.js'
-import { repeatsRecent } from './repeatGuard.js'
+import { repeatsRecent, repeatedSentences } from './repeatGuard.js'
 import { introductionOnly, introductionReply, asksHowAreYou, greetingLead, GREETING_LEAD, GREETS_BACK } from './turnTalk.js'
 import { quoteText } from './rateQuote.js'
 import { proposesRebroker, agreesRebroker, refusesRebroker, ONE_CARRIER_RULE, ONE_CARRIER_REPLY } from './carrierPolicy.js'
@@ -99,13 +99,13 @@ function answersWrongMcLine(text, booking) {
 
 // The greeting the broker answers a bare hello with: their own style, and how
 // they are when they were asked.
-const greetingFor = (text, negotiation) => introductionReply({ style: negotiation?.style, key: negotiation?.voiceKey, howAreYou: asksHowAreYou(text) })
+const greetingFor = (text, negotiation, creditRating = null) => introductionReply({ style: negotiation?.style, key: negotiation?.voiceKey, howAreYou: asksHowAreYou(text), creditRating })
 
 function discussionReply(text, posting, negotiation) {
   if (negotiation?.line) return negotiation.line
-  if (introductionOnly(text)) return greetingFor(text, negotiation)
+  if (introductionOnly(text)) return greetingFor(text, negotiation, posting.creditRating)
   if (/\b(?:hi|hey|hello|wassap|wassup|what'?s up)\b/i.test(text)) {
-    return `Hey! I've got the ${posting.originCity} to ${posting.destinationCity} load here.`
+    return `Hi, I've got the ${posting.originCity} to ${posting.destinationCity} load here.`
   }
   if (/\b(?:available|avaivable|open|still there)\b/i.test(text)) {
     return `Yes, the ${posting.originCity} to ${posting.destinationCity} load is still available.`
@@ -188,7 +188,7 @@ export function brokerReplyProblem(reply, {
   )) return {
     why: 'pitched a particular load before the dispatcher identified one',
     hint: ' Return only their greeting and optionally your own name. Do not volunteer a lane, availability or price.',
-    unusable: true, safeReply: greetingFor(text, negotiation),
+    unusable: true, safeReply: greetingFor(text, negotiation, posting.creditRating),
   }
   // A greeting that opens a real question is returned in a few words first.
   // A server line (a rate decision, a booking step) keeps its own wording.
@@ -196,7 +196,7 @@ export function brokerReplyProblem(reply, {
   if (GREETING_LEAD.test(greeted) && !introductionOnly(text) && !negotiation?.line && !GREETS_BACK.test(reply.split(/(?<=[.!?])\s+/)[0])) return {
     why: 'skipped their greeting',
     hint: ' Return their greeting in a few words first, then answer.',
-    unusable: true, safeReply: `${greetingLead({ style: negotiation?.style, key: negotiation?.voiceKey })} ${reply.trim()}`,
+    unusable: true, safeReply: `${greetingLead({ style: negotiation?.style, key: negotiation?.voiceKey, creditRating: posting?.creditRating })} ${reply.trim()}`,
   }
   if (negotiation?.intent?.kind === 'cancel' && SAYS_CANCELLED_RE.test(reply) && SAYS_ON_HOLD_RE.test(reply)) return {
     why: 'called a cancelled load both cancelled and on hold',
@@ -374,9 +374,26 @@ export function brokerReplyProblem(reply, {
       unusable: false,
     }
   }
+  // Booking stage: the paper details are asked in one order (trailer, driver,
+  // truck number). A reply that asks for a later one first makes the dispatcher
+  // answer in the wrong order and the truck number gets read as the driver.
+  const outOfOrder = negotiation?.state?.agreed != null && booking?.mc.verdict === 'match' && reply !== negotiation.line
+    ? paperAskOutOfOrder(reply, booking) : null
+  if (outOfOrder) return {
+    why: 'asked for a paper detail out of order',
+    hint: ` Ask only this, and nothing later on the list: "${PAPER_ASK_LINE[outOfOrder]}"`,
+    unusable: true,
+    safeReply: PAPER_ASK_LINE[outOfOrder],
+  }
   if (negotiation && /\bC[SD]T\b/.test(reply)) return {
     why: 'used an ambiguous Central time abbreviation', hint: ' Say Central Time, as the appointments are written.',
     unusable: true, safeReply: reply.replace(/\bC[SD]T\b/g, 'Central Time'),
+  }
+  // A sentence said again word for word, even inside a reply that is otherwise new.
+  if (reply !== negotiation?.line && repeatedSentences(reply, brokerSaid).length > 0) return {
+    why: 'repeated a sentence from your last reply',
+    hint: ' Do not repeat any sentence from your last reply; say something new.',
+    unusable: false,
   }
   // Last: the same answer twice in a row. One regeneration is enough; the
   // service then puts a short lead-in on whatever is still a repeat.

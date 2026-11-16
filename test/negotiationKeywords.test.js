@@ -6,7 +6,8 @@ import { fakePosting } from './helpers/fakeBrokerRepo.js'
 const groups = {
   A: [['What is the best you can do on this load?', 'ask_room'], ['how much room u got on the rate', 'ask_room'], ['can u check with customer', 'ask_room']],
   B: [['Can you come up on the rate?', 'push'], ['that rate is too light for this lane', 'push'], ["we're not gonna move it for that", 'push']],
-  C: [['If you can do $3600, I will book it now', 'accept_amount'], ['i can cover it right now at 3.6k', 'accept_amount'], ['if u can do 3600 ill take it now', 'accept_amount']],
+  // Owner decision 2026-11-16: conditional close is an offer (was accept_amount); "i can cover ... at" still settles.
+  C: [['If you can do $3600, I will book it now', 'offer'], ['i can cover it right now at 3.6k', 'accept_amount'], ['if u can do 3600 ill take it now', 'offer']],
   D: [['We have a truck empty nearby', 'push'], ['my truck is already in position', 'push'], ['we can be at pickup on time', 'push']],
   E: [['This is a clean truck with a reliable driver', 'push'], ['we provide strong communication and tracking', 'push'], ['clean truck, solid driver', 'push']],
   F: [['I am seeing this lane around $3.60', 'push'], ['market is stronger today on this lane', 'push'], ['limited capacity in that area, need more', 'push']],
@@ -56,7 +57,8 @@ test('market comparison does not hide a separate all-in offer', () => {
 test('per-mile comparison leaves a separate conditional total intact', () => {
   // Kills: applying a per-mile veto to the entire message.
   const result = chatIntent('market is $2.40/mi; if you can do $3600.00, I will book it now')
-  assert.equal(result.kind, 'accept_amount')
+  // Owner decision 2026-11-16: conditional close is an offer
+  assert.equal(result.kind, 'offer')
   assert.equal(result.rateUsd, 3600)
 })
 
