@@ -256,10 +256,21 @@ export function lastAuthorizedEmail(texts) {
   return null
 }
 
-// Any amount-like figure that is not a labelled id (MC, truck) or a unit.
+// A detail the dispatcher reads out ("my MC is 123456", "truck 4521", "phone
+// 555-123-4567") is not a price, with or without "is" after its keyword. A
+// figure written with a "$" is always a price, whatever precedes it.
+const DETAIL_LABEL_BEFORE = /\b(?:mc|dot|truck|trailer|phone|number)\s*(?:#|no\.?|number)?\s*(?:is|are|:|=)?\s*$/i
+const PHONE_SHAPE = /\(?\b\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}\b|\b\d{10}\b/g
+
+// Any amount-like figure that is not a labelled id (MC, truck), a phone number or a unit.
 function namesFigure(text) {
-  return [...text.replace(EMAIL, ' ').matchAll(BARE_AMOUNT)].some((m) => !BARE_LABEL_BEFORE.test(text.slice(0, m.index))
-    && !AMOUNT_UNIT_TAIL.test(text.slice(m.index + m[0].length)))
+  const cleaned = text.replace(EMAIL, ' ').replace(PHONE_SHAPE, ' ')
+  return [...cleaned.matchAll(BARE_AMOUNT)].some((m) => {
+    const before = cleaned.slice(0, m.index)
+    return !BARE_LABEL_BEFORE.test(before)
+      && !(!m[0].includes('$') && DETAIL_LABEL_BEFORE.test(before))
+      && !AMOUNT_UNIT_TAIL.test(cleaned.slice(m.index + m[0].length))
+  })
 }
 
 export function chatIntent(raw, rateSource = null, { openNegotiation = false, pendingBasisUsd = null, settledBasis = null, contactName = null, affirmAccepts = false } = {}) {
@@ -699,6 +710,15 @@ export function negotiationLines(decision) {
 const CAP_CLAIM = /\b(?:(?:my|our|the|that'?s|thats|is)\s+max(?:imum)?(?!\s+(?:weight|payload|load|capacity|hours?|miles|speed|length|height)\b)|\d[\d,]*k?\s+max(?:imum)?(?!\s+(?:weight|payload|load|capacity|hours?|miles|speed|length|height)\b)|best (?:i|we) can (?:do|pay|offer)|max(?:imum)?\s+(?:i|we)\s+can|as high as (?:i|we)(?: can)? go|(?:that'?s|thats|that is)\s+(?:my|our|the)\s+(?:limit|ceiling|top)|top dollar|tapped out|(?:cant|wont)\s+(?:go|pay|move|come)(?: any)? (?:higher|above|up|more))\b/i
 const claimsCap = (clause) => !/\b(?:you said|u said|your|ur)\b/i.test(clause) && CAP_CLAIM.test(clause)
 
+// "final" and "firm" are price claims only next to a price: "send me the final
+// BOL", "the final answer on weight is 42,000" and "firm on the MC requirement"
+// say nothing about the rate. "that's final" closing a clause is a price claim
+// by itself (the figure is in the clause before it).
+const FINAL_WORD = /\b(?:final(?! (?:stop|destination|delivery|drop|mile|appointment))|(?:firm|non-?negotiable)(?! (?:appointment|pickup|delivery|time|window)))\b/i
+const PRICE_CONTEXT = /\$\s?\d|\b(?:rate(?! ?con)|price|offer|number|quote|figure|all-in|linehaul|pay(?:ing)?|dollars?)\b/i
+const FINAL_CLOSING = /\b(?:that'?s|it'?s|this is) (?:my |our |the )?final\W*$/i
+const claimsFinalPrice = (clause) => FINAL_CLOSING.test(clause) || (FINAL_WORD.test(clause) && PRICE_CONTEXT.test(clause))
+
 export function negotiationReplyProblem(reply, decision) {
   if (!decision) return null
   const text = asciiPunct(reply)
@@ -709,7 +729,7 @@ export function negotiationReplyProblem(reply, decision) {
   if (decision.hasRateRoom && decision.state.agreed === null) {
     const claims = text.split(/(?<=[.!?;])\s+|\b(?:but|however)\b/i)
     if (claims.some((clause) => !clause.includes('?') && (claimsCap(clause) || !/\b(?:you said|u said|your|ur|not (?:my|a|the|our)|isn't my|is not my|haven't called|didn't say|never said|right now|at the moment|for now)\b/i.test(clause)
-      && /\b(?:final (?:rate|offer|price)|(?:my |the |our )?(?:absolute )?best (?:rate|offer|price)|best (?:i|we) can (?:do|pay|offer)|(?:can(?:not|'t)|cant|won't|wont|will not|not|unable to) (?:go|mov(?:e|ing)|come|pay)(?: any)? (?:higher|above|up)|(?:can(?:not|'t)|cant|won't|wont|will not|not|unable to) (?:increas\w*|improv\w*|rais\w*|bump\w*)|(?:most|highest|top) (?:i|we) can (?:do|pay|offer)|that'?s (?:the|my|our) (?:offer|number|rate|price)|final(?! (?:stop|destination|delivery|drop|mile|appointment))|that'?s all (?:i|we) (?:can|got)|take it or leave it|(?:firm|non-?negotiable)(?! (?:appointment|pickup|delivery|time|window)))\b/i.test(clause)))) {
+      && (/\b(?:final (?:rate|offer|price)|(?:my |the |our )?(?:absolute )?best (?:rate|offer|price)|best (?:i|we) can (?:do|pay|offer)|(?:can(?:not|'t)|cant|won't|wont|will not|not|unable to) (?:go|mov(?:e|ing)|come|pay)(?: any)? (?:higher|above|up)|(?:can(?:not|'t)|cant|won't|wont|will not|not|unable to) (?:increas\w*|improv\w*|rais\w*|bump\w*)|(?:most|highest|top) (?:i|we) can (?:do|pay|offer)|that'?s (?:the|my|our) (?:offer|number|rate|price)|that'?s all (?:i|we) (?:can|got)|take it or leave it)\b/i.test(clause) || claimsFinalPrice(clause))))) {
       return 'claimed a permanent final rate while authorized bargaining room remains'
     }
   }

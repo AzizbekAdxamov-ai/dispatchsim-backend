@@ -106,6 +106,12 @@ const NAME_STOPS = new Set([
   'with', 'the', 'a', 'an', 'and', 'for', 'needs', 'need', 'got', 'have', 'name', 'truck', 'trk', 'unit', 'tractor', 'email',
   'send', 'rc', 'ratecon', 'rate', 'then', 'who', 'that', 'it', 'i', 'we',
   'assist', 'assistance', 'eta', 'before', 'after', 'hours', 'available', 'required', 'confirmed',
+  // How a driver is, not who: "my driver is empty in St George", "driver is ready".
+  'empty', 'mt', 'ready', 'close', 'closer', 'about', 'here', 'there', 'nearby', 'free', 'loaded', 'loading', 'unloading',
+  'late', 'early', 'running', 'driving', 'waiting', 'coming', 'going', 'arriving', 'leaving', 'ok', 'okay', 'fine', 'good',
+  'off', 'already', 'still', 'now', 'today', 'tonight', 'tomorrow', 'just', 'also', 'not', 'resting', 'sleeping', 'back',
+  'parked', 'stuck', 'home', 'idle', 'done', 'almost', 'on', 'my', 'our', 'your', 'his', 'her', 'their', 'this', 'one',
+  'only', 'both', 'all', 'no', 'yes', 'so', 'very', 'too', 'always', 'never', 'busy', 'sure', 'set',
 ])
 const DRIVER_RE = /\bdriver(?:'s| is|:)?\s+(?:name\s*:?\s*(?:is\s+)?)?([a-z]+(?:\s+[a-z]+)?)/gi
 const TRUCK_NO_RE = /\b(?:truck|unit|trk|tractor)\s*(?:#|no\.?|number|:)?\s*([A-Z0-9][A-Z0-9-]{1,11})\b/gi
@@ -230,6 +236,28 @@ export const PAPER_ASK_LINE = Object.freeze({
   driverName: "What's the driver's name for the rate con?",
   truckNumber: "What's the truck number?",
 })
+
+// The order the broker asks for the paper details in (paperPrerequisite).
+const PAPER_ORDER = Object.freeze(['trailer', 'driverName', 'truckNumber'])
+const ASKS_DETAIL = Object.freeze({
+  trailer: /\btrailer\b|\bdry van\b|\breefer\b|\bflatbed\b/i,
+  driverName: /\bdriver\b/i,
+  truckNumber: /\b(?:truck|unit|tractor)\s*(?:number|#|no\b)/i,
+})
+
+// The next paper detail the reply must ask for, when the reply asks for one
+// that comes LATER in the order while an earlier one is still missing ("what's
+// the truck number?" with no driver name yet). null when the order holds or
+// the reply asks for none of them.
+export function paperAskOutOfOrder(reply, facts) {
+  const first = facts ? paperPrerequisite(facts) : null
+  if (!first) return null
+  const asked = asciiPunct(String(reply ?? '')).split(/(?<=[.!?])\s+/).filter((sentence) => sentence.includes('?'))
+  const firstRank = PAPER_ORDER.indexOf(first)
+  const later = PAPER_ORDER.slice(firstRank + 1)
+  const asksFirst = asked.some((sentence) => ASKS_DETAIL[first].test(sentence))
+  return !asksFirst && later.some((key) => asked.some((sentence) => ASKS_DETAIL[key].test(sentence))) ? first : null
+}
 
 // -- Reading a broker reply ------------------------------------------------
 

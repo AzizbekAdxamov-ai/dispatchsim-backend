@@ -43,7 +43,7 @@ const QUESTION_START = /^(?:what|where|when|who|whom|how|why|which|do|does|did|c
 // so the commas other rules lean on ("can't cover that, can u do 8975") stay.
 const CLOSE_OR_ACCEPT_START = "(?:and\\s+)?(?:we(?:'ve| have| got)|it'?s|it is|that'?s|you(?:'ve| have)? got|let'?s|book|send|deal|(?:we|i)(?:'ll| will) take)\\b"
 // A detail added after the answer ("book it, MC is 123456") is a clause of its own.
-const DETAIL_START = "(?:(?:my|our|the)\\s+)?(?:mc|dot|driver|truck|trailer|e-?mail|phone|number|name)\\b"
+const DETAIL_START = "(?:(?:my|our|the)\\s+)?(?:mc|dot|driver|truck|trailer|e-?mail|phone|number|name)\\b|(?:call|text|reach)\\s+(?:me|us)\\b"
 const COMMA_BEFORE_CLOSE = new RegExp(`,\\s*(?=${CLOSE_OR_ACCEPT_START}|${DETAIL_START})`, 'i')
 const AND_BEFORE_CLOSE = /\s+and\s+(?=(?:we(?:'ve| have)|it'?s|it is|that'?s|you(?:'ve)? got)\b[^.]*\bdeal\b)/i
 const SENTENCE_BREAK = /(?<=[.!?;])\s+|\n+/

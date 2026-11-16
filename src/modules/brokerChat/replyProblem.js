@@ -13,7 +13,7 @@ import { trippedBannedWord, leaksReasoning } from './brokerChat.prompt.js'
 import { tooLongForChat, CHAT_REPLY_MAX_CHARS } from '../../constants/chatBudget.js'
 import { ignoresUnreachable } from '../../lib/cannotMake.js'
 import { lumperPayerWrong, paymentTermsClaimed, PAYMENT_TERMS_LINE } from './termsTalk.js'
-import { saysBooked, confirmsUnknownBooking, mcQuestion, asksPaperDetails, NO_BOOKING_LINE } from './bookingTalk.js'
+import { saysBooked, confirmsUnknownBooking, mcQuestion, asksPaperDetails, paperAskOutOfOrder, PAPER_ASK_LINE, NO_BOOKING_LINE } from './bookingTalk.js'
 import {
   dollars, rateReasons, rateReasonLabels, unsupportedRateReasons, raiseWithoutReason, holdRateLine,
 } from './rateTalk.js'
@@ -373,6 +373,17 @@ export function brokerReplyProblem(reply, {
       hint: ' Their MC does not check out (see WHO IS CALLING): ask for the right MC first, nothing else on the booking list.',
       unusable: false,
     }
+  }
+  // Booking stage: the paper details are asked in one order (trailer, driver,
+  // truck number). A reply that asks for a later one first makes the dispatcher
+  // answer in the wrong order and the truck number gets read as the driver.
+  const outOfOrder = negotiation?.state?.agreed != null && booking?.mc.verdict === 'match' && reply !== negotiation.line
+    ? paperAskOutOfOrder(reply, booking) : null
+  if (outOfOrder) return {
+    why: 'asked for a paper detail out of order',
+    hint: ` Ask only this, and nothing later on the list: "${PAPER_ASK_LINE[outOfOrder]}"`,
+    unusable: true,
+    safeReply: PAPER_ASK_LINE[outOfOrder],
   }
   if (negotiation && /\bC[SD]T\b/.test(reply)) return {
     why: 'used an ambiguous Central time abbreviation', hint: ' Say Central Time, as the appointments are written.',
