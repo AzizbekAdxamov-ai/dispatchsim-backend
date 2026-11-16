@@ -33,4 +33,9 @@ export const STYLE_INSTRUCTION = Object.freeze({
 // Same broker, same conversation, same turn: same wording. A new turn picks anew.
 export const voiceKey = ({ brokerId, conversationId, revision }) => `${brokerId}:${conversationId}:${revision}`
 
+// Credit tier sets how formal a broker's first words are: A/B courteous full
+// sentences, C/D (and unknown) short.
+const FORMAL_TIERS = Object.freeze(['A', 'B'])
+export const openerRegister = (creditRating) => (FORMAL_TIERS.includes(String(creditRating ?? '').toUpperCase()) ? 'formal' : 'short')
+
 export const pickVariant = (list, key) => list[Math.floor(hash01(key) * list.length)]

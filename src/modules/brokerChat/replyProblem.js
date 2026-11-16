@@ -99,13 +99,13 @@ function answersWrongMcLine(text, booking) {
 
 // The greeting the broker answers a bare hello with: their own style, and how
 // they are when they were asked.
-const greetingFor = (text, negotiation) => introductionReply({ style: negotiation?.style, key: negotiation?.voiceKey, howAreYou: asksHowAreYou(text) })
+const greetingFor = (text, negotiation, creditRating = null) => introductionReply({ style: negotiation?.style, key: negotiation?.voiceKey, howAreYou: asksHowAreYou(text), creditRating })
 
 function discussionReply(text, posting, negotiation) {
   if (negotiation?.line) return negotiation.line
-  if (introductionOnly(text)) return greetingFor(text, negotiation)
+  if (introductionOnly(text)) return greetingFor(text, negotiation, posting.creditRating)
   if (/\b(?:hi|hey|hello|wassap|wassup|what'?s up)\b/i.test(text)) {
-    return `Hey! I've got the ${posting.originCity} to ${posting.destinationCity} load here.`
+    return `Hi, I've got the ${posting.originCity} to ${posting.destinationCity} load here.`
   }
   if (/\b(?:available|avaivable|open|still there)\b/i.test(text)) {
     return `Yes, the ${posting.originCity} to ${posting.destinationCity} load is still available.`
@@ -188,7 +188,7 @@ export function brokerReplyProblem(reply, {
   )) return {
     why: 'pitched a particular load before the dispatcher identified one',
     hint: ' Return only their greeting and optionally your own name. Do not volunteer a lane, availability or price.',
-    unusable: true, safeReply: greetingFor(text, negotiation),
+    unusable: true, safeReply: greetingFor(text, negotiation, posting.creditRating),
   }
   // A greeting that opens a real question is returned in a few words first.
   // A server line (a rate decision, a booking step) keeps its own wording.
@@ -196,7 +196,7 @@ export function brokerReplyProblem(reply, {
   if (GREETING_LEAD.test(greeted) && !introductionOnly(text) && !negotiation?.line && !GREETS_BACK.test(reply.split(/(?<=[.!?])\s+/)[0])) return {
     why: 'skipped their greeting',
     hint: ' Return their greeting in a few words first, then answer.',
-    unusable: true, safeReply: `${greetingLead({ style: negotiation?.style, key: negotiation?.voiceKey })} ${reply.trim()}`,
+    unusable: true, safeReply: `${greetingLead({ style: negotiation?.style, key: negotiation?.voiceKey, creditRating: posting?.creditRating })} ${reply.trim()}`,
   }
   if (negotiation?.intent?.kind === 'cancel' && SAYS_CANCELLED_RE.test(reply) && SAYS_ON_HOLD_RE.test(reply)) return {
     why: 'called a cancelled load both cancelled and on hold',

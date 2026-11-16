@@ -23,6 +23,7 @@ import { getCarrier, carrierEmail } from '../carrier/carrier.repository.js'
 import { findById } from '../auth/users.repository.js'
 import { negotiate, lastAuthorizedEmail, pendingBasisAskUsd, settledRateBasis, lastCarrierAskUsd, RATE_MISS_REASON } from './negotiation.js'
 import { varyRepeat, dropStaleRepeatLead, dropRepeatedSentences } from './repeatGuard.js'
+import { fixOpener } from './openerGuard.js'
 import { buildBrokerContext } from './brokerContext.js'
 import * as repo from './brokerChat.repository.js'
 import { talkFacts } from '../../constants/freightTerms.js'
@@ -386,6 +387,8 @@ export async function sendMessage({ conversationId, userId, text, cancelBooking 
     // Model text only: the server's own line is fixed wording and stays as is.
     if (reply !== decision?.line) reply = dropRepeatedSentences(dropStaleRepeatLead(reply, brokerSaid), brokerSaid)
     reply = varyRepeat(reply, brokerSaid)
+    // Last: how the message begins (no "hey"/"yep", not the same first word as the last one).
+    reply = fixOpener(reply, { brokerSaid, creditRating: posting.creditRating, key: decision?.voiceKey ?? '', fixedWording: reply === decision?.line })
   } catch (err) {
     failure = err.message
     console.error(`[brokerChat] model call failed: ${err.message}`)
