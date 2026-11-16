@@ -74,37 +74,52 @@ export async function rollEvents({ rng = Math.random, limit = 50 } = {}) {
 
     try {
       // eslint-disable-next-line no-await-in-loop
-      const event = await withTransaction(async (client) => {
-        const row = await repo.raiseEvent(client, { loadId: load.id, eventType, place })
-        // null means this load already had an open event between the
-        // SELECT and here. Not an error.
-        return row
-      })
+      const event = await raiseOnLoad({ load, eventType, place })
       if (!event) continue
-
-      // The wait goes on the driver's log NOW -- the truck stopped when
-      // the event happened, not when the dispatcher decides. Fire and
-      // forget like the chat report below: a log write that fails must
-      // not un-raise an event that has already happened, and the fact
-      // lands on the load's stop_plan_facts either way.
-      // eslint-disable-next-line no-await-in-loop
-      await logOpenEventWait({ loadId: load.id, eventType, eventAt: event.occurredAt })
-        .catch((e) => console.error(`[loadEvents] could not log the open wait on ${load.id}:`, e.message))
-
-      // The driver reports it. Fire and forget: a chat write that fails
-      // must not un-raise an event that has already happened.
-      if (load.driverId) {
-        // eslint-disable-next-line no-await-in-loop
-        await reportToDriver({ driverId: load.driverId, eventType, place })
-          .catch((e) => console.error('[loadEvents] could not report to chat:', e.message))
-      }
-      raised.push({ ...event, driverId: load.driverId })
+      raised.push(event)
     } catch (err) {
       console.error(`[loadEvents] could not raise on ${load.id}: ${err.message}`)
     }
   }
 
   return raised
+}
+
+// Raise one event on one load and do everything that follows it: the open
+// wait on the driver's log and the driver's own call (a chat message about
+// EVENT_REPORT_DELAY_SEC later). The tick's roll and scripts/raise-event.js
+// both end here, so a forced event is the same event, not a lookalike.
+// Returns null when the load already had an open event (not an error).
+export async function raiseOnLoad({ load, eventType, place }) {
+  // null from the insert means this load already had an open event
+  // between the caller's SELECT and here. Not an error.
+  const event = await withTransaction((client) =>
+    repo.raiseEvent(client, { loadId: load.id, eventType, place }))
+  if (!event) return null
+
+  // The wait goes on the driver's log NOW -- the truck stopped when
+  // the event happened, not when the dispatcher decides. Fire and
+  // forget like the chat report below: a log write that fails must
+  // not un-raise an event that has already happened, and the fact
+  // lands on the load's stop_plan_facts either way.
+  await logOpenEventWait({ loadId: load.id, eventType, eventAt: event.occurredAt })
+    .catch((e) => console.error(`[loadEvents] could not log the open wait on ${load.id}:`, e.message))
+
+  // The driver reports it. Fire and forget: a chat write that fails
+  // must not un-raise an event that has already happened.
+  if (load.driverId) {
+    await reportToDriver({ driverId: load.driverId, eventType, place })
+      .catch((e) => console.error('[loadEvents] could not report to chat:', e.message))
+  }
+  return { ...event, driverId: load.driverId }
+}
+
+// What scripts/raise-event.js needs to see before it acts: the load row
+// (whatever its state) and the open event, if any.
+export async function loadForEvent(loadId) {
+  const load = await repo.loadForEvent(loadId)
+  if (!load) return null
+  return { load, openEvent: await repo.openEvent(loadId) }
 }
 
 // The dispatcher reports something the driver has not called in (an accident

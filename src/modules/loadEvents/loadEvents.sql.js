@@ -19,6 +19,12 @@
 // newest row a truck has; a truck with no reports reads clean. Same mix
 // change as serviceOverdue: the state always meets a breakdown, see
 // rollEvents.
+// The statuses a load can be in while it is on the road. One list, used by
+// the tick's query below and by scripts/raise-event.js, so "in transit"
+// means the same thing to both.
+export const IN_TRANSIT_STATUSES = Object.freeze(['ontime', 'warn', 'crit'])
+const IN_TRANSIT_STATUS_LIST = IN_TRANSIT_STATUSES.map((s) => `'${s}'`).join(', ')
+
 export const IN_TRANSIT_LOADS_SQL = `
   SELECT l.id, l.driver_id AS "driverId", l.distance_mi AS "distanceMi",
          l.origin_city AS "originCity", l.origin_state AS "originState",
@@ -57,13 +63,29 @@ export const IN_TRANSIT_LOADS_SQL = `
    WHERE l.delivered_at IS NULL
      AND l.dispatched_at IS NOT NULL
      AND l.eta_at IS NOT NULL
-     AND l.status IN ('ontime', 'warn', 'crit')
+     AND l.status IN (${IN_TRANSIT_STATUS_LIST})
      AND NOT EXISTS (
            SELECT 1 FROM load_events e
             WHERE e.load_id = l.id AND e.resolved_at IS NULL
          )
    ORDER BY l.dispatched_at
    LIMIT $1`
+
+// One load by id, with no in-transit filter, for scripts/raise-event.js: it
+// has to say WHY a load cannot take an event (delivered, not dispatched,
+// wrong status), which the tick's own query cannot -- it just omits those.
+// Same columns the roll reads (place and ETA), plus the driver's name.
+export const LOAD_FOR_EVENT_SQL = `
+  SELECT l.id, l.status, l.driver_id AS "driverId", d.name AS "driverName",
+         l.origin_city AS "originCity", l.origin_state AS "originState",
+         l.destination_city AS "destinationCity", l.destination_state AS "destinationState",
+         l.dispatched_at AS "dispatchedAt", l.delivered_at AS "deliveredAt",
+         l.eta_at AS "etaAt", l.promised_eta_at AS "promisedEtaAt",
+         EXTRACT(EPOCH FROM (now() - l.dispatched_at))
+           / NULLIF(EXTRACT(EPOCH FROM (l.eta_at - l.dispatched_at)), 0) AS "elapsedFraction"
+    FROM loads l
+    LEFT JOIN drivers d ON d.id = l.driver_id
+   WHERE l.id = $1`
 
 // Mark a load as rolled, whatever the outcome. Written for every load the
 // tick looked at -- not only the ones that met something -- or the elapsed

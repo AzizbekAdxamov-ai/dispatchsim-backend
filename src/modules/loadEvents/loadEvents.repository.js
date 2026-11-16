@@ -7,6 +7,11 @@ export async function inTransitLoads(client, limit = 50) {
   return result.rows
 }
 
+export async function loadForEvent(loadId) {
+  const result = await query(SQL.LOAD_FOR_EVENT_SQL, [loadId])
+  return result.rows[0] ?? null
+}
+
 // Returns null when this load already has an open event -- the normal
 // case on a busy tick, not a failure.
 export async function raiseEvent(client, { loadId, eventType, place }) {
