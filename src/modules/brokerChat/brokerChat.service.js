@@ -284,6 +284,7 @@ export async function sendMessage({ conversationId, userId, text, cancelBooking 
     pendingBasisUsd: pendingBasisAskUsd(thread, posting),
     settledBasis,
     lastAskUsd: lastCarrierAskUsd(dispatcherTexts(thread).slice(0, -1), posting, settledBasis),
+    lastBrokerLine: brokerSaid.at(-1) ?? null,
     offerVisible: brokerSaid.some((line) => line.replaceAll(',', '').includes(String(turnConversation.brokerOfferUsd ?? posting.rateUsd))),
   })
   const paper = { status: decision.state.agreed === null ? 'open' : 'agreed', delivered: delivered && !decision.invalidatePaper, stage: decision.state.stage }
