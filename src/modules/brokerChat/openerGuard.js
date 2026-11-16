@@ -26,7 +26,9 @@ const SELF_INTRO = /^[A-Z][a-z]+ here\b[\s,!.:;-]*/
 // "whats up" / "what's up" left over after "yo bro".
 const GREETING_TAIL = /^what'?s up\b[\s,!.?:;-]*/i
 // A reply that opens with an acknowledgment; the word it would repeat.
-const ACK_OPENING = /^(?:thank you|thanks|got it|okay|ok|yes|sure|understood|certainly|alright|all right|noted)\b[\s,!.:;-]*/i
+const ACK_OPENING = /^(?:thank you|thanks|got it|okay|ok|sure|understood|certainly|alright|all right|noted)\b[\s,!.:;-]*/i
+// "Yes" and "no" answer the question; they are not filler, so they are never swapped or prefixed.
+const ANSWER_WORDS = new Set(['yes', 'no'])
 const OPENS_WITH_FIGURE = /^\$|^\d/
 const FIRST_WORD = /[a-z0-9']+/i
 const REPEAT_LEAD_WORDS = new Set(REPEAT_LEADS.map((lead) => lead.match(FIRST_WORD)[0].toLowerCase()))
@@ -72,7 +74,7 @@ export function fixOpener(reply, { brokerSaid = [], creditRating = null, key = '
   if (fixedWording) return text
   const first = firstWordOf(text)
   // A figure is not a word to vary, a repeat lead-in ("Like I said") and a greeting are meant to recur.
-  if (last === null || first !== last || OPENS_WITH_FIGURE.test(text.trimStart()) || REPEAT_LEAD_WORDS.has(first) || GREETING_LEAD.test(text.trim())) return text
+  if (last === null || first !== last || ANSWER_WORDS.has(first) || OPENS_WITH_FIGURE.test(text.trimStart()) || REPEAT_LEAD_WORDS.has(first) || GREETING_LEAD.test(text.trim())) return text
   if (ACK_OPENING.test(text.trimStart())) return swapAcknowledgment(text.trimStart(), register, key, last)
   return `${acknowledgment(register, key, last)} ${text.trimStart()}`
 }

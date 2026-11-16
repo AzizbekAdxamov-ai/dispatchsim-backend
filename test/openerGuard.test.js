@@ -203,3 +203,11 @@ test('the acknowledgment that replaces a lone banned word differs from the last 
     }
   }
 })
+
+test('"yes" and "no" are answers: a repeated one stays as it is', () => {
+  // Kills: treating "yes" as a filler ack (swapped for "Got it." and the answer is lost)
+  assert.equal(fixOpener('Yes.', { brokerSaid: ['Yes, ok.'], creditRating: 'C', key: KEY }), 'Yes.')
+  assert.equal(fixOpener('Yes, we can do $3,750.', { brokerSaid: ['Yes, ok.'], creditRating: 'A', key: KEY }), 'Yes, we can do $3,750.')
+  // Kills: dropping "no" from ANSWER_WORDS (a lead put in front of the answer)
+  assert.equal(fixOpener('No, that is the best I can do.', { brokerSaid: ['No, sorry.'], key: KEY }), 'No, that is the best I can do.')
+})
