@@ -146,3 +146,60 @@ test('the formal and short lead-ins are different wording', () => {
   // Kills: both registers sharing one lead list (A/B no more formal than C/D)
   assert.deepEqual(OPENER_LEADS.formal.filter((lead) => OPENER_LEADS.short.includes(lead)), [])
 })
+
+test('"yo" is a banned opener too, with its pet word and the greeting after it', () => {
+  // Kills: dropping "yo" from BANNED_OPENERS
+  assert.equal(fixOpener('Yo, we can do $3,750 all-in.', { key: KEY }), 'We can do $3,750 all-in.')
+  // Kills: not stripping the pet word / "what's up" after "yo"
+  assert.ok(OPENER_LEADS.short.includes(fixOpener('yo bro whats up', { key: KEY })))
+})
+
+test('a name or "there" after "hey" goes with it and the reply reads naturally', () => {
+  // Kills: stripping only the bare word (leaves "Mike! I can do ...")
+  assert.equal(fixOpener('Hey Mike, I can do $3,750 all-in.', { key: KEY }), 'I can do $3,750 all-in.')
+  assert.equal(fixOpener('Hey Dana! I can do $3,750 all-in.', { key: KEY }), 'I can do $3,750 all-in.')
+  // Kills: no self-introduction strip ("Dana here." left as the whole reply)
+  assert.ok(OPENER_LEADS.formal.includes(fixOpener('Hey there, Dana here.', { creditRating: 'A', key: KEY })))
+  // Kills: the name pattern ignoring case (strips "sure" from "Yep sure, ...")
+  assert.equal(fixOpener('Yep sure, I can do $3,750 all-in.', { key: KEY }), 'Sure, I can do $3,750 all-in.')
+  // Kills: stripping a capitalised word that is not followed by punctuation
+  assert.equal(fixOpener('Hey Dallas is still open.', { key: KEY }), 'Dallas is still open.')
+})
+
+test('a repeated or decorated banned opener is stripped completely', () => {
+  // Kills: stripping only once
+  assert.equal(fixOpener('Hey, hey, can you send your MC?', { key: KEY }), 'Can you send your MC?')
+  // Kills: not skipping leading emoji and quotes when looking for the opener
+  assert.equal(fixOpener('\u{1F44D} Yep, sure.', { key: KEY }), 'Sure.')
+  assert.equal(fixOpener('"Hey, we can do $3,750 all-in."', { key: KEY }), 'We can do $3,750 all-in."')
+})
+
+test('an acknowledgment the last message used is swapped, never stacked', () => {
+  const swapped = fixOpener('Ok, I can do $3,750 all-in.', { brokerSaid: ['Ok, noted.'], creditRating: 'C', key: KEY })
+  // Kills: prepending a lead instead of replacing the repeated acknowledgment ("Sure. Ok, I can do ...")
+  assert.match(swapped, /^(?:Sure|Got it), I can do \$3,750 all-in\.$/)
+  const bare = fixOpener('Ok.', { brokerSaid: ['Ok, noted.'], creditRating: 'C', key: KEY })
+  // Kills: leaving a bare acknowledgment that repeats the last one
+  assert.ok(OPENER_LEADS.short.includes(bare) && firstWord(bare) !== 'ok', bare)
+  const formal = fixOpener('Thank you, I can do $3,750 all-in.', { brokerSaid: ['Thank you for the call.'], creditRating: 'A', key: KEY })
+  // Kills: a replacement from the wrong register or one that repeats the first word
+  assert.match(formal, /^(?:Understood|Certainly), I can do \$3,750 all-in\.$/)
+})
+
+test('a figure at the start is not a repeated first word', () => {
+  // Kills: comparing the digits of the figure as a word ("3")
+  assert.equal(fixOpener('$3,825 is my number.', { brokerSaid: ['$3,750 is my number.'], key: KEY }), '$3,825 is my number.')
+  assert.equal(fixOpener('3,825 all-in is it.', { brokerSaid: ['3,750 all-in is it.'], key: KEY }), '3,825 all-in is it.')
+})
+
+test('the acknowledgment that replaces a lone banned word differs from the last first word', () => {
+  for (const lead of [...OPENER_LEADS.short, ...OPENER_LEADS.formal]) {
+    const word = firstWord(lead)
+    const tier = OPENER_LEADS.formal.includes(lead) ? 'A' : 'C'
+    for (let index = 0; index < KEY_SAMPLES; index += 1) {
+      const out = fixOpener('Yep.', { brokerSaid: [`${lead} Noted.`], creditRating: tier, key: `k${index}` })
+      // Kills: the replacement chosen without looking at the last message
+      assert.notEqual(firstWord(out), word, `${tier}/${index}: ${out}`)
+    }
+  }
+})
