@@ -207,8 +207,15 @@ export async function bookPosting({ postingId, userId, driverId, agreement = nul
           throw new AppError('POSTING_TAKEN')
         }
 
-        // Expired
-        if (existing.expiresAt <= new Date()) {
+        // Held for another dispatcher's conversation (077)
+        const heldByUser = existing.heldByUserId === userId
+        if (existing.heldUntil > new Date() && !heldByUser) {
+          throw new AppError('POSTING_TAKEN')
+        }
+
+        // Expired: the posted expiry, unless this user's own hold runs later
+        const deadline = heldByUser && existing.heldUntil > existing.expiresAt ? existing.heldUntil : existing.expiresAt
+        if (deadline <= new Date()) {
           throw new AppError('POSTING_EXPIRED')
         }
 

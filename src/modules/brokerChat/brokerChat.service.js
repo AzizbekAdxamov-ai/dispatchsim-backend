@@ -24,6 +24,10 @@ import { findById } from '../auth/users.repository.js'
 import { negotiate, lastAuthorizedEmail, pendingBasisAskUsd, settledRateBasis, lastCarrierAskUsd, RATE_MISS_REASON } from './negotiation.js'
 import { varyRepeat, dropStaleRepeatLead, dropRepeatedSentences } from './repeatGuard.js'
 import { fixOpener } from './openerGuard.js'
+import {
+  effectiveExpiry, heldByOther, holdEnded, expiryNotice, minutesLeft, EXPIRY_WARNING_LINE, COVERED_LINE,
+  EXPIRY_WARNING_MINUTES, NOTICE_WARN, NOTICE_COVERED, heldByThis,
+} from './postingHold.js'
 import { buildBrokerContext } from './brokerContext.js'
 import * as repo from './brokerChat.repository.js'
 import { talkFacts } from '../../constants/freightTerms.js'
@@ -47,11 +51,16 @@ const BOOKED_STATUSES = Object.freeze(['agreed', 'booked'])
 // visibility rule as the board, including "not yet dripped" reading as
 // not-found rather than expired — an EXPIRED answer for a posting that has
 // not appeared yet would confirm it exists.
-function assertPostingOpen(posting) {
+//
+// A posting held (migration 077) for another conversation is taken; one held
+// for this conversation stays open until its hold runs out, even past the
+// posted expiry. No conversation id (opening a thread) means the plain rules.
+export function assertPostingOpen(posting, conversationId = null) {
   if (!posting) throw new AppError('POSTING_NOT_FOUND')
   if (new Date(posting.postedAt) > new Date()) throw new AppError('POSTING_NOT_FOUND')
   if (posting.status !== 'open') throw new AppError('POSTING_TAKEN')
-  if (new Date(posting.expiresAt) <= new Date()) throw new AppError('POSTING_EXPIRED')
+  if (heldByOther(posting, conversationId)) throw new AppError('POSTING_TAKEN')
+  if (effectiveExpiry(posting, conversationId) <= new Date()) throw new AppError('POSTING_EXPIRED')
   if (!posting.brokerId) throw new AppError('BROKER_UNAVAILABLE')
 }
 
@@ -76,7 +85,8 @@ async function assertCarrierVerified(conversationId, posting, deps = DEFAULT_DEP
 
 export async function openConversation({ postingId, userId }) {
   const posting = await repo.getPostingWithBroker(postingId)
-  assertPostingOpen(posting)
+  // Re-opening the thread that holds the posting is the holder coming back.
+  assertPostingOpen(posting, posting?.heldByUserId === userId ? posting.heldByConversationId : null)
   if (await repo.isBrokerBlocked({ brokerId: posting.brokerId, brokerMc: posting.mcNumber })) throw new AppError('BROKER_BLOCKED')
 
   const conversation = await repo.openConversation(postingId, userId)
@@ -114,12 +124,29 @@ export function brokerTexts(messages) {
   return (messages ?? []).filter((m) => m.role === 'broker' && m.kind !== 'rate_con').map((m) => m.content)
 }
 
+// The one-shot messages about the end of the hold (warning, then "covered").
+// Written when the thread is read or a message is sent, whichever comes first;
+// the conditional UPDATE behind deliverExpiryNotice makes each happen once.
+async function deliverDueNotice({ repo, conversation, posting, now }) {
+  const kind = expiryNotice({
+    posting, conversationId: conversation.id, now, status: conversation.status,
+    warnedAt: conversation.expiryWarnedAt, noticedAt: conversation.expiryNoticedAt,
+  })
+  if (!kind) return false
+  const line = kind === NOTICE_WARN
+    ? EXPIRY_WARNING_LINE(minutesLeft(effectiveExpiry(posting, conversation.id), now))
+    : COVERED_LINE
+  return (await repo.deliverExpiryNotice?.(conversation.id, kind, line)) === true
+}
+
 export async function getThread({ conversationId, userId }, { deps = DEFAULT_DEPS } = {}) {
   const repo = deps.repo
   const conversation = await repo.getConversation(conversationId, userId)
   if (!conversation) throw new AppError('CONVERSATION_NOT_FOUND')
 
   const posting = await repo.getPostingWithBroker(conversation.postingId)
+  const now = new Date()
+  if (posting) await deliverDueNotice({ repo, conversation, posting, now })
   // A blocked broker's thread stays readable (the cancel exchange is in it);
   // only writing to it is refused. A 409 here made the panel lose the
   // thread right after the block (live T5).
@@ -147,6 +174,11 @@ export async function getThread({ conversationId, userId }, { deps = DEFAULT_DEP
     // before-booking points raised (src/constants/freightTerms.js).
     talk: posting ? talkFacts(dispatcherTexts(messages), posting.equipmentType) : null,
     awaitingReply: await repo.hasPendingReply(conversationId),
+    // When the posting stops being available to this thread, for the countdown
+    // above the messages. Nothing once it is booked.
+    expiry: posting?.expiresAt && conversation.status !== 'booked'
+      ? { expiresAt: effectiveExpiry(posting, conversation.id).toISOString(), held: heldByThis(posting, conversation.id), warnMinutes: EXPIRY_WARNING_MINUTES }
+      : null,
     // The block is the broker's, but a delivered load's own thread stays
     // writable (payment questions), so the panel must not lock it.
     blocked: blocked && (!facts || loadStage(facts) !== LOAD_STAGES.DELIVERED),
@@ -242,7 +274,17 @@ export async function sendMessage({ conversationId, userId, text, cancelBooking 
     const dispatcherMessage = await deps.repo.addExchange({ conversationId, text, line: RELEASED_LINE })
     return { dispatcherMessage, awaitingReply: false, released: true }
   }
-  assertPostingOpen(posting)
+  // The hold ran out: the broker has given the load to someone else. A fixed
+  // line, no model call, no budget spent -- and the notice is marked spent so
+  // the thread does not say it a second time on the next read.
+  if (holdEnded(posting, conversationId)) {
+    await deps.repo.deliverExpiryNotice?.(conversationId, NOTICE_COVERED, null)
+    const dispatcherMessage = await deps.repo.addExchange({ conversationId, text, line: COVERED_LINE })
+    return { dispatcherMessage, awaitingReply: false, covered: true }
+  }
+  assertPostingOpen(posting, conversationId)
+  // A warning due now goes into the thread before this turn's own messages.
+  await deliverDueNotice({ repo: deps.repo, conversation, posting, now: new Date() })
 
   // Shared with the driver chat and derived from the provider's published
   // daily limit -- see src/constants/chatBudget.js. One budget, counted
@@ -294,7 +336,7 @@ export async function sendMessage({ conversationId, userId, text, cancelBooking 
   const { systemPrompt, history } = buildBrokerContext({
     carrier,
     broker: { name: posting.name, contactName: posting.contactName, persona: posting.persona },
-    posting,
+    posting: posting.expiresAt ? { ...posting, expiresAt: effectiveExpiry(posting, conversationId).toISOString() } : posting,
     now,
     thread,
     said,
@@ -457,7 +499,7 @@ export async function agreeRate({ conversationId, userId, rateUsd }, { deps = DE
   if (!conversation) throw new AppError('CONVERSATION_NOT_FOUND')
 
   const posting = await deps.repo.getPostingWithBroker(conversation.postingId)
-  assertPostingOpen(posting)
+  assertPostingOpen(posting, conversationId)
 
   // loads_rpm_band (migration 007) requires rate_usd between distance and
   // distance * 5. Catching it here means a bad number fails on the agree
@@ -503,7 +545,7 @@ export async function acceptRateCon({ conversationId, userId }, { deps = DEFAULT
   if (!(await deps.repo.rateConDelivered(conversationId))) throw new AppError('RATE_CON_NOT_ARRIVED')
 
   const posting = await deps.repo.getPostingWithBroker(conversation.postingId)
-  assertPostingOpen(posting)
+  assertPostingOpen(posting, conversationId)
   await assertCarrierVerified(conversationId, posting, deps)
 
   // No driver here on purpose. Accepting the paper commits the company to

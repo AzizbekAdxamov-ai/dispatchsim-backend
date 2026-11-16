@@ -5,6 +5,7 @@ import { withdrawBookedLoad } from '../loads/loadWithdrawal.js'
 import { AppError } from '../../lib/errors.js'
 import { chatIntent } from './negotiation.js'
 import { rateQuote, ALL_IN } from './rateQuote.js'
+import { HOLD_MINUTES, NOTICE_WARN, NOTICE_COVERED, heldByOther, effectiveExpiry } from './postingHold.js'
 import { blockUntil, BROKER_BLOCK_DAYS, BLOCK_REASON_CARRIER_CANCEL, BLOCK_REASON_WAIT_NO_ETA } from './blockPolicy.js'
 
 // rate_con_rate_usd is deliberately ABSENT here.
@@ -27,6 +28,7 @@ const CONVERSATION_COLUMNS = `
   c.recipient_email AS "recipientEmail", c.rate_push_count AS "ratePushCount",
   c.best_counter_used AS "bestCounterUsed", c.negotiation_revision AS "negotiationRevision",
   c.pending_close_usd AS "pendingCloseUsd",
+  c.expiry_warned_at AS "expiryWarnedAt", c.expiry_noticed_at AS "expiryNoticedAt",
   c.created_at AS "createdAt", c.updated_at AS "updatedAt"
 `
 
@@ -48,6 +50,8 @@ export async function getPostingWithBroker(postingId) {
             p.equipment_length_ft AS "equipmentLengthFt",
             p.pickup_at AS "pickupAt", p.delivery_at AS "deliveryAt",
             p.status, p.posted_at AS "postedAt", p.expires_at AS "expiresAt",
+            p.held_by_conversation_id AS "heldByConversationId", p.held_until AS "heldUntil",
+            (SELECT hc.user_id FROM broker_conversations hc WHERE hc.id = p.held_by_conversation_id) AS "heldByUserId",
             b.id AS "brokerId", b.name, b.contact_name AS "contactName",
             b.persona, b.credit_rating AS "creditRating",
             b.mc_number AS "mcNumber", b.days_to_pay AS "daysToPay"
@@ -334,18 +338,65 @@ export async function markBooked(conversationId, userId) {
   return result.rows[0] ?? null
 }
 
-// Lock posting before conversation, the same order booking uses. No AI call runs
+// Lock posting before conversation, the same order booking uses. FOR NO KEY UPDATE, not
+// FOR SHARE: completeChatTurn may write the hold on this row, and two share-lockers
+// upgrading at once would deadlock. No AI call runs
 // inside a transaction. Reserving a revision makes an older in-flight answer inert.
 async function lockedConversation(client, conversationId, userId) {
   const found = await client.query('SELECT posting_id FROM broker_conversations WHERE id = $1 AND user_id = $2', [conversationId, userId])
   if (!found.rows[0]) throw new AppError('CONVERSATION_NOT_FOUND')
-  const p = await client.query('SELECT status, posted_at, expires_at, rate_basis AS "rateBasis", fuel_surcharge_usd AS "fuelSurchargeUsd" FROM load_postings WHERE id = $1 FOR SHARE', [found.rows[0].posting_id])
+  const p = await client.query('SELECT status, posted_at, expires_at, held_by_conversation_id AS "heldByConversationId", held_until AS "heldUntil", rate_basis AS "rateBasis", fuel_surcharge_usd AS "fuelSurchargeUsd" FROM load_postings WHERE id = $1 FOR NO KEY UPDATE', [found.rows[0].posting_id])
   const posting = p.rows[0]
   if (!posting || new Date(posting.posted_at) > new Date()) throw new AppError('POSTING_NOT_FOUND')
   if (posting.status !== 'open') throw new AppError('POSTING_TAKEN')
-  if (new Date(posting.expires_at) <= new Date()) throw new AppError('POSTING_EXPIRED')
+  // Held for another conversation: not this one's to talk about. Held for
+  // this one: the hold may carry it past the posted expiry.
+  if (heldByOther(posting, conversationId)) throw new AppError('POSTING_TAKEN')
+  if (effectiveExpiry({ expiresAt: posting.expires_at, heldByConversationId: posting.heldByConversationId, heldUntil: posting.heldUntil }, conversationId) <= new Date()) throw new AppError('POSTING_EXPIRED')
   const c = await client.query(`SELECT ${CONVERSATION_COLUMNS} FROM broker_conversations c WHERE c.id = $1 AND c.user_id = $2 FOR UPDATE`, [conversationId, userId])
   return { ...c.rows[0], postingRateBasis: posting.rateBasis, postingFuelSurchargeUsd: posting.fuelSurchargeUsd }
+}
+
+// Hold the posting for this conversation (migration 077). One conditional
+// UPDATE is the race gate: it only matches a posting nobody holds, a hold that
+// has run out, or this conversation's own hold -- which keeps its end time
+// (a second agreement never extends it). No row means another conversation
+// got there first, and this turn is rolled back with POSTING_TAKEN.
+// The hold ends HOLD_MINUTES from now, or at pickup if that comes first.
+async function holdPosting(client, conversationId, postingId) {
+  const result = await client.query(
+    `UPDATE load_postings
+        SET held_by_conversation_id = $2,
+            held_until = CASE WHEN held_by_conversation_id = $2 THEN held_until
+                              ELSE LEAST(pickup_at, now() + make_interval(mins => $3)) END
+      WHERE id = $1
+        AND (held_by_conversation_id IS NULL OR held_by_conversation_id = $2 OR held_until <= now())`,
+    [postingId, conversationId, HOLD_MINUTES],
+  )
+  if (result.rowCount === 0) throw new AppError('POSTING_TAKEN')
+}
+
+// Let the posting go: the agreement was taken back, or the thread walked.
+async function releaseHold(client, conversationId) {
+  await client.query(
+    'UPDATE load_postings SET held_by_conversation_id = NULL, held_until = NULL WHERE held_by_conversation_id = $1',
+    [conversationId],
+  )
+}
+
+// One-shot broker message about the end of the hold. The conditional UPDATE
+// decides who writes it: a second reader of the thread matches no row. A null
+// line only records that the notice is spent (the caller said it another way).
+const NOTICE_COLUMNS = Object.freeze({ [NOTICE_WARN]: 'expiry_warned_at', [NOTICE_COVERED]: 'expiry_noticed_at' })
+export async function deliverExpiryNotice(conversationId, kind, line) {
+  const column = NOTICE_COLUMNS[kind]
+  if (!column) throw new Error(`unknown expiry notice: ${kind}`)
+  return withTransaction(async (client) => {
+    const marked = await client.query(`UPDATE broker_conversations SET ${column} = now() WHERE id = $1 AND ${column} IS NULL RETURNING id`, [conversationId])
+    if (marked.rowCount === 0) return false
+    if (line) await client.query("INSERT INTO broker_messages (conversation_id, role, content, deliver_at) VALUES ($1, 'broker', $2, clock_timestamp())", [conversationId, line])
+    return true
+  })
 }
 
 export async function beginChatTurn(conversationId, userId, text) {
@@ -365,7 +416,10 @@ export async function beginChatTurn(conversationId, userId, text) {
       negotiation_stage = CASE WHEN $3 THEN $4 ELSE negotiation_stage END, updated_at = now()
       WHERE id = $1 AND user_id = $2 RETURNING negotiation_revision`,
     [conversationId, userId, invalidate, intent.kind === 'hold' ? 'held' : 'negotiating'])
-    if (invalidate) await client.query("UPDATE broker_messages SET voided_at = now(), void_reason = 'superseded' WHERE conversation_id = $1 AND kind = 'rate_con' AND voided_at IS NULL", [conversationId])
+    if (invalidate) {
+      await client.query("UPDATE broker_messages SET voided_at = now(), void_reason = 'superseded' WHERE conversation_id = $1 AND kind = 'rate_con' AND voided_at IS NULL", [conversationId])
+      await releaseHold(client, conversationId)
+    }
     // Superseded pending prose must not say a previous rate was accepted after a hold.
     await client.query("DELETE FROM broker_messages WHERE conversation_id = $1 AND role = 'broker' AND kind = 'text' AND deliver_at > now()", [conversationId])
     const message = await client.query(`INSERT INTO broker_messages (conversation_id, role, content)
@@ -379,6 +433,8 @@ export async function completeChatTurn({ conversationId, userId, revision, decis
     const conversation = await lockedConversation(client, conversationId, userId)
     if (conversation.negotiationRevision !== revision) return false
     const s = decision.state
+    if (s.agreed !== null || s.pendingClose != null) await holdPosting(client, conversationId, conversation.postingId)
+    else await releaseHold(client, conversationId)
     const paperQuote = decision.issuePaper ? rateQuote(decision.rateQuote ?? {}, paperRate) : null
     if (decision.invalidatePaper) await client.query("UPDATE broker_messages SET voided_at = now(), void_reason = 'superseded' WHERE conversation_id = $1 AND kind = 'rate_con' AND voided_at IS NULL", [conversationId])
     await client.query(`UPDATE broker_conversations SET broker_offer_usd = $3,
@@ -462,6 +518,7 @@ async function withdrawAgreement(client, conversationId, voidReason) {
        FOR UPDATE OF c`, [conversationId])
   const loadId = booked.rows[0]?.bookedLoadId
   if (loadId) await withdrawBookedLoad(client, { loadId, reason: voidReason })
+  await releaseHold(client, conversationId)
   await client.query(`UPDATE broker_conversations SET agreed_rate_usd = NULL, rate_con_rate_usd = NULL,
     rate_con_basis = NULL, rate_con_fuel_surcharge_usd = NULL, recipient_email = NULL,
     pending_close_usd = NULL,
