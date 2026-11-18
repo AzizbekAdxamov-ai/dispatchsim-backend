@@ -54,3 +54,20 @@ test('revoking mentor access applies on the next request with the same token', a
   assert.notEqual(await status({ isAdmin: false, isMentor: true, roleCount: 0 }), 403)
   assert.equal(await status({ isAdmin: false, isMentor: false, roleCount: 0 }), 403)
 })
+
+async function studentStatus(flags) {
+  await globalLimiter.resetKey('127.0.0.1')
+  store.flags = flags
+  const res = await fetch(`${base}/academy/me`, {
+    headers: { authorization: `Bearer ${sign({ id: USER_ID })}` },
+  })
+  return res.status
+}
+
+test('a user with no work area but a cohort membership reaches /academy', async () => {
+  assert.notEqual(await studentStatus({ isAdmin: false, isMentor: false, roleCount: 0, isCohortMember: true }), 403)
+})
+
+test('a user with no work area and no cohort gets 403 on /academy', async () => {
+  assert.equal(await studentStatus({ isAdmin: false, isMentor: false, roleCount: 0, isCohortMember: false }), 403)
+})

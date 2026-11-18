@@ -294,7 +294,8 @@ export async function setAdminByEmail(email) {
 export async function findAccessFlagsById(id, client) {
   const result = await run(client)(
     `SELECT u.is_admin AS "isAdmin", u.is_mentor AS "isMentor",
-            (SELECT count(*)::int FROM user_roles ur WHERE ur.user_id = u.id) AS "roleCount"
+            (SELECT count(*)::int FROM user_roles ur WHERE ur.user_id = u.id) AS "roleCount",
+            EXISTS (SELECT 1 FROM academy_cohort_members cm WHERE cm.user_id = u.id) AS "isCohortMember"
        FROM users u WHERE u.id = $1`,
     [id],
   )

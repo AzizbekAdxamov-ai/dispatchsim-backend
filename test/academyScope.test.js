@@ -66,3 +66,28 @@ test('progress only grows: later saves never un-do earlier exits', { skip: !hasD
     assert.equal(me.cohort, null)
   })
 })
+
+test('a lower quiz result never replaces a higher one', { skip: !hasDb }, async () => {
+  await inRollback(pool, async (client) => {
+    const u = await mkUser(client, 'q1')
+    await service.saveProgress(u.id, 1, { exitsDone: {}, quiz: { qz: 7 } }, client)
+    const lower = await service.saveProgress(u.id, 1, { exitsDone: {}, quiz: { qz: 5 } }, client)
+    assert.equal(lower.quiz.qz, 7)
+    const mixed = await service.saveProgress(u.id, 1, { exitsDone: {}, quiz: { qz: 8 } }, client)
+    assert.equal(mixed.quiz.qz, 8)
+  })
+})
+
+test('findAccessFlagsById reports cohort membership', { skip: !hasDb }, async () => {
+  await inRollback(pool, async (client) => {
+    const { findAccessFlagsById } = await import('../src/modules/auth/users.repository.js')
+    const mentor = await mkUser(client, 'cm')
+    const student = await mkUser(client, 'cs')
+    const other = await mkUser(client, 'co')
+    const a = { userId: mentor.id, isAdmin: false }
+    const cohort = await service.createCohort(a, { name: 'C', mode: 'offline' }, client)
+    await service.addMember(a, cohort.id, student.email, client)
+    assert.equal((await findAccessFlagsById(student.id, client)).isCohortMember, true)
+    assert.equal((await findAccessFlagsById(other.id, client)).isCohortMember, false)
+  })
+})

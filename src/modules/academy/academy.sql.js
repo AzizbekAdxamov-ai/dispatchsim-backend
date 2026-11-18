@@ -2,7 +2,7 @@
 // parses each against the real schema. No SELECT *; all values via $n.
 
 // Progress merges monotonically: exits are OR-ed in (a later save can never
-// undo an earlier EXIT) and quiz counters are merged per key. completed_at is
+// undo an earlier EXIT) and quiz counters keep the best value per key (a lower later result never replaces a higher one). completed_at is
 // set once, the first time seven exits are done. The service only sends exits
 // that are true, so counting keys counts done exits.
 // $1 user, $2 lesson, $3 exits_done jsonb, $4 quiz jsonb, $5 mode (null keeps the stored one).
@@ -13,7 +13,13 @@ export const UPSERT_PROGRESS_SQL = `
           now())
   ON CONFLICT (user_id, lesson_no) DO UPDATE SET
     exits_done = p.exits_done || EXCLUDED.exits_done,
-    quiz = p.quiz || EXCLUDED.quiz,
+    quiz = (
+      SELECT COALESCE(jsonb_object_agg(
+               k.key,
+               GREATEST(COALESCE((p.quiz ->> k.key)::int, 0), COALESCE((EXCLUDED.quiz ->> k.key)::int, 0))
+             ), '{}'::jsonb)
+        FROM jsonb_object_keys(p.quiz || EXCLUDED.quiz) AS k(key)
+    ),
     mode = COALESCE($5::text, p.mode),
     completed_at = COALESCE(
       p.completed_at,
