@@ -33,6 +33,13 @@ export const KEEP = Object.freeze(new Set([
   'users',
   'invite_codes',
   'brokers',
+  // academy_* (078) -- the student's course data (progress, cohorts, mentor
+  // notes). It belongs to the person, not to the company, so a company reset
+  // must not erase it. Its only foreign keys point at users.
+  'academy_cohorts',
+  'academy_cohort_members',
+  'academy_progress',
+  'academy_notes',
   // broker_blocks (067) -- broker-side safety state; it belongs to the
   // external broker relationship and must survive a company reset.
   'broker_blocks',

@@ -18,6 +18,10 @@ export const ERROR_CODES = {
   INTERNAL_ERROR:      { status: 500, message: 'Something went wrong' },
   // Authenticated, but not an administrator — trying to reach /admin/*.
   FORBIDDEN:           { status: 403, message: 'You do not have access to this area' },
+  // Academy: a cohort or student outside the caller's scope is reported as missing.
+  COHORT_NOT_FOUND:    { status: 404, message: 'Cohort not found' },
+  STUDENT_NOT_FOUND:   { status: 404, message: 'Student not found' },
+  ACADEMY_EMAIL_NOT_FOUND: { status: 404, message: 'No account with that email' },
   // Would drop the last remaining admin, leaving the system with nobody
   // able to grant admin access to anyone (including themselves).
   LAST_ADMIN:          { status: 409, message: 'At least one administrator must remain' },

@@ -45,6 +45,7 @@ import * as complianceSql from '../src/modules/compliance/compliance.sql.js'
 // how they are built; this checks that PostgreSQL accepts the result.
 import { buildListPostingsSql, buildCountPostingsSql } from '../src/modules/loadBoard/loadBoard.repository.js'
 import * as carrierSql from '../src/modules/carrier/carrier.sql.js'
+import * as academySql from '../src/modules/academy/academy.sql.js'
 import { REACHABLE_SQL } from '../src/db/companyTables.js'
 import { TRUCK_OPTIONS_SQL } from '../src/modules/drivers/drivers.repository.js'
 // fresh-start.js deletes on import for the same reason reset-company.js
@@ -411,7 +412,7 @@ const STATEMENTS = [
 // that does not name its statements by hand, and it exists because the
 // hand-written list is the part that rots: someone adds a query, forgets
 // this file, and the checker keeps reporting a clean run it never earned.
-for (const [label, mod] of [['alerts', alertSql], ['payroll', payrollSql], ['driverChat', driverChatSql], ['loadEvents', loadEventsSql], ['fleet', fleetSql], ['tracking', trackingSql], ['documents', documentsSql], ['solvency', solvencySql], ['chatBudget', chatBudgetSql], ['routing', routingSql], ['facilities', facilitiesSql], ['stopVisits', stopVisitsSql], ['dutyEvents', dutyEventsSql], ['compliance', complianceSql], ['dvir', dvirSql], ['preTrip', preTripSql], ['telegram', botSql], ['carrier', carrierSql]]) {
+for (const [label, mod] of [['alerts', alertSql], ['payroll', payrollSql], ['driverChat', driverChatSql], ['loadEvents', loadEventsSql], ['fleet', fleetSql], ['tracking', trackingSql], ['documents', documentsSql], ['solvency', solvencySql], ['chatBudget', chatBudgetSql], ['routing', routingSql], ['facilities', facilitiesSql], ['stopVisits', stopVisitsSql], ['dutyEvents', dutyEventsSql], ['compliance', complianceSql], ['dvir', dvirSql], ['preTrip', preTripSql], ['telegram', botSql], ['carrier', carrierSql], ['academy', academySql]]) {
   for (const [name, sql] of Object.entries(mod)) {
     if (typeof sql === 'string' && /^\s*(SELECT|INSERT|UPDATE|DELETE|WITH)/i.test(sql)) {
       STATEMENTS.push([`${label}: ${name}`, sql])

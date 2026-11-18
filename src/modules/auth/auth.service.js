@@ -34,6 +34,8 @@ export function toPublicUser(row) {
     // if a caller ever passes in a row from a query that omitted the
     // column, and never anything but a strict boolean either way.
     isAdmin: row.isAdmin === true,
+    // Academy mentor permission (migration 078); strict boolean like isAdmin.
+    isMentor: row.isMentor === true,
     // True after an administrator reset: the web app sends the user to Settings.
     mustChangePassword: row.mustChangePassword === true,
   }

@@ -13,6 +13,7 @@
     "bot:check": "node scripts/bot-check.js",
     "migrate": "node src/db/migrate.js",
     "grant:admin": "node scripts/grant-admin.js",
+    "grant:mentor": "node scripts/grant-mentor.js",
     "db:pull": "prisma db pull",
     "db:studio": "prisma studio",
     "seed": "node src/db/seed.js",

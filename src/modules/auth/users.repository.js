@@ -48,6 +48,7 @@ function run(client) {
 const USER_COLUMNS = `
   u.id, u.email, u.name, u.company,
   u.active_role AS "activeRole", u.is_admin AS "isAdmin",
+  u.is_mentor AS "isMentor",
   u.created_at  AS "createdAt",
   u.password_must_change AS "mustChangePassword",
   COALESCE(r.roles, '{}') AS roles
@@ -282,6 +283,42 @@ export async function setAdminByEmail(email) {
      SET is_admin = true, updated_at = now()
      WHERE email = $1
      RETURNING email`,
+    [email],
+  )
+  return result.rows[0] ?? null
+}
+
+// Access gate for the academy: the two permission flags plus how many work
+// areas the user has been granted. Read fresh on every request (never from
+// the token), like findAdminFlagById.
+export async function findAccessFlagsById(id, client) {
+  const result = await run(client)(
+    `SELECT u.is_admin AS "isAdmin", u.is_mentor AS "isMentor",
+            (SELECT count(*)::int FROM user_roles ur WHERE ur.user_id = u.id) AS "roleCount"
+       FROM users u WHERE u.id = $1`,
+    [id],
+  )
+  return result.rows[0] ?? null
+}
+
+// Grants mentor access by email, for scripts/grant-mentor.js. Only touches
+// is_mentor; undefined when no user has that email.
+export async function setMentorByEmail(email) {
+  const result = await query(
+    `UPDATE users
+     SET is_mentor = true, updated_at = now()
+     WHERE email = $1
+     RETURNING email`,
+    [email],
+  )
+  return result.rows[0] ?? null
+}
+
+// Resolves an email to the minimal identity a mentor needs to enrol a
+// student into a cohort. No password hash, no roles.
+export async function findPublicIdByEmail(email, client) {
+  const result = await run(client)(
+    'SELECT id, email, name FROM users WHERE email = $1',
     [email],
   )
   return result.rows[0] ?? null
