@@ -49,6 +49,7 @@ const USER_COLUMNS = `
   u.id, u.email, u.name, u.company,
   u.active_role AS "activeRole", u.is_admin AS "isAdmin",
   u.is_mentor AS "isMentor",
+  EXISTS (SELECT 1 FROM academy_cohort_members cm WHERE cm.user_id = u.id) AS "isCohortMember",
   u.created_at  AS "createdAt",
   u.password_must_change AS "mustChangePassword",
   COALESCE(r.roles, '{}') AS roles
@@ -288,13 +289,12 @@ export async function setAdminByEmail(email) {
   return result.rows[0] ?? null
 }
 
-// Access gate for the academy: the two permission flags plus how many work
-// areas the user has been granted. Read fresh on every request (never from
+// Access gate for the academy: the two permission flags plus cohort
+// membership (work areas no longer grant access). Read fresh on every request (never from
 // the token), like findAdminFlagById.
 export async function findAccessFlagsById(id, client) {
   const result = await run(client)(
     `SELECT u.is_admin AS "isAdmin", u.is_mentor AS "isMentor",
-            (SELECT count(*)::int FROM user_roles ur WHERE ur.user_id = u.id) AS "roleCount",
             EXISTS (SELECT 1 FROM academy_cohort_members cm WHERE cm.user_id = u.id) AS "isCohortMember"
        FROM users u WHERE u.id = $1`,
     [id],

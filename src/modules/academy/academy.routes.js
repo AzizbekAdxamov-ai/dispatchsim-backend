@@ -1,6 +1,6 @@
-// /academy -- the course. Student routes need a work area, a cohort
-// membership (or mentor/admin access); /academy/mentor/* needs is_mentor or is_admin, both re-read from
-// the database on every request.
+// /academy -- the course. Student routes need access = cohort membership,
+// is_mentor or is_admin; /academy/mentor/* needs is_mentor or is_admin. All
+// flags are re-read from the database on every request.
 
 import { Router } from 'express'
 import { requireAuth } from '../../middleware/requireAuth.js'
@@ -15,7 +15,7 @@ async function requireAcademyAccess(req, res, next) {
     if (!flags) return next(new AppError('USER_NOT_FOUND'))
     const isAdmin = flags.isAdmin === true
     const isMentor = flags.isMentor === true
-    if (!(flags.roleCount > 0 || flags.isCohortMember === true || isMentor || isAdmin)) return next(new AppError('FORBIDDEN'))
+    if (!(flags.isCohortMember === true || isMentor || isAdmin)) return next(new AppError('FORBIDDEN'))
     req.access = { isAdmin, isMentor }
     next()
   } catch (err) {

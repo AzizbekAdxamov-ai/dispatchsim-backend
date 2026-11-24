@@ -36,6 +36,8 @@ export function toPublicUser(row) {
     isAdmin: row.isAdmin === true,
     // Academy mentor permission (migration 078); strict boolean like isAdmin.
     isMentor: row.isMentor === true,
+    // Academy access = cohort member, mentor or admin; always a strict boolean.
+    academyAccess: row.isCohortMember === true || row.isMentor === true || row.isAdmin === true,
     // True after an administrator reset: the web app sends the user to Settings.
     mustChangePassword: row.mustChangePassword === true,
   }
