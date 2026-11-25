@@ -99,7 +99,7 @@ test('the sample-document label is on the page', async () => {
     conversation: CONVERSATION, posting: POSTING, broker: BROKER, carrier: CARRIER,
   }))
   assert.ok(text.includes('Sample document'))
-  assert.ok(!/practice|DispatchSim/i.test(text))
+  assert.ok(!/practice|DispatchSim|GrossMasters/i.test(text))
 })
 
 // Kills: a rate confirmation without the broker's terms, or with terms

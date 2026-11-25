@@ -9,7 +9,7 @@ import { startOpsTick } from './jobs/opsTick.js'
 import { describeTelegram } from './constants/telegramMeta.js'
 
 const server = app.listen(config.port, () => {
-  console.log('DispatchSim API → http://localhost:' + config.port)
+  console.log('GrossMasters API → http://localhost:' + config.port)
   startJobs()
   startOpsTick()
   // One line, no token in it: is the bot configured, and what is it set
